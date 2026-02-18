@@ -44,11 +44,8 @@ public class ConfigurationManager
         if (_config.Limits.MaxTradesPerDay <= 0)
             throw new InvalidOperationException("MaxTradesPerDay must be greater than 0");
 
-        //if (string.IsNullOrWhiteSpace(_config.Database.SupabaseUrl))
-        //    throw new InvalidOperationException("SupabaseUrl is required");
-
-        //if (string.IsNullOrWhiteSpace(_config.Database.SupabaseKey))
-        //    throw new InvalidOperationException("SupabaseKey is required");
+        if (string.IsNullOrWhiteSpace(_config.Instrument.ActiveInstrumentKey))
+            throw new InvalidOperationException("ActiveInstrumentKey is required");
     }
 
     public void ReloadConfiguration()

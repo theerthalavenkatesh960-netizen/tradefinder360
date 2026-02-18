@@ -1,5 +1,4 @@
 using TradingSystem.Core.Models;
-using TradingSystem.Configuration;
 using TradingSystem.Configuration.Models;
 using TradingSystem.MarketData;
 using TradingSystem.Indicators;
@@ -9,7 +8,7 @@ using TradingSystem.Risk;
 using TradingSystem.Execution;
 using TradingSystem.Execution.Interfaces;
 using TradingSystem.Logging;
-using TradingSystem.Data;
+using TradingSystem.Data.Services;
 
 namespace TradingSystem.Engine;
 
@@ -23,16 +22,21 @@ public class TradingEngine
     private readonly RiskEngine _risk;
     private readonly ExecutionEngine _execution;
     private readonly TradingLogger _logger;
-    private readonly SupabaseRepository _repository;
+    private readonly TradingDataService _dataService;
     private readonly TradeManager _tradeManager;
+    private readonly TradingInstrument _instrument;
 
     private IndicatorValues? _currentIndicators;
     private MarketStateInfo? _currentMarketState;
 
-    public TradingEngine(string configPath = "appsettings.json")
+    public TradingEngine(
+        TradingConfig config,
+        TradingDataService dataService,
+        TradingInstrument instrument)
     {
-        var configManager = new ConfigurationManager(configPath);
-        _config = configManager.GetConfig();
+        _config = config;
+        _dataService = dataService;
+        _instrument = instrument;
 
         _marketData = new MarketDataEngine(_config.Timeframe);
 
@@ -44,18 +48,18 @@ public class TradingEngine
         _risk = new RiskEngine(_config.Risk);
 
         IBrokerAdapter broker = new MockBrokerAdapter();
-        _execution = new ExecutionEngine(broker, _config.Execution);
+        _execution = new ExecutionEngine(broker, _config.Execution, _instrument);
 
         _logger = new TradingLogger();
-        _repository = new SupabaseRepository(_config.Database);
         _tradeManager = new TradeManager();
 
         _marketData.OnNewCandle += OnNewCandle;
 
         _logger.LogInfo("Trading Engine Initialized");
-        _logger.LogInfo("Timeframe: {Timeframe} minutes | Multiplier: {Multiplier}",
-            _config.Timeframe.ActiveTimeframeMinutes,
-            _config.Timeframe.GetTimeframeMultiplier());
+        _logger.LogInfo("Instrument: {Instrument} | Mode: {Mode} | Timeframe: {Timeframe}min",
+            _instrument.GetDisplayName(),
+            _instrument.DefaultTradingMode,
+            _config.Timeframe.ActiveTimeframeMinutes);
     }
 
     private async void OnNewCandle(object? sender, Candle candle)
@@ -80,8 +84,11 @@ public class TradingEngine
                 .ToDictionary(p => p.Name, p => (decimal)p.GetValue(_currentIndicators)!), candle.Timestamp);
             _logger.LogMarketState(_currentMarketState);
 
-            await _repository.SaveCandle(candle);
-            await _repository.SaveMarketState(_currentMarketState);
+            if (_config.Database.EnablePersistence)
+            {
+                await _dataService.SaveCandleAsync(_instrument.InstrumentKey, candle);
+                await _dataService.SaveIndicatorsAsync(_instrument.InstrumentKey, _config.Timeframe.ActiveTimeframeMinutes, _currentIndicators);
+            }
 
             if (_tradeManager.HasActiveTrade())
             {
@@ -128,7 +135,9 @@ public class TradingEngine
                 if (completedTrade != null)
                 {
                     _logger.LogTradeExit(completedTrade, exitSignal.Reason);
-                    await _repository.SaveTrade(completedTrade);
+
+                    if (_config.Database.EnablePersistence)
+                        await _dataService.SaveTradeAsync(_instrument.InstrumentKey, completedTrade);
 
                     _risk.RecordTrade(completedTrade.PnL ?? 0, DateTime.Now);
                 }
@@ -167,7 +176,7 @@ public class TradingEngine
             entrySignal.EntryPrice,
             _currentIndicators.ATR,
             entrySignal.Direction,
-            _config.Execution.DefaultLotSize);
+            _instrument.LotSize);
 
         var (success, option, orderId, message) = await _execution.ExecuteEntry(
             entrySignal.Direction,
@@ -202,7 +211,9 @@ public class TradingEngine
 
             _tradeManager.SetActiveTrade(trade);
             _logger.LogTradeEntry(trade, entrySignal.Reason);
-            await _repository.SaveTrade(trade);
+
+            if (_config.Database.EnablePersistence)
+                await _dataService.SaveTradeAsync(_instrument.InstrumentKey, trade);
         }
         else
         {

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TradingSystem.Configuration;
 using TradingSystem.Configuration.Models;
+using TradingSystem.Core.Models;
 using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
 using TradingSystem.Data.Services;
@@ -61,8 +62,6 @@ services.AddSingleton(new Upstox.Models.UpstoxConfig
 });
 services.AddSingleton<UpstoxMarketDataService>();
 
-services.AddSingleton<TradingEngine>();
-
 var serviceProvider = services.BuildServiceProvider();
 
 Console.WriteLine($"Active Instrument: {tradingConfig.Instrument.ActiveInstrumentKey}");
@@ -72,6 +71,8 @@ Console.WriteLine($"Database: PostgreSQL (EF Core)");
 Console.WriteLine($"Data Source: Upstox API");
 Console.WriteLine();
 
+TradingInstrument? activeInstrument = null;
+
 using (var scope = serviceProvider.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<TradingDbContext>();
@@ -79,6 +80,19 @@ using (var scope = serviceProvider.CreateScope())
     {
         await dbContext.Database.CanConnectAsync();
         Console.WriteLine("Database connection: SUCCESS");
+
+        var instrumentRepo = scope.ServiceProvider.GetRequiredService<IInstrumentRepository>();
+        activeInstrument = await instrumentRepo.GetByKeyAsync(tradingConfig.Instrument.ActiveInstrumentKey);
+
+        if (activeInstrument == null)
+        {
+            Console.WriteLine($"Instrument '{tradingConfig.Instrument.ActiveInstrumentKey}' not found in database.");
+            Console.WriteLine("Run the SQL migration script to seed default instruments:");
+            Console.WriteLine("  psql -d trading -f src/TradingSystem.Data/Migrations/001_InitialSchema.sql");
+            return;
+        }
+
+        Console.WriteLine($"Instrument loaded: {activeInstrument.GetDisplayName()} | Lot: {activeInstrument.LotSize} | Mode: {activeInstrument.DefaultTradingMode}");
     }
     catch (Exception ex)
     {
@@ -89,7 +103,9 @@ using (var scope = serviceProvider.CreateScope())
     }
 }
 
-var engine = serviceProvider.GetRequiredService<TradingEngine>();
+using var engineScope = serviceProvider.CreateScope();
+var dataService = engineScope.ServiceProvider.GetRequiredService<TradingDataService>();
+var engine = new TradingEngine(tradingConfig, dataService, activeInstrument!);
 
 Console.WriteLine("\nEngine initialized successfully!");
 Console.WriteLine("System is ready for production trading.\n");
