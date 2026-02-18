@@ -38,3 +38,4 @@ dist-ssr
 .env
 /.vs/TradingSystem
 /.vs/VSWorkspaceState.json
+/.vs/*
