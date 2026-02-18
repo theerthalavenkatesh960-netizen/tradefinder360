@@ -6,7 +6,7 @@ public class CandleStore
 {
     private readonly List<Candle> _candles;
     private readonly int _maxHistory;
-    private readonly object _lock = new();
+    private readonly object _lock = new(); // this needs to be changed to ConcurrentDictionary
 
     public CandleStore(int maxHistory)
     {
