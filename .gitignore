@@ -7,8 +7,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Build results
-bin/
-obj/
+**/bin/
+**/obj/
 
 # Ignore assets.cache files in Debug folders (case variants)
 **/Debug/assets.cache
