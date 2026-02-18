@@ -30,7 +30,7 @@ public class PullbackDetector
 
         foreach (var candle in pullbackCandles)
         {
-            if (candle.Volume > avgVolume * 0.8m)
+            if (candle.Volume > avgVolume * 0.8)
             {
                 hasLowerVolume = false;
                 break;
@@ -73,7 +73,7 @@ public class PullbackDetector
 
         foreach (var candle in pullbackCandles)
         {
-            if (candle.Volume > avgVolume * 0.8m)
+            if (candle.Volume > avgVolume * 0.8)
             {
                 hasLowerVolume = false;
                 break;

@@ -6,7 +6,7 @@ namespace TradingSystem.Configuration;
 public class ConfigurationManager
 {
     private readonly TradingConfig _config;
-    private readonly IConfiguration _configuration;
+    private readonly IConfigurationRoot _configuration;
 
     public ConfigurationManager(string configFilePath = "appsettings.json")
     {
@@ -44,11 +44,11 @@ public class ConfigurationManager
         if (_config.Limits.MaxTradesPerDay <= 0)
             throw new InvalidOperationException("MaxTradesPerDay must be greater than 0");
 
-        if (string.IsNullOrWhiteSpace(_config.Database.SupabaseUrl))
-            throw new InvalidOperationException("SupabaseUrl is required");
+        //if (string.IsNullOrWhiteSpace(_config.Database.SupabaseUrl))
+        //    throw new InvalidOperationException("SupabaseUrl is required");
 
-        if (string.IsNullOrWhiteSpace(_config.Database.SupabaseKey))
-            throw new InvalidOperationException("SupabaseKey is required");
+        //if (string.IsNullOrWhiteSpace(_config.Database.SupabaseKey))
+        //    throw new InvalidOperationException("SupabaseKey is required");
     }
 
     public void ReloadConfiguration()

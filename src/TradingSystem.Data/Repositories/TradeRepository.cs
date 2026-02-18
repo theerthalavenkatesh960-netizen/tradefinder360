@@ -35,8 +35,8 @@ public class TradeRepository : ITradeRepository
             ExitReason = trade.ExitReason,
             Direction = trade.Direction.ToString(),
             State = trade.State.ToString(),
-            PnL = trade.PnL,
-            PnLPercent = trade.PnLPercent,
+            PnL = trade.PnL ?? 0,
+            PnLPercent = trade.PnLPercent ?? 0,
             CreatedAt = DateTime.UtcNow
         };
 
