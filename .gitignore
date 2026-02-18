@@ -10,6 +10,13 @@ lerna-debug.log*
 bin/
 obj/
 
+# Ignore assets.cache files in Debug folders (case variants)
+**/Debug/assets.cache
+**/debug/assets.cache
+
+# Optionally ignore any assets.cache anywhere
+*.assets.cache
+
 # .NET assembly info generated files
 **/AssemblyInfo.cs
 **/AssemblyInfo.cs.cache
