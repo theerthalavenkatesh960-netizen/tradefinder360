@@ -6,6 +6,15 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Build results
+bin/
+obj/
+
+# .NET assembly info generated files
+**/AssemblyInfo.cs
+**/AssemblyInfo.cs.cache
+**/*.AssemblyInfoInputs.cache
+
 node_modules
 dist
 dist-ssr
