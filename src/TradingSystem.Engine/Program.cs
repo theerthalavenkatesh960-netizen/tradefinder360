@@ -50,7 +50,7 @@ services.AddScoped<ITradeRepository, TradeRepository>();
 services.AddScoped<TradingDataService>();
 
 services.AddHttpClient<UpstoxClient>();
-services.AddSingleton(new Upstox.Models.UpstoxConfig
+services.AddSingleton(new TradingSystem.Upstox.Models.UpstoxConfig
 {
     ApiKey = tradingConfig.Upstox.ApiKey,
     ApiSecret = tradingConfig.Upstox.ApiSecret,
