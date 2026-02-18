@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Supabase" Version="1.0.3" />
+    <PackageReference Include="Postgrest" Version="4.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TradingSystem.Core\TradingSystem.Core.csproj" />
+    <ProjectReference Include="..\TradingSystem.Configuration\TradingSystem.Configuration.csproj" />
+  </ItemGroup>
+
+</Project>

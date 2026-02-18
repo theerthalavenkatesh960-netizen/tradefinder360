@@ -1,0 +1,17 @@
+{
+  "name": "trading-system-dotnet",
+  "version": "1.0.0",
+  "description": ".NET Core 8.0 Professional Trading System",
+  "type": "module",
+  "scripts": {
+    "build": "node build-wrapper.js",
+    "dev": "echo 'This is a .NET project. Use: cd src/TradingSystem.Engine && dotnet run'",
+    "clean": "echo 'This is a .NET project. Use: dotnet clean TradingSystem.sln'"
+  },
+  "keywords": ["trading", "dotnet", "csharp", "options", "algorithmic-trading"],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

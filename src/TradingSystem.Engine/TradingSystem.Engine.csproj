@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TradingSystem.Core\TradingSystem.Core.csproj" />
+    <ProjectReference Include="..\TradingSystem.Configuration\TradingSystem.Configuration.csproj" />
+    <ProjectReference Include="..\TradingSystem.MarketData\TradingSystem.MarketData.csproj" />
+    <ProjectReference Include="..\TradingSystem.Indicators\TradingSystem.Indicators.csproj" />
+    <ProjectReference Include="..\TradingSystem.MarketState\TradingSystem.MarketState.csproj" />
+    <ProjectReference Include="..\TradingSystem.Strategy\TradingSystem.Strategy.csproj" />
+    <ProjectReference Include="..\TradingSystem.Risk\TradingSystem.Risk.csproj" />
+    <ProjectReference Include="..\TradingSystem.Execution\TradingSystem.Execution.csproj" />
+    <ProjectReference Include="..\TradingSystem.Logging\TradingSystem.Logging.csproj" />
+    <ProjectReference Include="..\TradingSystem.Data\TradingSystem.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
