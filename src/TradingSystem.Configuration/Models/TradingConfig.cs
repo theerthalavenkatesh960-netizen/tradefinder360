@@ -2,6 +2,7 @@ namespace TradingSystem.Configuration.Models;
 
 public class TradingConfig
 {
+    public InstrumentConfig Instrument { get; set; } = new();
     public TimeframeConfig Timeframe { get; set; } = new();
     public IndicatorConfig Indicators { get; set; } = new();
     public RiskConfig Risk { get; set; } = new();
@@ -9,6 +10,22 @@ public class TradingConfig
     public MarketStateConfig MarketState { get; set; } = new();
     public ExecutionConfig Execution { get; set; } = new();
     public DatabaseConfig Database { get; set; } = new();
+    public UpstoxConfig Upstox { get; set; } = new();
+}
+
+public class InstrumentConfig
+{
+    public string ActiveInstrumentKey { get; set; } = "NSE:NIFTY";
+    public string TradingMode { get; set; } = "OPTIONS";
+    public Dictionary<string, InstrumentRiskOverride> InstrumentOverrides { get; set; } = new();
+}
+
+public class InstrumentRiskOverride
+{
+    public decimal? StopLossATRMultiplier { get; set; }
+    public decimal? TargetATRMultiplier { get; set; }
+    public int? MaxTradesPerDay { get; set; }
+    public decimal? MaxDailyLossAmount { get; set; }
 }
 
 public class TimeframeConfig
@@ -75,8 +92,6 @@ public class MarketStateConfig
 
 public class ExecutionConfig
 {
-    public string UnderlyingSymbol { get; set; } = "NIFTY";
-    public int DefaultLotSize { get; set; } = 50;
     public decimal MaxSlippagePercent { get; set; } = 0.5m;
     public int OrderTimeoutSeconds { get; set; } = 30;
     public bool UseWeeklyOptions { get; set; } = true;
@@ -84,7 +99,17 @@ public class ExecutionConfig
 
 public class DatabaseConfig
 {
-    public string SupabaseUrl { get; set; } = string.Empty;
-    public string SupabaseKey { get; set; } = string.Empty;
+    public string ConnectionString { get; set; } = string.Empty;
     public bool EnablePersistence { get; set; } = true;
+}
+
+public class UpstoxConfig
+{
+    public string ApiKey { get; set; } = string.Empty;
+    public string ApiSecret { get; set; } = string.Empty;
+    public string AccessToken { get; set; } = string.Empty;
+    public string BaseUrl { get; set; } = "https://api.upstox.com/v2";
+    public int MaxRetries { get; set; } = 3;
+    public int RetryDelayMs { get; set; } = 1000;
+    public int RateLimitPerSecond { get; set; } = 10;
 }

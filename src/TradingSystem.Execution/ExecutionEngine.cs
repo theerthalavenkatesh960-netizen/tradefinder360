@@ -8,11 +8,13 @@ public class ExecutionEngine
 {
     private readonly IBrokerAdapter _broker;
     private readonly ExecutionConfig _config;
+    private readonly TradingInstrument _instrument;
 
-    public ExecutionEngine(IBrokerAdapter broker, ExecutionConfig config)
+    public ExecutionEngine(IBrokerAdapter broker, ExecutionConfig config, TradingInstrument instrument)
     {
         _broker = broker;
         _config = config;
+        _instrument = instrument;
     }
 
     public async Task<(bool success, Option? option, string orderId, string message)> ExecuteEntry(
@@ -27,12 +29,17 @@ public class ExecutionEngine
                 return (false, null, string.Empty, "Market is closed");
             }
 
+            if (!_instrument.IsDerivativesEnabled || _instrument.DefaultTradingMode == TradingMode.EQUITY)
+            {
+                return (false, null, string.Empty, "Equity execution not yet implemented");
+            }
+
             DateTime? targetExpiry = _config.UseWeeklyOptions
                 ? OptionsSelector.GetNearestWeeklyExpiry(DateTime.Now)
                 : null;
 
             var atmOption = await _broker.GetATMOption(
-                _config.UnderlyingSymbol,
+                _instrument.Symbol,
                 spotPrice,
                 direction,
                 targetExpiry);
@@ -92,7 +99,7 @@ public class ExecutionEngine
 
     public async Task<decimal> GetCurrentSpotPrice()
     {
-        return await _broker.GetSpotPrice(_config.UnderlyingSymbol);
+        return await _broker.GetSpotPrice(_instrument.Symbol);
     }
 
     public async Task<decimal> GetCurrentOptionPrice(string optionSymbol)
