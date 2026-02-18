@@ -1,0 +1,80 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Core", "src\TradingSystem.Core\TradingSystem.Core.csproj", "{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Configuration", "src\TradingSystem.Configuration\TradingSystem.Configuration.csproj", "{B2C3D4E5-F6A7-4B5C-9D0E-1F2A3B4C5D6E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.MarketData", "src\TradingSystem.MarketData\TradingSystem.MarketData.csproj", "{C3D4E5F6-A7B8-4C5D-0E1F-2A3B4C5D6E7F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Indicators", "src\TradingSystem.Indicators\TradingSystem.Indicators.csproj", "{D4E5F6A7-B8C9-4D5E-1F2A-3B4C5D6E7F8A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.MarketState", "src\TradingSystem.MarketState\TradingSystem.MarketState.csproj", "{E5F6A7B8-C9D0-4E5F-2A3B-4C5D6E7F8A9B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Strategy", "src\TradingSystem.Strategy\TradingSystem.Strategy.csproj", "{F6A7B8C9-D0E1-4F5A-3B4C-5D6E7F8A9B0C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Risk", "src\TradingSystem.Risk\TradingSystem.Risk.csproj", "{A7B8C9D0-E1F2-4A5B-4C5D-6E7F8A9B0C1D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Execution", "src\TradingSystem.Execution\TradingSystem.Execution.csproj", "{B8C9D0E1-F2A3-4B5C-5D6E-7F8A9B0C1D2E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Data", "src\TradingSystem.Data\TradingSystem.Data.csproj", "{C9D0E1F2-A3B4-4C5D-6E7F-8A9B0C1D2E3F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Logging", "src\TradingSystem.Logging\TradingSystem.Logging.csproj", "{D0E1F2A3-B4C5-4D6E-7F8A-9B0C1D2E3F4A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Engine", "src\TradingSystem.Engine\TradingSystem.Engine.csproj", "{E1F2A3B4-C5D6-4E7F-8A9B-0C1D2E3F4A5B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B2C3D4E5-F6A7-4B5C-9D0E-1F2A3B4C5D6E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B2C3D4E5-F6A7-4B5C-9D0E-1F2A3B4C5D6E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B2C3D4E5-F6A7-4B5C-9D0E-1F2A3B4C5D6E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B2C3D4E5-F6A7-4B5C-9D0E-1F2A3B4C5D6E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C3D4E5F6-A7B8-4C5D-0E1F-2A3B4C5D6E7F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C3D4E5F6-A7B8-4C5D-0E1F-2A3B4C5D6E7F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C3D4E5F6-A7B8-4C5D-0E1F-2A3B4C5D6E7F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C3D4E5F6-A7B8-4C5D-0E1F-2A3B4C5D6E7F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D4E5F6A7-B8C9-4D5E-1F2A-3B4C5D6E7F8A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D4E5F6A7-B8C9-4D5E-1F2A-3B4C5D6E7F8A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D4E5F6A7-B8C9-4D5E-1F2A-3B4C5D6E7F8A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D4E5F6A7-B8C9-4D5E-1F2A-3B4C5D6E7F8A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E5F6A7B8-C9D0-4E5F-2A3B-4C5D6E7F8A9B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5F6A7B8-C9D0-4E5F-2A3B-4C5D6E7F8A9B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5F6A7B8-C9D0-4E5F-2A3B-4C5D6E7F8A9B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5F6A7B8-C9D0-4E5F-2A3B-4C5D6E7F8A9B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F6A7B8C9-D0E1-4F5A-3B4C-5D6E7F8A9B0C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F6A7B8C9-D0E1-4F5A-3B4C-5D6E7F8A9B0C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F6A7B8C9-D0E1-4F5A-3B4C-5D6E7F8A9B0C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F6A7B8C9-D0E1-4F5A-3B4C-5D6E7F8A9B0C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A7B8C9D0-E1F2-4A5B-4C5D-6E7F8A9B0C1D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7B8C9D0-E1F2-4A5B-4C5D-6E7F8A9B0C1D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7B8C9D0-E1F2-4A5B-4C5D-6E7F8A9B0C1D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7B8C9D0-E1F2-4A5B-4C5D-6E7F8A9B0C1D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B8C9D0E1-F2A3-4B5C-5D6E-7F8A9B0C1D2E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B8C9D0E1-F2A3-4B5C-5D6E-7F8A9B0C1D2E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B8C9D0E1-F2A3-4B5C-5D6E-7F8A9B0C1D2E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B8C9D0E1-F2A3-4B5C-5D6E-7F8A9B0C1D2E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9D0E1F2-A3B4-4C5D-6E7F-8A9B0C1D2E3F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9D0E1F2-A3B4-4C5D-6E7F-8A9B0C1D2E3F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9D0E1F2-A3B4-4C5D-6E7F-8A9B0C1D2E3F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9D0E1F2-A3B4-4C5D-6E7F-8A9B0C1D2E3F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D0E1F2A3-B4C5-4D6E-7F8A-9B0C1D2E3F4A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0E1F2A3-B4C5-4D6E-7F8A-9B0C1D2E3F4A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0E1F2A3-B4C5-4D6E-7F8A-9B0C1D2E3F4A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0E1F2A3-B4C5-4D6E-7F8A-9B0C1D2E3F4A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E1F2A3B4-C5D6-4E7F-8A9B-0C1D2E3F4A5B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E1F2A3B4-C5D6-4E7F-8A9B-0C1D2E3F4A5B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E1F2A3B4-C5D6-4E7F-8A9B-0C1D2E3F4A5B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E1F2A3B4-C5D6-4E7F-8A9B-0C1D2E3F4A5B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection 
+EndGlobal
+
