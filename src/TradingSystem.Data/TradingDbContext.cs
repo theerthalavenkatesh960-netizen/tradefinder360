@@ -6,6 +6,7 @@ namespace TradingSystem.Data;
 public class TradingDbContext : DbContext
 {
     public DbSet<TradingInstrument> Instruments { get; set; } = null!;
+    public DbSet<InstrumentPrice> InstrumentPrices { get; set; } = null!;
     public DbSet<MarketCandle> MarketCandles { get; set; } = null!;
     public DbSet<IndicatorSnapshot> IndicatorSnapshots { get; set; } = null!;
     public DbSet<TradeRecord> Trades { get; set; } = null!;
@@ -27,6 +28,7 @@ public class TradingDbContext : DbContext
             e.Property(x => x.InstrumentKey).HasColumnName("instrument_key").IsRequired();
             e.Property(x => x.Exchange).HasColumnName("exchange").IsRequired();
             e.Property(x => x.Symbol).HasColumnName("symbol").IsRequired();
+            e.Property(x => x.Name).HasColumnName("name").IsRequired();
             e.Property(x => x.InstrumentType).HasColumnName("instrument_type").IsRequired();
             e.Property(x => x.LotSize).HasColumnName("lot_size");
             e.Property(x => x.TickSize).HasColumnName("tick_size").HasPrecision(18, 4);
@@ -36,6 +38,30 @@ public class TradingDbContext : DbContext
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             e.HasIndex(x => x.InstrumentKey).IsUnique();
+            e.HasIndex(x => x.Symbol);
+            e.HasMany(x => x.Prices)
+                .WithOne(x => x.Instrument)
+                .HasForeignKey(x => x.InstrumentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<InstrumentPrice>(e =>
+        {
+            e.ToTable("instrument_prices");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            e.Property(x => x.Timestamp).HasColumnName("timestamp").IsRequired();
+            e.Property(x => x.Open).HasColumnName("open").HasPrecision(18, 4);
+            e.Property(x => x.High).HasColumnName("high").HasPrecision(18, 4);
+            e.Property(x => x.Low).HasColumnName("low").HasPrecision(18, 4);
+            e.Property(x => x.Close).HasColumnName("close").HasPrecision(18, 4);
+            e.Property(x => x.Volume).HasColumnName("volume");
+            e.Property(x => x.Timeframe).HasColumnName("timeframe").IsRequired();
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.InstrumentId, x.Timeframe, x.Timestamp }).IsUnique();
+            e.HasIndex(x => x.Timestamp);
         });
 
         modelBuilder.Entity<MarketCandle>(e =>

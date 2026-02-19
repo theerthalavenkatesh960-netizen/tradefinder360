@@ -1,35 +1,33 @@
 using Microsoft.EntityFrameworkCore;
 using TradingSystem.Core.Models;
+using TradingSystem.Data.Repositories;
 
 namespace TradingSystem.Data.Services;
 
 public class InstrumentService : IInstrumentService
 {
-    private readonly TradingDbContext _db;
+    private readonly IInstrumentRepository _repository;
 
-    public InstrumentService(TradingDbContext db)
+    public InstrumentService(IInstrumentRepository repository)
     {
-        _db = db;
+        _repository = repository;
     }
 
     public async Task<TradingInstrument?> GetByKeyAsync(string instrumentKey)
-        => await _db.Instruments.FirstOrDefaultAsync(i => i.InstrumentKey == instrumentKey);
+        => await _repository.GetByInstrumentKeyAsync(instrumentKey);
 
     public async Task<List<TradingInstrument>> GetActiveAsync()
-        => await _db.Instruments.Where(i => i.IsActive).OrderBy(i => i.Symbol).ToListAsync();
+        => (await _repository.GetActiveInstrumentsAsync()).ToList();
 
     public async Task<Dictionary<string, string>> GetKeyToSymbolMapAsync()
-        => await _db.Instruments.ToDictionaryAsync(i => i.InstrumentKey, i => i.Symbol);
+    {
+        var instruments = await _repository.GetAllAsync();
+        return instruments.ToDictionary(i => i.InstrumentKey, i => i.Symbol);
+    }
 
     public async Task AddAsync(TradingInstrument instrument)
-    {
-        await _db.Instruments.AddAsync(instrument);
-        await _db.SaveChangesAsync();
-    }
+        => await _repository.AddAsync(instrument);
 
     public async Task UpdateAsync(TradingInstrument instrument)
-    {
-        _db.Instruments.Update(instrument);
-        await _db.SaveChangesAsync();
-    }
+        => await _repository.UpdateAsync(instrument);
 }

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TradingSystem.Data;
+using TradingSystem.Data.Repositories;
 using TradingSystem.Data.Services;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
@@ -25,6 +26,10 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 builder.Services.AddDbContext<TradingDbContext>(options =>
     options.UseNpgsql(connectionString));
+
+builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<>));
+builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
+builder.Services.AddScoped<IInstrumentPriceRepository, InstrumentPriceRepository>();
 
 builder.Services.AddScoped<IInstrumentService, InstrumentService>();
 builder.Services.AddScoped<ICandleService, CandleService>();
