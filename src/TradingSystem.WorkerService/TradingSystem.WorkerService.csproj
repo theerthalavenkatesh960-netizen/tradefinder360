@@ -3,6 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
+	<OutputType>Exe</OutputType>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
@@ -16,9 +17,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
-	  <ProjectReference Include="..\src\TradingSystem.Core\TradingSystem.Core.csproj" />
-	  <ProjectReference Include="..\src\TradingSystem.Data\TradingSystem.Data.csproj" />
-	  <ProjectReference Include="..\src\TradingSystem.Upstox\TradingSystem.Upstox.csproj" />
+	  <ProjectReference Include="..\TradingSystem.Core\TradingSystem.Core.csproj" />
+	  <ProjectReference Include="..\TradingSystem.Data\TradingSystem.Data.csproj" />
+	  <ProjectReference Include="..\TradingSystem.Upstox\TradingSystem.Upstox.csproj" />
 	</ItemGroup>
 
 </Project>
