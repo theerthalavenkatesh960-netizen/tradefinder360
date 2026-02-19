@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using TradingSystem.Core.Models;
 using TradingSystem.Upstox.Models;
-using static System.Net.WebRequestMethods;
 
 namespace TradingSystem.Upstox;
 
@@ -21,8 +20,25 @@ public class UpstoxClient
         _rateLimiter = new SemaphoreSlim(_config.RateLimitPerSecond);
 
         _httpClient.BaseAddress = new Uri(_config.BaseUrl);
-        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_config.AccessToken}");
         _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+    }
+
+    public void SetAccessToken(string accessToken)
+    {
+        _httpClient.DefaultRequestHeaders.Remove("Authorization");
+        if (!string.IsNullOrWhiteSpace(accessToken))
+        {
+            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
+        }
+    }
+
+    public async Task InitializeWithStoredTokenAsync(Func<Task<string?>> getTokenFunc)
+    {
+        var token = await getTokenFunc();
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            SetAccessToken(token);
+        }
     }
 
     private async Task WaitForRateLimit()
@@ -127,15 +143,15 @@ public class UpstoxClient
             throw new Exception("Upstox authorization code not available. Login first.");
 
         var form = new Dictionary<string, string>
-            {
-                {"code", code},
-                {"client_id", _options.ClientId},
-                {"client_secret", _options.ClientSecret},
-                {"redirect_uri", _options.RedirectUri},
-                {"grant_type", "authorization_code"}
-            };
+        {
+            {"code", code},
+            {"client_id", _config.ClientId},
+            {"client_secret", _config.ClientSecret},
+            {"redirect_uri", _config.RedirectUri},
+            {"grant_type", "authorization_code"}
+        };
 
-        var response = await _http.PostAsync("login/authorization/token", new FormUrlEncodedContent(form));
+        var response = await _httpClient.PostAsync("login/authorization/token", new FormUrlEncodedContent(form));
 
         response.EnsureSuccessStatusCode();
 
@@ -144,7 +160,7 @@ public class UpstoxClient
         if (tokenResponse == null || string.IsNullOrWhiteSpace(tokenResponse.AccessToken))
             throw new Exception("Failed to fetch Upstox token");
 
-        UpstoxTokenStore.SetToken(tokenResponse.AccessToken);
+        SetAccessToken(tokenResponse.AccessToken);
 
         return tokenResponse;
     }

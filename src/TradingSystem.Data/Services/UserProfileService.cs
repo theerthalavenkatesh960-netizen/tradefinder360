@@ -1,64 +1,71 @@
+using Microsoft.EntityFrameworkCore;
+using TradingSystem.Core.Models;
+using TradingSystem.Data.Services.Interfaces;
+using TradingSystem.Upstox;
 
-using SwingLyne.Api.Services.Interfaces;
-using SwingLyne.Domain.Models;
-using SwingLyne.Domain.Repositories.Interfaces;
-using SwingLyne.ExternalServices.Services;
+namespace TradingSystem.Data.Services;
 
-namespace SwingLyne.Api.Services
+public class UserProfileService : IUserProfileService
 {
-    public class UserProfileService : IUserProfileService
+    private readonly UpstoxClient _upstoxClient;
+    private readonly TradingDbContext _context;
+
+    public UserProfileService(
+        UpstoxClient upstoxClient,
+        TradingDbContext context)
     {
-        private readonly IUpstoxService _upstoxService;
-        private readonly ICommonRepository<UserProfile> _userRepository;
+        _upstoxClient = upstoxClient;
+        _context = context;
+    }
 
-        public UserProfileService(
-            IUpstoxService upstoxService,
-            ICommonRepository<UserProfile> userRepository)
+    public async Task StoreUserTokenAsync(string code)
+    {
+        var tokenResponse = await _upstoxClient.FetchTokenFromUpstoxAsync(code);
+
+        if (tokenResponse == null)
+            throw new InvalidOperationException("Failed to fetch token from Upstox");
+
+        var userId = "default_user";
+
+        var existing = await _context.UserProfiles
+            .FirstOrDefaultAsync(x => x.UserId == userId);
+
+        if (existing != null)
         {
-            _upstoxService = upstoxService;
-            _userRepository = userRepository;
+            existing.UpstoxAccessToken = tokenResponse.AccessToken;
+            existing.UpstoxRefreshToken = tokenResponse.RefreshToken;
+            existing.TokenIssuedAt = DateTime.UtcNow;
+            existing.UpdatedOn = DateTime.UtcNow;
+            _context.UserProfiles.Update(existing);
+        }
+        else
+        {
+            var user = new UserProfile
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                UpstoxAccessToken = tokenResponse.AccessToken,
+                UpstoxRefreshToken = tokenResponse.RefreshToken,
+                TokenIssuedAt = DateTime.UtcNow,
+                CreatedOn = DateTime.UtcNow,
+                UpdatedOn = DateTime.UtcNow
+            };
+
+            await _context.UserProfiles.AddAsync(user);
         }
 
-        public async Task StoreUserTokenAsync(string code, CancellationToken cancellationToken = default)
-        {
-            var tokenResponse = await _upstoxService.FetchTokenFromUpstoxAsync(code);
+        await _context.SaveChangesAsync();
+    }
 
-            if (tokenResponse is null)
-                throw new InvalidOperationException("Failed to fetch token from Upstox");
+    public async Task<UserProfile?> GetUserProfileAsync(string userId)
+    {
+        return await _context.UserProfiles
+            .FirstOrDefaultAsync(x => x.UserId == userId);
+    }
 
-            var existing = await _userRepository
-                .FirstOrDefaultAsync(x => x.UserId == tokenResponse.UserId, cancellationToken);
-
-            if (existing is not null)
-            {
-                existing.AccessToken = tokenResponse.AccessToken;
-                existing.ExtendedToken = tokenResponse.ExtendedToken; 
-                existing.UpdatedOn = DateTime.UtcNow;
-                await _userRepository.UpdateAsync(existing);
-            }
-            else
-            {
-                var user = new UserProfile
-                {
-                    Email = tokenResponse?.Email ?? string.Empty,
-                    AccessToken = tokenResponse?.AccessToken ?? string.Empty,
-                    ExtendedToken = tokenResponse?.ExtendedToken ?? string.Empty,
-                    UserId = tokenResponse?.UserId ?? string.Empty,
-                    UserName = tokenResponse?.UserName ?? string.Empty,
-                    Exchanges = tokenResponse?.Exchanges.ToArray() ?? Array.Empty<string>(),
-                    Products = tokenResponse?.Products.ToArray() ?? Array.Empty<string>(),
-                    OrderTypes = tokenResponse?.OrderTypes.ToArray() ?? Array.Empty<string>(),
-                    Broker = tokenResponse?.Broker ?? string.Empty,
-                    UserType = tokenResponse?.UserType ?? string.Empty,
-                    IsActive = tokenResponse?.IsActive ?? true,
-                    Ddpi = tokenResponse?.Ddpi ?? true,
-                    Poa = tokenResponse?.Poa ?? false,
-                };
-
-                await _userRepository.InsertAsync(user, cancellationToken);
-            }
-
-            await _userRepository.SaveAsync(cancellationToken);
-        }
+    public async Task<string?> GetAccessTokenAsync(string userId)
+    {
+        var profile = await GetUserProfileAsync(userId);
+        return profile?.UpstoxAccessToken;
     }
 }

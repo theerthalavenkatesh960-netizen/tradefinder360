@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using TradingSystem.Data.Services.Interfaces;
 
 namespace TradingSystem.Api.Controllers
 {

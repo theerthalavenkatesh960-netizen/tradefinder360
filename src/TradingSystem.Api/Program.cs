@@ -6,6 +6,8 @@ using TradingSystem.Data.Services;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
+using TradingSystem.Upstox;
+using TradingSystem.Upstox.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -40,10 +42,38 @@ builder.Services.AddScoped<IIndicatorService, IndicatorService>();
 builder.Services.AddScoped<ITradeService, TradeService>();
 builder.Services.AddScoped<IScanService, ScanService>();
 builder.Services.AddScoped<IRecommendationService, RecommendationService>();
+builder.Services.AddScoped<IUserProfileService, UserProfileService>();
 
 var scannerConfig = new ScannerConfig();
 builder.Configuration.GetSection("Scanner").Bind(scannerConfig);
 builder.Services.AddSingleton(scannerConfig);
+
+var upstoxConfig = new UpstoxConfig();
+builder.Configuration.GetSection("Upstox").Bind(upstoxConfig);
+builder.Services.AddSingleton(upstoxConfig);
+
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<UpstoxClient>(sp =>
+{
+    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+    var config = sp.GetRequiredService<UpstoxConfig>();
+    var context = sp.GetRequiredService<TradingDbContext>();
+
+    var httpClient = httpClientFactory.CreateClient();
+    var client = new UpstoxClient(httpClient, config);
+
+    var token = context.UserProfiles
+        .Where(x => x.UserId == "default_user")
+        .Select(x => x.UpstoxAccessToken)
+        .FirstOrDefault();
+
+    if (!string.IsNullOrWhiteSpace(token))
+    {
+        client.SetAccessToken(token);
+    }
+
+    return client;
+});
 
 builder.Services.AddScoped<SetupScoringService>();
 builder.Services.AddScoped<MarketScannerService>();

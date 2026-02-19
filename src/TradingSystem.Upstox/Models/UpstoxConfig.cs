@@ -2,6 +2,9 @@ namespace TradingSystem.Upstox.Models;
 
 public class UpstoxConfig
 {
+    public string ClientId { get; set; } = string.Empty;
+    public string ClientSecret { get; set; } = string.Empty;
+    public string RedirectUri { get; set; } = string.Empty;
     public string ApiKey { get; set; } = string.Empty;
     public string ApiSecret { get; set; } = string.Empty;
     public string AccessToken { get; set; } = string.Empty;

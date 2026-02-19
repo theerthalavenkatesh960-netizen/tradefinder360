@@ -13,6 +13,7 @@ public class TradingDbContext : DbContext
     public DbSet<TradeRecord> Trades { get; set; } = null!;
     public DbSet<ScanSnapshot> ScanSnapshots { get; set; } = null!;
     public DbSet<Recommendation> Recommendations { get; set; } = null!;
+    public DbSet<UserProfile> UserProfiles { get; set; } = null!;
 
     public TradingDbContext(DbContextOptions<TradingDbContext> options)
         : base(options)
@@ -206,6 +207,20 @@ public class TradingDbContext : DbContext
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
             e.HasIndex(x => new { x.InstrumentKey, x.IsActive });
+        });
+
+        modelBuilder.Entity<UserProfile>(e =>
+        {
+            e.ToTable("user_profiles");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.UserId).HasColumnName("user_id").IsRequired();
+            e.Property(x => x.UpstoxAccessToken).HasColumnName("upstox_access_token");
+            e.Property(x => x.UpstoxRefreshToken).HasColumnName("upstox_refresh_token");
+            e.Property(x => x.TokenIssuedAt).HasColumnName("token_issued_at");
+            e.Property(x => x.CreatedOn).HasColumnName("created_on");
+            e.Property(x => x.UpdatedOn).HasColumnName("updated_on");
+            e.HasIndex(x => x.UserId).IsUnique();
         });
     }
 }
