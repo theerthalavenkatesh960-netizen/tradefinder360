@@ -24,12 +24,15 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
 });
 
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? Environment.GetEnvironmentVariable("DATABASE_URL")
-    ?? "Host=localhost;Database=trading;Username=postgres;Password=postgres";
-
 builder.Services.AddDbContext<TradingDbContext>(options =>
-    options.UseNpgsql(connectionString));
+{
+    options.UseNpgsql(
+        builder.Configuration.GetConnectionString("Supabase"),
+        npgsql =>
+        {
+            npgsql.EnableRetryOnFailure();
+        });
+});
 
 builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<>));
 builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
