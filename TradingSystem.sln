@@ -30,7 +30,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Scanner", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Api", "src\TradingSystem.Api\TradingSystem.Api.csproj", "{B4C5D6E7-F8A9-4B0C-1D2E-3F4A5B6C7D8E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.WorkerService", "TradingSystem.WorkerService\TradingSystem.WorkerService.csproj", "{360ACA9D-EB67-45FD-B527-C1C36AE29E2D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.WorkerService", "src\TradingSystem.WorkerService\TradingSystem.WorkerService.csproj", "{360ACA9D-EB67-45FD-B527-C1C36AE29E2D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

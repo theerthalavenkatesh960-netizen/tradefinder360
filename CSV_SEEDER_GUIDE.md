@@ -95,7 +95,7 @@ AEGISLOG,Aegis Logistics Ltd.,2,BSE_EQ|INE208C01025,Trading - Gas,Gas
 
 Place your CSV files in the `Data` folder:
 ```
-TradingSystem.WorkerService/
+src/TradingSystem.WorkerService/
   Data/
     sectors.csv
     stocks.csv
@@ -115,7 +115,7 @@ Update `appsettings.json`:
 ### Step 3: Run the Worker Service
 
 ```bash
-cd TradingSystem.WorkerService
+cd src/TradingSystem.WorkerService
 dotnet run
 ```
 
@@ -271,9 +271,12 @@ Log Results
 Continue with other scheduled jobs
 ```
 
-## Migration Applied
+## Migration Location
 
-Migration `006_sectors_and_instruments_extended.sql` has been applied to Supabase with:
+Migration `006_sectors_and_instruments_extended.sql` is located at:
+- `src/TradingSystem.Data/Migrations/006_sectors_and_instruments_extended.sql`
+
+This migration has been applied to Supabase with:
 - sectors table creation
 - Extended instruments columns
 - Foreign key relationships
