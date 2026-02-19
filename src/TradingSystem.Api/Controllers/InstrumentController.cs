@@ -1,0 +1,186 @@
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using TradingSystem.Api.DTOs;
+using TradingSystem.Data;
+using TradingSystem.Scanner;
+using TradingSystem.Scanner.Models;
+
+namespace TradingSystem.Api.Controllers;
+
+[ApiController]
+[Route("api/instrument")]
+public class InstrumentController : ControllerBase
+{
+    private readonly TradingDbContext _db;
+    private readonly MarketScannerService _scanner;
+    private readonly TradeRecommendationService _recommender;
+
+    public InstrumentController(
+        TradingDbContext db,
+        MarketScannerService scanner,
+        TradeRecommendationService recommender)
+    {
+        _db = db;
+        _scanner = scanner;
+        _recommender = recommender;
+    }
+
+    [HttpGet("{key}/analysis")]
+    public async Task<ActionResult<AnalysisDto>> GetAnalysis(
+        string key,
+        [FromQuery] int timeframe = 15)
+    {
+        var instrument = await _db.Instruments
+            .FirstOrDefaultAsync(i => i.InstrumentKey == key && i.IsActive);
+
+        if (instrument == null)
+            return NotFound($"Instrument '{key}' not found.");
+
+        var latestIndicator = await _db.IndicatorSnapshots
+            .Where(s => s.InstrumentKey == key && s.TimeframeMinutes == timeframe)
+            .OrderByDescending(s => s.Timestamp)
+            .FirstOrDefaultAsync();
+
+        if (latestIndicator == null)
+            return NotFound($"No indicator data found for '{key}'. Ensure data has been fetched.");
+
+        var scanResult = await _scanner.ScanInstrumentAsync(instrument, timeframe);
+
+        var recommendation = await _recommender.GetLatestForInstrumentAsync(key);
+
+        EntryGuidanceDto? guidance = null;
+        if (recommendation != null)
+        {
+            guidance = new EntryGuidanceDto
+            {
+                Direction = recommendation.Direction,
+                EntryPrice = recommendation.EntryPrice,
+                StopLoss = recommendation.StopLoss,
+                Target = recommendation.Target,
+                RiskRewardRatio = recommendation.RiskRewardRatio,
+                OptionType = recommendation.OptionType,
+                OptionStrike = recommendation.OptionStrike
+            };
+        }
+
+        var dto = new AnalysisDto
+        {
+            InstrumentKey = instrument.InstrumentKey,
+            Symbol = instrument.Symbol,
+            Exchange = instrument.Exchange,
+            Indicators = new IndicatorSnapshotDto
+            {
+                EMAFast = latestIndicator.EMAFast,
+                EMASlow = latestIndicator.EMASlow,
+                RSI = latestIndicator.RSI,
+                MacdLine = latestIndicator.MacdLine,
+                MacdSignal = latestIndicator.MacdSignal,
+                MacdHistogram = latestIndicator.MacdHistogram,
+                ADX = latestIndicator.ADX,
+                PlusDI = latestIndicator.PlusDI,
+                MinusDI = latestIndicator.MinusDI,
+                ATR = latestIndicator.ATR,
+                BollingerUpper = latestIndicator.BollingerUpper,
+                BollingerMiddle = latestIndicator.BollingerMiddle,
+                BollingerLower = latestIndicator.BollingerLower,
+                VWAP = latestIndicator.VWAP,
+                Timestamp = latestIndicator.Timestamp
+            },
+            TrendState = scanResult != null ? new TrendStateDto
+            {
+                State = scanResult.MarketState.ToString(),
+                Bias = scanResult.Bias.ToString(),
+                SetupScore = scanResult.SetupScore,
+                QualityLabel = scanResult.QualityLabel,
+                ScoreBreakdown = new ScoreBreakdownDto
+                {
+                    ADX = scanResult.ScoreBreakdown.AdxScore,
+                    RSI = scanResult.ScoreBreakdown.RsiScore,
+                    EmaVwap = scanResult.ScoreBreakdown.EmaVwapScore,
+                    Volume = scanResult.ScoreBreakdown.VolumeScore,
+                    Bollinger = scanResult.ScoreBreakdown.BollingerScore,
+                    Structure = scanResult.ScoreBreakdown.StructureScore,
+                    Total = scanResult.ScoreBreakdown.Total
+                }
+            } : new TrendStateDto { State = "UNKNOWN" },
+            EntryGuidance = guidance,
+            Confidence = recommendation?.Confidence ?? scanResult?.SetupScore ?? 0,
+            Explanation = recommendation?.ExplanationText ?? "No recommendation generated for current market conditions.",
+            ReasoningPoints = recommendation?.ReasoningPoints ?? scanResult?.Reasons ?? new(),
+            AnalysedAt = DateTime.UtcNow
+        };
+
+        return Ok(dto);
+    }
+
+    [HttpGet("{key}/indicators")]
+    public async Task<ActionResult<List<IndicatorSnapshotDto>>> GetIndicatorHistory(
+        string key,
+        [FromQuery] int timeframe = 15,
+        [FromQuery] int limit = 50)
+    {
+        var snapshots = await _db.IndicatorSnapshots
+            .Where(s => s.InstrumentKey == key && s.TimeframeMinutes == timeframe)
+            .OrderByDescending(s => s.Timestamp)
+            .Take(limit)
+            .OrderBy(s => s.Timestamp)
+            .ToListAsync();
+
+        if (!snapshots.Any())
+            return NotFound($"No indicator history found for '{key}'.");
+
+        var dtos = snapshots.Select(s => new IndicatorSnapshotDto
+        {
+            EMAFast = s.EMAFast,
+            EMASlow = s.EMASlow,
+            RSI = s.RSI,
+            MacdLine = s.MacdLine,
+            MacdSignal = s.MacdSignal,
+            MacdHistogram = s.MacdHistogram,
+            ADX = s.ADX,
+            PlusDI = s.PlusDI,
+            MinusDI = s.MinusDI,
+            ATR = s.ATR,
+            BollingerUpper = s.BollingerUpper,
+            BollingerMiddle = s.BollingerMiddle,
+            BollingerLower = s.BollingerLower,
+            VWAP = s.VWAP,
+            Timestamp = s.Timestamp
+        }).ToList();
+
+        return Ok(dtos);
+    }
+
+    [HttpPost("{key}/recommend")]
+    public async Task<ActionResult<RecommendationDto>> GenerateRecommendation(
+        string key,
+        [FromQuery] int timeframe = 15)
+    {
+        var recommendation = await _recommender.GenerateAsync(key, timeframe);
+
+        if (recommendation == null)
+            return NoContent();
+
+        var instrument = await _db.Instruments
+            .FirstOrDefaultAsync(i => i.InstrumentKey == key);
+
+        return Ok(new RecommendationDto
+        {
+            Id = recommendation.Id,
+            InstrumentKey = recommendation.InstrumentKey,
+            Symbol = instrument?.Symbol ?? key,
+            Direction = recommendation.Direction,
+            EntryPrice = recommendation.EntryPrice,
+            StopLoss = recommendation.StopLoss,
+            Target = recommendation.Target,
+            RiskRewardRatio = recommendation.RiskRewardRatio,
+            Confidence = recommendation.Confidence,
+            OptionType = recommendation.OptionType,
+            OptionStrike = recommendation.OptionStrike,
+            ExplanationText = recommendation.ExplanationText,
+            ReasoningPoints = recommendation.ReasoningPoints,
+            Timestamp = recommendation.Timestamp,
+            ExpiresAt = recommendation.ExpiresAt
+        });
+    }
+}

@@ -5,15 +5,26 @@ using TradingSystem.Strategy.Models;
 
 namespace TradingSystem.Strategy;
 
+public enum StrategyMode
+{
+    Trade,
+    Scan
+}
+
 public class StrategyEngine
 {
     private readonly TradingLimitsConfig _limitsConfig;
     private readonly List<IndicatorValues> _indicatorHistory = new();
 
-    public StrategyEngine(TradingLimitsConfig limitsConfig)
+    public StrategyMode Mode { get; private set; } = StrategyMode.Trade;
+
+    public StrategyEngine(TradingLimitsConfig limitsConfig, StrategyMode mode = StrategyMode.Trade)
     {
         _limitsConfig = limitsConfig;
+        Mode = mode;
     }
+
+    public void SetMode(StrategyMode mode) => Mode = mode;
 
     public void UpdateIndicatorHistory(IndicatorValues indicators)
     {
@@ -35,7 +46,11 @@ public class StrategyEngine
             EntryPrice = candles[^1].Close
         };
 
-        if (!IsTradingHoursValid(indicators.Timestamp))
+        if (Mode == StrategyMode.Scan)
+        {
+            signal.ValidationDetails["Mode"] = "SCAN";
+        }
+        else if (!IsTradingHoursValid(indicators.Timestamp))
         {
             signal.Reason = "Outside trading hours";
             return signal;

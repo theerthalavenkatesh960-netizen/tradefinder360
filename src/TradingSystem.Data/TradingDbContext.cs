@@ -9,6 +9,8 @@ public class TradingDbContext : DbContext
     public DbSet<MarketCandle> MarketCandles { get; set; } = null!;
     public DbSet<IndicatorSnapshot> IndicatorSnapshots { get; set; } = null!;
     public DbSet<TradeRecord> Trades { get; set; } = null!;
+    public DbSet<ScanSnapshot> ScanSnapshots { get; set; } = null!;
+    public DbSet<Recommendation> Recommendations { get; set; } = null!;
 
     public TradingDbContext(DbContextOptions<TradingDbContext> options)
         : base(options)
@@ -88,6 +90,42 @@ public class TradingDbContext : DbContext
             entity.Property(e => e.Direction).IsRequired().HasMaxLength(10);
             entity.Property(e => e.State).IsRequired().HasMaxLength(20);
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<ScanSnapshot>(entity =>
+        {
+            entity.ToTable("scan_snapshots");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.InstrumentKey, e.Timestamp });
+            entity.HasIndex(e => e.SetupScore);
+            entity.Property(e => e.InstrumentKey).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.MarketState).IsRequired().HasMaxLength(30);
+            entity.Property(e => e.Bias).IsRequired().HasMaxLength(10);
+            entity.Property(e => e.LastClose).HasPrecision(18, 4);
+            entity.Property(e => e.ATR).HasPrecision(18, 4);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<Recommendation>(entity =>
+        {
+            entity.ToTable("recommendations");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.InstrumentKey, e.Timestamp });
+            entity.HasIndex(e => e.IsActive);
+            entity.Property(e => e.InstrumentKey).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Direction).IsRequired().HasMaxLength(10);
+            entity.Property(e => e.EntryPrice).HasPrecision(18, 4);
+            entity.Property(e => e.StopLoss).HasPrecision(18, 4);
+            entity.Property(e => e.Target).HasPrecision(18, 4);
+            entity.Property(e => e.RiskRewardRatio).HasPrecision(8, 2);
+            entity.Property(e => e.OptionStrike).HasPrecision(18, 4);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+            entity.Property(e => e.ReasoningPoints)
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => System.Text.Json.JsonSerializer.Serialize(v, (System.Text.Json.JsonSerializerOptions?)null),
+                    v => System.Text.Json.JsonSerializer.Deserialize<List<string>>(v, (System.Text.Json.JsonSerializerOptions?)null) ?? new List<string>()
+                );
         });
     }
 }
