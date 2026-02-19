@@ -96,6 +96,23 @@ public class CommonRepository<T> : ICommonRepository<T> where T : class
         return await _dbSet.AnyAsync(predicate, cancellationToken);
     }
 
+    public virtual async Task<IReadOnlyList<T>> GetListAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
+    {
+        return await _dbSet.Where(predicate).ToListAsync(cancellationToken);
+    }
+
+    public virtual async Task InsertBulkAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
+    {
+        await _dbSet.AddRangeAsync(entities, cancellationToken);
+        await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    public virtual async Task UpdateBulkAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
+    {
+        _dbSet.UpdateRange(entities);
+        await _context.SaveChangesAsync(cancellationToken);
+    }
+
     public virtual IQueryable<T> Query()
     {
         return _dbSet.AsQueryable();

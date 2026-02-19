@@ -30,43 +30,80 @@ public class CsvSeedService
                 return 0;
             }
 
-            var sectors = new List<Sector>();
             var lines = await File.ReadAllLinesAsync(csvFilePath, cancellationToken);
 
-            for (int i = 1; i < lines.Length; i++)
-            {
-                var line = lines[i].Trim();
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                var parts = ParseCsvLine(line);
-                if (parts.Length < 2) continue;
-
-                var description = parts[0].Trim();
-                var sectorName = parts[1].Trim();
-
-                if (string.IsNullOrWhiteSpace(sectorName) || sectorName.Equals("sector", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var code = GenerateSectorCode(sectorName);
-
-                if (!sectors.Any(s => s.Code == code))
+            var csvSectors = lines
+                .Skip(1)
+                .Select(line =>
                 {
-                    sectors.Add(new Sector
+                    var parts = ParseCsvLine(line.Trim());
+                    if (parts.Length < 2) return null;
+
+                    var description = parts[0].Trim();
+                    var sectorName = parts[1].Trim();
+
+                    if (string.IsNullOrWhiteSpace(sectorName) || sectorName.Equals("sector", StringComparison.OrdinalIgnoreCase))
+                        return null;
+
+                    return new
                     {
-                        Name = sectorName,
-                        Code = code,
                         Description = description,
+                        Name = sectorName,
+                        Code = GenerateSectorCode(sectorName)
+                    };
+                })
+                .Where(x => x != null)
+                .GroupBy(x => x!.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First()!)
+                .ToList();
+
+            _logger.LogInformation("Parsed {Count} unique sectors from CSV", csvSectors.Count);
+
+            var existing = await _sectorRepository.GetListAsync(s => true, cancellationToken);
+            var existingLookup = existing.ToDictionary(
+                x => x.Name.Trim(),
+                x => x,
+                StringComparer.OrdinalIgnoreCase);
+
+            var toInsert = new List<Sector>();
+            var toUpdate = new List<Sector>();
+
+            foreach (var s in csvSectors)
+            {
+                if (existingLookup.TryGetValue(s.Name, out var dbSector))
+                {
+                    dbSector.Description = s.Description;
+                    dbSector.Code = s.Code;
+                    toUpdate.Add(dbSector);
+                }
+                else
+                {
+                    toInsert.Add(new Sector
+                    {
+                        Name = s.Name,
+                        Code = s.Code,
+                        Description = s.Description,
                         IsActive = true
                     });
                 }
             }
 
-            _logger.LogInformation("Parsed {Count} sectors from CSV", sectors.Count);
+            if (toInsert.Count > 0)
+            {
+                await _sectorRepository.InsertBulkAsync(toInsert, cancellationToken);
+                _logger.LogInformation("Inserted {Count} new sectors", toInsert.Count);
+            }
 
-            var saved = await _sectorRepository.BulkUpsertAsync(sectors, cancellationToken);
-            _logger.LogInformation("Successfully seeded {Count} sectors", saved);
+            if (toUpdate.Count > 0)
+            {
+                await _sectorRepository.UpdateBulkAsync(toUpdate, cancellationToken);
+                _logger.LogInformation("Updated {Count} existing sectors", toUpdate.Count);
+            }
 
-            return saved;
+            var totalProcessed = toInsert.Count + toUpdate.Count;
+            _logger.LogInformation("Successfully processed {Count} sectors", totalProcessed);
+
+            return totalProcessed;
         }
         catch (Exception ex)
         {
@@ -88,61 +125,111 @@ public class CsvSeedService
             var allSectors = await _sectorRepository.GetAllAsync(cancellationToken);
             var sectorMap = allSectors.ToDictionary(s => s.Name, s => s.Id, StringComparer.OrdinalIgnoreCase);
 
-            var instruments = new List<TradingInstrument>();
             var lines = await File.ReadAllLinesAsync(csvFilePath, cancellationToken);
 
-            for (int i = 1; i < lines.Length; i++)
+            var csvInstruments = lines
+                .Skip(1)
+                .Select(line =>
+                {
+                    var parts = ParseCsvLine(line.Trim());
+                    if (parts.Length < 6) return null;
+
+                    var symbol = parts[0].Trim();
+                    var name = parts[1].Trim();
+                    var exchange = parts[2].Trim();
+                    var instrumentKey = parts[3].Trim();
+                    var industry = parts[4].Trim();
+                    var sectorName = parts[5].Trim();
+
+                    if (string.IsNullOrWhiteSpace(symbol) || symbol.Equals("Symbol", StringComparison.OrdinalIgnoreCase))
+                        return null;
+
+                    var exchangeCode = exchange == "2" ? "BSE" : "NSE";
+
+                    int? sectorId = null;
+                    if (!string.IsNullOrWhiteSpace(sectorName) && sectorMap.TryGetValue(sectorName, out var secId))
+                    {
+                        sectorId = secId;
+                    }
+
+                    var isin = ExtractISIN(instrumentKey);
+
+                    return new
+                    {
+                        InstrumentKey = instrumentKey,
+                        Exchange = exchangeCode,
+                        Symbol = symbol,
+                        Name = name,
+                        SectorId = sectorId,
+                        Industry = industry,
+                        ISIN = isin
+                    };
+                })
+                .Where(x => x != null)
+                .GroupBy(x => x!.InstrumentKey, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First()!)
+                .ToList();
+
+            _logger.LogInformation("Parsed {Count} unique instruments from CSV", csvInstruments.Count);
+
+            var existing = await _instrumentRepository.GetListAsync(i => true, cancellationToken);
+            var existingLookup = existing.ToDictionary(
+                x => x.InstrumentKey.Trim(),
+                x => x,
+                StringComparer.OrdinalIgnoreCase);
+
+            var toInsert = new List<TradingInstrument>();
+            var toUpdate = new List<TradingInstrument>();
+
+            foreach (var i in csvInstruments)
             {
-                var line = lines[i].Trim();
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                var parts = ParseCsvLine(line);
-                if (parts.Length < 6) continue;
-
-                var symbol = parts[0].Trim();
-                var name = parts[1].Trim();
-                var exchange = parts[2].Trim();
-                var instrumentKey = parts[3].Trim();
-                var industry = parts[4].Trim();
-                var sectorName = parts[5].Trim();
-
-                if (string.IsNullOrWhiteSpace(symbol) || symbol.Equals("Symbol", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var exchangeCode = exchange == "2" ? "BSE" : "NSE";
-
-                int? sectorId = null;
-                if (!string.IsNullOrWhiteSpace(sectorName) && sectorMap.TryGetValue(sectorName, out var secId))
+                if (existingLookup.TryGetValue(i.InstrumentKey, out var dbInstrument))
                 {
-                    sectorId = secId;
+                    dbInstrument.Exchange = i.Exchange;
+                    dbInstrument.Symbol = i.Symbol;
+                    dbInstrument.Name = i.Name;
+                    dbInstrument.SectorId = i.SectorId;
+                    dbInstrument.Industry = i.Industry;
+                    dbInstrument.ISIN = i.ISIN;
+                    toUpdate.Add(dbInstrument);
                 }
-
-                var isin = ExtractISIN(instrumentKey);
-
-                instruments.Add(new TradingInstrument
+                else
                 {
-                    InstrumentKey = instrumentKey,
-                    Exchange = exchangeCode,
-                    Symbol = symbol,
-                    Name = name,
-                    SectorId = sectorId,
-                    Industry = industry,
-                    ISIN = isin,
-                    InstrumentType = InstrumentType.STOCK,
-                    LotSize = 1,
-                    TickSize = 0.05m,
-                    IsDerivativesEnabled = false,
-                    DefaultTradingMode = TradingMode.EQUITY,
-                    IsActive = true
-                });
+                    toInsert.Add(new TradingInstrument
+                    {
+                        InstrumentKey = i.InstrumentKey,
+                        Exchange = i.Exchange,
+                        Symbol = i.Symbol,
+                        Name = i.Name,
+                        SectorId = i.SectorId,
+                        Industry = i.Industry,
+                        ISIN = i.ISIN,
+                        InstrumentType = InstrumentType.STOCK,
+                        LotSize = 1,
+                        TickSize = 0.05m,
+                        IsDerivativesEnabled = false,
+                        DefaultTradingMode = TradingMode.EQUITY,
+                        IsActive = true
+                    });
+                }
             }
 
-            _logger.LogInformation("Parsed {Count} instruments from CSV", instruments.Count);
+            if (toInsert.Count > 0)
+            {
+                await _instrumentRepository.InsertBulkAsync(toInsert, cancellationToken);
+                _logger.LogInformation("Inserted {Count} new instruments", toInsert.Count);
+            }
 
-            var saved = await _instrumentRepository.BulkUpsertAsync(instruments, cancellationToken);
-            _logger.LogInformation("Successfully seeded {Count} instruments", saved);
+            if (toUpdate.Count > 0)
+            {
+                await _instrumentRepository.UpdateBulkAsync(toUpdate, cancellationToken);
+                _logger.LogInformation("Updated {Count} existing instruments", toUpdate.Count);
+            }
 
-            return saved;
+            var totalProcessed = toInsert.Count + toUpdate.Count;
+            _logger.LogInformation("Successfully processed {Count} instruments", totalProcessed);
+
+            return totalProcessed;
         }
         catch (Exception ex)
         {

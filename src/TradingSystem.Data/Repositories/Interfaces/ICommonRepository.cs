@@ -18,5 +18,8 @@ public interface ICommonRepository<T> where T : class
     Task DeleteRangeAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default);
     Task<int> CountAsync(Expression<Func<T, bool>>? predicate = null, CancellationToken cancellationToken = default);
     Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<T>> GetListAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default);
+    Task InsertBulkAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default);
+    Task UpdateBulkAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default);
     IQueryable<T> Query();
 }
