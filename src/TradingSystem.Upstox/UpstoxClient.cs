@@ -121,6 +121,34 @@ public class UpstoxClient
         }
     }
 
+    public async Task<TokenResponse> FetchTokenFromUpstoxAsync(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            throw new Exception("Upstox authorization code not available. Login first.");
+
+        var form = new Dictionary<string, string>
+            {
+                {"code", code},
+                {"client_id", _options.ClientId},
+                {"client_secret", _options.ClientSecret},
+                {"redirect_uri", _options.RedirectUri},
+                {"grant_type", "authorization_code"}
+            };
+
+        var response = await _http.PostAsync("login/authorization/token", new FormUrlEncodedContent(form));
+
+        response.EnsureSuccessStatusCode();
+
+        var tokenResponse = await response.Content.ReadFromJsonAsync<TokenResponse>();
+
+        if (tokenResponse == null || string.IsNullOrWhiteSpace(tokenResponse.AccessToken))
+            throw new Exception("Failed to fetch Upstox token");
+
+        UpstoxTokenStore.SetToken(tokenResponse.AccessToken);
+
+        return tokenResponse;
+    }
+
     private List<Candle> ParseCandles(List<List<object>> candleData, string interval)
     {
         var candles = new List<Candle>();
