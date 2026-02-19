@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using TradingSystem.Api.DTOs;
-using TradingSystem.Data;
+using TradingSystem.Data.Services;
 using TradingSystem.Scanner;
 
 namespace TradingSystem.Api.Controllers;
@@ -11,12 +10,12 @@ namespace TradingSystem.Api.Controllers;
 public class RecommendationsController : ControllerBase
 {
     private readonly TradeRecommendationService _recommender;
-    private readonly TradingDbContext _db;
+    private readonly IInstrumentService _instrumentService;
 
-    public RecommendationsController(TradeRecommendationService recommender, TradingDbContext db)
+    public RecommendationsController(TradeRecommendationService recommender, IInstrumentService instrumentService)
     {
         _recommender = recommender;
-        _db = db;
+        _instrumentService = instrumentService;
     }
 
     [HttpGet]
@@ -24,8 +23,7 @@ public class RecommendationsController : ControllerBase
     {
         var recommendations = await _recommender.GetActiveRecommendationsAsync();
 
-        var instruments = await _db.Instruments
-            .ToDictionaryAsync(i => i.InstrumentKey, i => i.Symbol);
+        var instruments = await _instrumentService.GetKeyToSymbolMapAsync();
 
         var dtos = recommendations.Select(r => new RecommendationDto
         {

@@ -1,8 +1,8 @@
 using TradingSystem.Core.Models;
 
-namespace TradingSystem.Data.Repositories;
+namespace TradingSystem.Data.Services;
 
-public interface ICandleRepository
+public interface ICandleService
 {
     Task SaveAsync(string instrumentKey, Candle candle);
     Task SaveBatchAsync(string instrumentKey, List<Candle> candles);

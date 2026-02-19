@@ -1,6 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using TradingSystem.Data;
-using TradingSystem.Data.Repositories;
+using TradingSystem.Data.Services;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
 
@@ -23,13 +22,14 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
     ?? Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? "Host=localhost;Database=trading;Username=postgres;Password=postgres";
 
-builder.Services.AddDbContext<TradingDbContext>(options =>
-    options.UseNpgsql(connectionString));
+builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
 
-builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
-builder.Services.AddScoped<ICandleRepository, CandleRepository>();
-builder.Services.AddScoped<IIndicatorRepository, IndicatorRepository>();
-builder.Services.AddScoped<ITradeRepository, TradeRepository>();
+builder.Services.AddScoped<IInstrumentService, InstrumentService>();
+builder.Services.AddScoped<ICandleService, CandleService>();
+builder.Services.AddScoped<IIndicatorService, IndicatorService>();
+builder.Services.AddScoped<ITradeService, TradeService>();
+builder.Services.AddScoped<IScanService, ScanService>();
+builder.Services.AddScoped<IRecommendationService, RecommendationService>();
 
 var scannerConfig = new ScannerConfig();
 builder.Configuration.GetSection("Scanner").Bind(scannerConfig);

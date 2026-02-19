@@ -1,6 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using TradingSystem.Core.Models;
-using TradingSystem.Data;
+using TradingSystem.Data.Services;
 using TradingSystem.Indicators;
 using TradingSystem.Scanner.Models;
 
@@ -8,80 +7,57 @@ namespace TradingSystem.Scanner;
 
 public class TradeRecommendationService
 {
-    private readonly TradingDbContext _db;
+    private readonly IInstrumentService _instrumentService;
+    private readonly ICandleService _candleService;
+    private readonly IIndicatorService _indicatorService;
+    private readonly IRecommendationService _recommendationService;
     private readonly SetupScoringService _scorer;
 
-    public TradeRecommendationService(TradingDbContext db, SetupScoringService scorer)
+    public TradeRecommendationService(
+        IInstrumentService instrumentService,
+        ICandleService candleService,
+        IIndicatorService indicatorService,
+        IRecommendationService recommendationService,
+        SetupScoringService scorer)
     {
-        _db = db;
+        _instrumentService = instrumentService;
+        _candleService = candleService;
+        _indicatorService = indicatorService;
+        _recommendationService = recommendationService;
         _scorer = scorer;
     }
 
     public async Task<Recommendation?> GenerateAsync(string instrumentKey, int timeframeMinutes = 15)
     {
-        var instrument = await _db.Instruments
-            .FirstOrDefaultAsync(i => i.InstrumentKey == instrumentKey && i.IsActive);
+        var instrument = await _instrumentService.GetByKeyAsync(instrumentKey);
+        if (instrument == null || !instrument.IsActive) return null;
 
-        if (instrument == null) return null;
-
-        var candles = await _db.MarketCandles
-            .Where(c => c.InstrumentKey == instrumentKey && c.TimeframeMinutes == timeframeMinutes)
-            .OrderByDescending(c => c.Timestamp)
-            .Take(100)
-            .OrderBy(c => c.Timestamp)
-            .ToListAsync();
-
+        var candles = await _candleService.GetRecentAsync(instrumentKey, timeframeMinutes, 100);
         if (candles.Count < 50) return null;
 
-        var domainCandles = candles.Select(c => c.ToCandle()).ToList();
-
-        var latestIndicator = await _db.IndicatorSnapshots
-            .Where(s => s.InstrumentKey == instrumentKey && s.TimeframeMinutes == timeframeMinutes)
-            .OrderByDescending(s => s.Timestamp)
-            .FirstOrDefaultAsync();
-
+        var latestIndicator = await _indicatorService.GetLatestAsync(instrumentKey, timeframeMinutes);
         if (latestIndicator == null) return null;
 
         var indicators = MapToIndicatorValues(latestIndicator);
-        var scanResult = _scorer.Score(instrument, indicators, domainCandles);
+        var scanResult = _scorer.Score(instrument, indicators, candles);
 
         if (scanResult.SetupScore < 50 || scanResult.Bias == ScanBias.NONE)
             return null;
 
-        var recommendation = BuildRecommendation(instrument, indicators, scanResult, domainCandles);
+        var recommendation = BuildRecommendation(instrument, indicators, scanResult, candles);
 
         await PersistAsync(recommendation);
         return recommendation;
     }
 
     public async Task<List<Recommendation>> GetActiveRecommendationsAsync()
-    {
-        return await _db.Recommendations
-            .Where(r => r.IsActive && (r.ExpiresAt == null || r.ExpiresAt > DateTime.UtcNow))
-            .OrderByDescending(r => r.Confidence)
-            .ToListAsync();
-    }
+        => await _recommendationService.GetActiveAsync();
 
     public async Task<Recommendation?> GetLatestForInstrumentAsync(string instrumentKey)
-    {
-        return await _db.Recommendations
-            .Where(r => r.InstrumentKey == instrumentKey && r.IsActive)
-            .OrderByDescending(r => r.Timestamp)
-            .FirstOrDefaultAsync();
-    }
+        => await _recommendationService.GetLatestForInstrumentAsync(instrumentKey);
 
     public async Task ExpireOldRecommendationsAsync()
-    {
-        var cutoff = DateTime.UtcNow.AddMinutes(-60);
-        var old = await _db.Recommendations
-            .Where(r => r.IsActive && r.CreatedAt < cutoff)
-            .ToListAsync();
-
-        foreach (var rec in old)
-            rec.IsActive = false;
-
-        await _db.SaveChangesAsync();
-    }
+        => await _recommendationService.ExpireOldAsync(60);
 
     private Recommendation BuildRecommendation(
         TradingInstrument instrument,
@@ -188,10 +164,7 @@ public class TradeRecommendationService
     }
 
     private async Task PersistAsync(Recommendation recommendation)
-    {
-        await _db.Recommendations.AddAsync(recommendation);
-        await _db.SaveChangesAsync();
-    }
+        => await _recommendationService.SaveAsync(recommendation);
 
     private static decimal RoundToStrike(decimal price, decimal tickSize)
     {
