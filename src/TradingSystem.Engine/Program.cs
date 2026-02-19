@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TradingSystem.Configuration;
@@ -38,7 +39,8 @@ if (string.IsNullOrEmpty(connectionString))
         ?? "Host=localhost;Database=trading;Username=postgres;Password=postgres";
 }
 
-services.AddSingleton(new DbConnectionFactory(connectionString));
+services.AddDbContext<TradingDbContext>(options =>
+    options.UseNpgsql(connectionString));
 
 services.AddScoped<IInstrumentService, InstrumentService>();
 services.AddScoped<ICandleService, CandleService>();
@@ -66,7 +68,7 @@ var serviceProvider = services.BuildServiceProvider();
 Console.WriteLine($"Active Instrument: {tradingConfig.Instrument.ActiveInstrumentKey}");
 Console.WriteLine($"Trading Mode: {tradingConfig.Instrument.TradingMode}");
 Console.WriteLine($"Timeframe: {tradingConfig.Timeframe.ActiveTimeframeMinutes} minutes");
-Console.WriteLine($"Database: PostgreSQL (Npgsql)");
+Console.WriteLine($"Database: PostgreSQL (EF Core)");
 Console.WriteLine($"Data Source: Upstox API");
 Console.WriteLine();
 

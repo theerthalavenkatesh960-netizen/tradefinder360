@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using TradingSystem.Data;
 using TradingSystem.Data.Services;
 using TradingSystem.Scanner;
@@ -22,7 +23,8 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
     ?? Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? "Host=localhost;Database=trading;Username=postgres;Password=postgres";
 
-builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
+builder.Services.AddDbContext<TradingDbContext>(options =>
+    options.UseNpgsql(connectionString));
 
 builder.Services.AddScoped<IInstrumentService, InstrumentService>();
 builder.Services.AddScoped<ICandleService, CandleService>();
