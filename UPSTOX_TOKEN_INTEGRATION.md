@@ -55,11 +55,20 @@ Methods:
 - Added `UserProfiles` DbSet
 - Configured entity mapping for user_profiles table
 
-### 8. Service Registration
+### 8. Token Provider Service
+**File**: `src/TradingSystem.Upstox/Services/IUpstoxTokenProvider.cs`
+**File**: `src/TradingSystem.Data/Services/UpstoxTokenProvider.cs`
+- Abstraction for retrieving stored tokens
+- Queries database for "default_user" access token
+- Used by both API and WorkerService
+
+### 9. Service Registration
 **File**: `src/TradingSystem.Api/Program.cs`
+**File**: `src/TradingSystem.WorkerService/Program.cs`
 - Registered `IUserProfileService` and `UserProfileService`
-- Configured `UpstoxClient` to automatically load token from database
-- When UpstoxClient is created, it queries the database for the stored token
+- Registered `IUpstoxTokenProvider` and `UpstoxTokenProvider`
+- Configured `UpstoxClient` factory to automatically load token from provider
+- When UpstoxClient is created, it retrieves token via `IUpstoxTokenProvider`
 
 ## How It Works
 
@@ -85,10 +94,16 @@ Methods:
 
 When any service needs to call Upstox API:
 
-1. `UpstoxClient` is requested from DI container
-2. Factory method loads token from database (userId: "default_user")
+1. `IUpstoxTokenProvider` retrieves token from database
+2. `UpstoxClient` is created via factory method with the token
 3. Token is set in HTTP client headers
 4. All Upstox API calls automatically use stored token
+
+**Key Component**: `IUpstoxTokenProvider`
+- Interface defined in `TradingSystem.Upstox/Services`
+- Implementation in `TradingSystem.Data/Services/UpstoxTokenProvider.cs`
+- Queries database for "default_user" token
+- Used by both API and WorkerService
 
 ## Configuration Required
 
@@ -135,13 +150,31 @@ The `user_profiles` table already exists in your Supabase database with the foll
 3. **Token expires**: Implement token refresh logic (TODO)
 4. **Token refresh**: Use refresh token to get new access token
 
+## Architecture Benefits
+
+**Centralized Token Management**
+- Single source of truth for tokens (database)
+- Both API and WorkerService use the same token
+- No need to duplicate token configuration
+
+**Automatic Token Loading**
+- `IUpstoxTokenProvider` abstracts token retrieval
+- `UpstoxClient` factory automatically injects current token
+- Background jobs get authenticated client without manual setup
+
+**Separation of Concerns**
+- Token storage logic in `Data` layer
+- Token retrieval interface in `Upstox` layer
+- Clean dependency injection in both API and WorkerService
+
 ## Next Steps
 
-1. Set Upstox ClientId and ClientSecret in configuration
+1. Set Upstox ClientId and ClientSecret in configuration (both API and WorkerService)
 2. Test OAuth flow by navigating to Upstox login URL
-3. Implement token refresh mechanism
-4. Add token expiry checking
-5. Add support for multiple users (currently uses "default_user")
+3. Verify WorkerService jobs can access Upstox API
+4. Implement token refresh mechanism
+5. Add token expiry checking
+6. Add support for multiple users (currently uses "default_user")
 
 ## Security Notes
 
