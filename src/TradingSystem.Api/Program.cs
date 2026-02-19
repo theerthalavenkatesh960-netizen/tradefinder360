@@ -32,6 +32,7 @@ builder.Services.AddDbContext<TradingDbContext>(options =>
 builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<>));
 builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
 builder.Services.AddScoped<IInstrumentPriceRepository, InstrumentPriceRepository>();
+builder.Services.AddScoped<ISectorRepository, SectorRepository>();
 
 builder.Services.AddScoped<IInstrumentService, InstrumentService>();
 builder.Services.AddScoped<ICandleService, CandleService>();

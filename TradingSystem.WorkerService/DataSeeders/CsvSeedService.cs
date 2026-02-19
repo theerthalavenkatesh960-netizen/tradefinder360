@@ -1,200 +1,219 @@
-using Microsoft.EntityFrameworkCore;
-using SwingLyne.Domain;
-using SwingLyne.Domain.Enums;
-using SwingLyne.Domain.Models;
-using SwingLyne.Domain.Repositories.Interfaces;
+using Microsoft.Extensions.Logging;
+using TradingSystem.Core.Models;
+using TradingSystem.Data.Repositories.Interfaces;
 
-namespace SwingLyne.Migrator.DataSeeders;
+namespace TradingSystem.WorkerService.DataSeeders;
 
 public class CsvSeedService
 {
-    private readonly ICommonRepository<Sector> _sectorRepo;
-    private readonly ICommonRepository<Stock> _stockRepo;
-
-    private readonly string _dataSeedPath;
+    private readonly ISectorRepository _sectorRepository;
+    private readonly IInstrumentRepository _instrumentRepository;
+    private readonly ILogger<CsvSeedService> _logger;
 
     public CsvSeedService(
-        ICommonRepository<Sector> sectorRepo,
-        ICommonRepository<Stock> stockRepo)
+        ISectorRepository sectorRepository,
+        IInstrumentRepository instrumentRepository,
+        ILogger<CsvSeedService> logger)
     {
-        _sectorRepo = sectorRepo;
-        _stockRepo = stockRepo;
-
-        _dataSeedPath = Path.Combine(AppContext.BaseDirectory, "Data");
+        _sectorRepository = sectorRepository;
+        _instrumentRepository = instrumentRepository;
+        _logger = logger;
     }
 
-    public async Task SeedAsync()
+    public async Task<int> SeedSectorsFromCsvAsync(string csvFilePath, CancellationToken cancellationToken = default)
     {
-        await SeedSectorsAsync();
-        await SeedStocksAsync();
-    }
-
-    // ----------------------------------------
-    // SECTORS
-    // ----------------------------------------
-    private async Task SeedSectorsAsync()
-    {
-        var file = Path.Combine(_dataSeedPath, "sectors.csv");
-        if (!File.Exists(file))
+        try
         {
-            Console.WriteLine("Sector CSV not found");
-            return;
-        }
-
-        var lines = await File.ReadAllLinesAsync(file);
-
-        var csvSectors = lines
-            .Skip(1)
-            .Select(l =>
+            if (!File.Exists(csvFilePath))
             {
-                var p = l.Split(',');
-                return new
-                {
-                    Description = p[0].Trim(),
-                    Name = p[1].Trim()
-                };
-            })
-            .GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase) // remove duplicates
-            .Select(g => g.First())
-            .ToList();
-
-        // Load existing from DB once
-        var existing = await _sectorRepo.GetListAsync(s => true);
-        var existingLookup = existing.ToDictionary(
-            x => x.Name.Trim(),
-            x => x,
-            StringComparer.OrdinalIgnoreCase);
-
-        var toInsert = new List<Sector>();
-        var toUpdate = new List<Sector>();
-
-        foreach (var s in csvSectors)
-        {
-            if (existingLookup.TryGetValue(s.Name, out var dbSector))
-            {
-                dbSector.Description = s.Description;
-                toUpdate.Add(dbSector);
+                _logger.LogError("Sectors CSV file not found at: {Path}", csvFilePath);
+                return 0;
             }
-            else
+
+            var sectors = new List<Sector>();
+            var lines = await File.ReadAllLinesAsync(csvFilePath, cancellationToken);
+
+            for (int i = 1; i < lines.Length; i++)
             {
-                toInsert.Add(new Sector
+                var line = lines[i].Trim();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                var parts = ParseCsvLine(line);
+                if (parts.Length < 2) continue;
+
+                var description = parts[0].Trim();
+                var sectorName = parts[1].Trim();
+
+                if (string.IsNullOrWhiteSpace(sectorName) || sectorName.Equals("sector", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var code = GenerateSectorCode(sectorName);
+
+                if (!sectors.Any(s => s.Code == code))
                 {
-                    Name = s.Name,
-                    Description = s.Description
-                });
+                    sectors.Add(new Sector
+                    {
+                        Name = sectorName,
+                        Code = code,
+                        Description = description,
+                        IsActive = true
+                    });
+                }
             }
+
+            _logger.LogInformation("Parsed {Count} sectors from CSV", sectors.Count);
+
+            var saved = await _sectorRepository.BulkUpsertAsync(sectors, cancellationToken);
+            _logger.LogInformation("Successfully seeded {Count} sectors", saved);
+
+            return saved;
         }
-
-        if (toInsert.Count > 0)
-            await _sectorRepo.InsertBulkAsync(toInsert);
-
-        if (toUpdate.Count > 0)
-            await _sectorRepo.UpdateBulkAsync(toUpdate);
-
-        Console.WriteLine($"Sectors: Inserted {toInsert.Count}, Updated {toUpdate.Count}");
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error seeding sectors from CSV: {Path}", csvFilePath);
+            throw;
+        }
     }
 
-    // ----------------------------------------
-    // STOCKS
-    // ----------------------------------------
-    private async Task SeedStocksAsync()
+    public async Task<int> SeedInstrumentsFromCsvAsync(string csvFilePath, CancellationToken cancellationToken = default)
     {
-        var file = Path.Combine(_dataSeedPath, "stocks.csv");
-        if (!File.Exists(file))
+        try
         {
-            Console.WriteLine("Stocks CSV not found");
-            return;
-        }
-
-        var lines = await File.ReadAllLinesAsync(file);
-        var rows = lines.Skip(1).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
-
-        if (!rows.Any())
-            return;
-
-        // Load sectors once
-        var sectors = await _sectorRepo.GetAllAsync();
-        var sectorMap = sectors.ToDictionary(s => s.Name.Trim(), s => s.Id, StringComparer.OrdinalIgnoreCase);
-
-        // Load existing stocks once
-        var existingStocks = await _stockRepo.GetAllAsync();
-        var stockMap = existingStocks.ToDictionary(s => s.Symbol.Trim(), s => s, StringComparer.OrdinalIgnoreCase);
-
-        var toInsert = new List<Stock>();
-        var toUpdate = new List<Stock>();
-
-        foreach (var line in rows)
-        {
-            var parts = line.Split(',');
-
-            var symbol = parts[0].Trim();
-            var name = parts[1].Trim();
-            var exchange = parts[2].Trim();
-            var instrumentKey = parts[3].Trim();
-            var sector = parts[5].Trim();
-
-            var sectorId = sectorMap.TryGetValue(sector, out var sid) ? sid : sectorMap.GetValueOrDefault("Default");
-
-
-            if (!stockMap.TryGetValue(symbol, out var dbStock))
+            if (!File.Exists(csvFilePath))
             {
-                toInsert.Add(new Stock
+                _logger.LogError("Instruments CSV file not found at: {Path}", csvFilePath);
+                return 0;
+            }
+
+            var allSectors = await _sectorRepository.GetAllAsync(cancellationToken);
+            var sectorMap = allSectors.ToDictionary(s => s.Name, s => s.Id, StringComparer.OrdinalIgnoreCase);
+
+            var instruments = new List<TradingInstrument>();
+            var lines = await File.ReadAllLinesAsync(csvFilePath, cancellationToken);
+
+            for (int i = 1; i < lines.Length; i++)
+            {
+                var line = lines[i].Trim();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                var parts = ParseCsvLine(line);
+                if (parts.Length < 6) continue;
+
+                var symbol = parts[0].Trim();
+                var name = parts[1].Trim();
+                var exchange = parts[2].Trim();
+                var instrumentKey = parts[3].Trim();
+                var industry = parts[4].Trim();
+                var sectorName = parts[5].Trim();
+
+                if (string.IsNullOrWhiteSpace(symbol) || symbol.Equals("Symbol", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var exchangeCode = exchange == "2" ? "BSE" : "NSE";
+
+                int? sectorId = null;
+                if (!string.IsNullOrWhiteSpace(sectorName) && sectorMap.TryGetValue(sectorName, out var secId))
                 {
+                    sectorId = secId;
+                }
+
+                var isin = ExtractISIN(instrumentKey);
+
+                instruments.Add(new TradingInstrument
+                {
+                    InstrumentKey = instrumentKey,
+                    Exchange = exchangeCode,
                     Symbol = symbol,
                     Name = name,
-                    Description = name,
-                    Exchange = exchange == "1" ? Exchange.NSE : Exchange.BSE,
-                    InstrumentKey = instrumentKey,
                     SectorId = sectorId,
-                    CurrentPrice = 0
+                    Industry = industry,
+                    ISIN = isin,
+                    InstrumentType = InstrumentType.STOCK,
+                    LotSize = 1,
+                    TickSize = 0.05m,
+                    IsDerivativesEnabled = false,
+                    DefaultTradingMode = TradingMode.EQUITY,
+                    IsActive = true
                 });
+            }
+
+            _logger.LogInformation("Parsed {Count} instruments from CSV", instruments.Count);
+
+            var saved = await _instrumentRepository.BulkUpsertAsync(instruments, cancellationToken);
+            _logger.LogInformation("Successfully seeded {Count} instruments", saved);
+
+            return saved;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error seeding instruments from CSV: {Path}", csvFilePath);
+            throw;
+        }
+    }
+
+    private string[] ParseCsvLine(string line)
+    {
+        var parts = new List<string>();
+        var currentPart = string.Empty;
+        var insideQuotes = false;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+
+            if (c == '"')
+            {
+                insideQuotes = !insideQuotes;
+            }
+            else if (c == ',' && !insideQuotes)
+            {
+                parts.Add(currentPart.Trim('"', ' '));
+                currentPart = string.Empty;
             }
             else
             {
-                bool changed = false;
-
-                if (dbStock.Name != name)
-                {
-                    dbStock.Name = name;
-                    changed = true;
-                }
-
-                if (dbStock.Description != name)
-                {
-                    dbStock.Description = name;
-                    changed = true;
-                }
-
-                var ex = exchange == "1" ? Exchange.NSE : Exchange.BSE;
-                if (dbStock.Exchange != ex)
-                {
-                    dbStock.Exchange = ex;
-                    changed = true;
-                }
-
-                if (dbStock.InstrumentKey != instrumentKey)
-                {
-                    dbStock.InstrumentKey = instrumentKey;
-                    changed = true;
-                }
-
-                if (dbStock.SectorId != sectorId)
-                {
-                    dbStock.SectorId = sectorId;
-                    changed = true;
-                }
-
-                if (changed)
-                    toUpdate.Add(dbStock);
+                currentPart += c;
             }
         }
 
-        if (toInsert.Any())
-            await _stockRepo.InsertBulkAsync(toInsert);
+        parts.Add(currentPart.Trim('"', ' '));
+        return parts.ToArray();
+    }
 
-        if (toUpdate.Any())
-            await _stockRepo.UpdateBulkAsync(toUpdate);
+    private string GenerateSectorCode(string sectorName)
+    {
+        var cleanName = new string(sectorName
+            .Where(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c))
+            .ToArray());
 
-        Console.WriteLine($"Stocks → Inserted: {toInsert.Count}, Updated: {toUpdate.Count}");
+        var words = cleanName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        if (words.Length == 1)
+        {
+            return words[0].Length > 10 ? words[0].Substring(0, 10).ToUpper() : words[0].ToUpper();
+        }
+
+        var code = string.Join("_", words.Select(w => w.Length > 3 ? w.Substring(0, 3) : w));
+        code = code.Length > 20 ? code.Substring(0, 20) : code;
+
+        return code.ToUpper();
+    }
+
+    private string ExtractISIN(string instrumentKey)
+    {
+        if (string.IsNullOrWhiteSpace(instrumentKey)) return string.Empty;
+
+        var parts = instrumentKey.Split('|');
+        if (parts.Length > 1)
+        {
+            var isin = parts[1].Trim();
+            if (isin.Length == 12 && isin.StartsWith("INE"))
+            {
+                return isin;
+            }
+        }
+
+        return string.Empty;
     }
 }
+

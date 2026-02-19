@@ -9,6 +9,7 @@ using TradingSystem.Data.Repositories.Interfaces;
 using TradingSystem.Upstox;
 using TradingSystem.Upstox.Models;
 using TradingSystem.Upstox.Services;
+using TradingSystem.WorkerService.DataSeeders;
 using TradingSystem.WorkerService.Jobs;
 using TradingSystem.WorkerService.Scheduling;
 
@@ -24,6 +25,9 @@ builder.Services.AddDbContext<TradingDbContext>(options =>
 builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<>));
 builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
 builder.Services.AddScoped<IInstrumentPriceRepository, InstrumentPriceRepository>();
+builder.Services.AddScoped<ISectorRepository, SectorRepository>();
+
+builder.Services.AddScoped<CsvSeedService>();
 
 var upstoxConfig = new UpstoxConfig();
 builder.Configuration.GetSection("Upstox").Bind(upstoxConfig);

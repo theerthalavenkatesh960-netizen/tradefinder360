@@ -5,6 +5,7 @@ namespace TradingSystem.Data;
 
 public class TradingDbContext : DbContext
 {
+    public DbSet<Sector> Sectors { get; set; } = null!;
     public DbSet<TradingInstrument> Instruments { get; set; } = null!;
     public DbSet<InstrumentPrice> InstrumentPrices { get; set; } = null!;
     public DbSet<MarketCandle> MarketCandles { get; set; } = null!;
@@ -20,6 +21,21 @@ public class TradingDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<Sector>(e =>
+        {
+            e.ToTable("sectors");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.Name).HasColumnName("name").IsRequired();
+            e.Property(x => x.Code).HasColumnName("code").IsRequired();
+            e.Property(x => x.Description).HasColumnName("description");
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => x.Code).IsUnique();
+            e.HasIndex(x => x.Name);
+        });
+
         modelBuilder.Entity<TradingInstrument>(e =>
         {
             e.ToTable("instruments");
@@ -29,6 +45,10 @@ public class TradingDbContext : DbContext
             e.Property(x => x.Exchange).HasColumnName("exchange").IsRequired();
             e.Property(x => x.Symbol).HasColumnName("symbol").IsRequired();
             e.Property(x => x.Name).HasColumnName("name").IsRequired();
+            e.Property(x => x.SectorId).HasColumnName("sector_id");
+            e.Property(x => x.Industry).HasColumnName("industry");
+            e.Property(x => x.MarketCap).HasColumnName("market_cap").HasPrecision(18, 2);
+            e.Property(x => x.ISIN).HasColumnName("isin");
             e.Property(x => x.InstrumentType).HasColumnName("instrument_type").IsRequired();
             e.Property(x => x.LotSize).HasColumnName("lot_size");
             e.Property(x => x.TickSize).HasColumnName("tick_size").HasPrecision(18, 4);
@@ -39,6 +59,11 @@ public class TradingDbContext : DbContext
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             e.HasIndex(x => x.InstrumentKey).IsUnique();
             e.HasIndex(x => x.Symbol);
+            e.HasIndex(x => x.SectorId);
+            e.HasOne(x => x.Sector)
+                .WithMany(x => x.Instruments)
+                .HasForeignKey(x => x.SectorId)
+                .OnDelete(DeleteBehavior.SetNull);
             e.HasMany(x => x.Prices)
                 .WithOne(x => x.Instrument)
                 .HasForeignKey(x => x.InstrumentId)

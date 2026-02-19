@@ -19,6 +19,10 @@ public class TradingInstrument
     public string Exchange { get; set; } = string.Empty;
     public string Symbol { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public int? SectorId { get; set; }
+    public string Industry { get; set; } = string.Empty;
+    public decimal? MarketCap { get; set; }
+    public string ISIN { get; set; } = string.Empty;
     public InstrumentType InstrumentType { get; set; }
     public int LotSize { get; set; }
     public decimal TickSize { get; set; }
@@ -28,6 +32,7 @@ public class TradingInstrument
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    public Sector? Sector { get; set; }
     public ICollection<InstrumentPrice>? Prices { get; set; }
 
     public string GetDisplayName() => $"{Exchange}:{Symbol}";

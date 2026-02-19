@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
+using TradingSystem.WorkerService.Jobs;
 
 namespace TradingSystem.WorkerService.Scheduling
 {
@@ -8,6 +9,10 @@ namespace TradingSystem.WorkerService.Scheduling
     {
         public static void AddQuartzWithSchedules(this IServiceCollection services, IConfiguration configuration)
         {
+            var seederConfig = new SeederConfig();
+            configuration.GetSection("Seeder").Bind(seederConfig);
+            services.Configure<SeederConfig>(configuration.GetSection("Seeder"));
+
             services.AddQuartz(q =>
             {
                 var schedules = QuartzJobRegistry.GetSchedules();
@@ -16,14 +21,12 @@ namespace TradingSystem.WorkerService.Scheduling
                 {
                     var jobKey = new JobKey(schedule.JobType.Name);
 
-                    // Register job by Type
                     q.AddJob(
                         schedule.JobType,
                         jobKey,
                         jobCfg => jobCfg.StoreDurably()
                     );
 
-                    // Register trigger
                     q.AddTrigger(triggerCfg => triggerCfg
                         .ForJob(jobKey)
                         .WithIdentity($"{schedule.JobType.Name}-trigger")
@@ -35,21 +38,32 @@ namespace TradingSystem.WorkerService.Scheduling
                     );
                 }
 
-                //var quartzConfig = configuration.GetSection("Quartz:PersistentStore");
-                // Optional: Enable persistent store if using Postgres
+                if (seederConfig.EnableCsvSeeding)
+                {
+                    var csvSeederJobKey = new JobKey("CsvDataSeederJob");
+                    q.AddJob<CsvDataSeederJob>(opts => opts
+                        .WithIdentity(csvSeederJobKey)
+                        .StoreDurably());
+
+                    q.AddTrigger(opts => opts
+                        .ForJob(csvSeederJobKey)
+                        .WithIdentity("CsvDataSeederJob-trigger")
+                        .StartNow()
+                        .WithSimpleSchedule(x => x.WithRepeatCount(0)));
+                }
+
                 q.UsePersistentStore(store =>
                 {
                     store.UsePostgres(pg =>
                     {
                         pg.ConnectionString = configuration.GetConnectionString("QuartzDb")!;
-                        pg.TablePrefix =  string.Empty;//quartzConfig.GetValue<string>("TablePrefix") ?? "Swing_";
+                        pg.TablePrefix = string.Empty;
                     });
 
-                    store.UseNewtonsoftJsonSerializer();   // For Quartz 3.15 – not obsolete
+                    store.UseNewtonsoftJsonSerializer();
                 });
             });
 
-            // Starts Quartz HostedService
             services.AddQuartzHostedService(options =>
             {
                 options.WaitForJobsToComplete = true;
