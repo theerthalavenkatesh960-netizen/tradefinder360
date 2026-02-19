@@ -10,6 +10,7 @@ using TradingSystem.Upstox;
 using TradingSystem.Upstox.Models;
 using TradingSystem.Upstox.Services;
 using TradingSystem.WorkerService.Jobs;
+using TradingSystem.WorkerService.Scheduling;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -33,26 +34,7 @@ builder.Services.AddScoped<UpstoxClient>();
 builder.Services.AddScoped<IUpstoxInstrumentService, UpstoxInstrumentService>();
 builder.Services.AddScoped<IUpstoxPriceService, UpstoxPriceService>();
 
-builder.Services.AddQuartz(q =>
-{
-    q.UseMicrosoftDependencyInjectionJobFactory();
-
-    var instrumentSyncJobKey = new JobKey("InstrumentSyncJob");
-    q.AddJob<InstrumentSyncJob>(opts => opts.WithIdentity(instrumentSyncJobKey));
-    q.AddTrigger(opts => opts
-        .ForJob(instrumentSyncJobKey)
-        .WithIdentity("InstrumentSyncJob-trigger")
-        .WithCronSchedule("0 0 2 * * ?"));
-
-    var dailyPriceJobKey = new JobKey("DailyPriceUpdateJob");
-    q.AddJob<DailyPriceUpdateJob>(opts => opts.WithIdentity(dailyPriceJobKey));
-    q.AddTrigger(opts => opts
-        .ForJob(dailyPriceJobKey)
-        .WithIdentity("DailyPriceUpdateJob-trigger")
-        .WithCronSchedule("0 30 18 * * ?"));
-});
-
-builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
+builder.Services.AddQuartzWithSchedules(builder.Configuration);
 
 var host = builder.Build();
 host.Run();
