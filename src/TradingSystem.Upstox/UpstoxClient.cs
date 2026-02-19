@@ -1,7 +1,9 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using TradingSystem.Core.Models;
 using TradingSystem.Upstox.Models;
+using static System.Net.WebRequestMethods;
 
 namespace TradingSystem.Upstox;
 
