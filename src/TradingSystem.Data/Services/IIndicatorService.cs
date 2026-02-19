@@ -1,10 +1,11 @@
 using TradingSystem.Core.Models;
 using TradingSystem.Indicators;
 
-namespace TradingSystem.Data.Repositories;
+namespace TradingSystem.Data.Services;
 
-public interface IIndicatorRepository
+public interface IIndicatorService
 {
     Task SaveAsync(string instrumentKey, int timeframeMinutes, IndicatorValues indicators);
+    Task<IndicatorSnapshot?> GetLatestAsync(string instrumentKey, int timeframeMinutes);
     Task<List<IndicatorSnapshot>> GetRecentAsync(string instrumentKey, int timeframeMinutes, int count);
 }

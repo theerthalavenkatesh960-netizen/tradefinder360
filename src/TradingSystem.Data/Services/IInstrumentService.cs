@@ -1,12 +1,12 @@
 using TradingSystem.Core.Models;
 
-namespace TradingSystem.Data.Repositories;
+namespace TradingSystem.Data.Services;
 
-public interface IInstrumentRepository
+public interface IInstrumentService
 {
     Task<TradingInstrument?> GetByKeyAsync(string instrumentKey);
-    Task<List<TradingInstrument>> GetActiveInstrumentsAsync();
-    Task<TradingInstrument?> GetByIdAsync(int id);
+    Task<List<TradingInstrument>> GetActiveAsync();
+    Task<Dictionary<string, string>> GetKeyToSymbolMapAsync();
     Task AddAsync(TradingInstrument instrument);
     Task UpdateAsync(TradingInstrument instrument);
 }

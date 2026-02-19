@@ -5,7 +5,6 @@ using TradingSystem.Configuration;
 using TradingSystem.Configuration.Models;
 using TradingSystem.Core.Models;
 using TradingSystem.Data;
-using TradingSystem.Data.Repositories;
 using TradingSystem.Data.Services;
 using TradingSystem.Upstox;
 using TradingSystem.Engine;
@@ -43,10 +42,12 @@ if (string.IsNullOrEmpty(connectionString))
 services.AddDbContext<TradingDbContext>(options =>
     options.UseNpgsql(connectionString));
 
-services.AddScoped<IInstrumentRepository, InstrumentRepository>();
-services.AddScoped<ICandleRepository, CandleRepository>();
-services.AddScoped<IIndicatorRepository, IndicatorRepository>();
-services.AddScoped<ITradeRepository, TradeRepository>();
+services.AddScoped<IInstrumentService, InstrumentService>();
+services.AddScoped<ICandleService, CandleService>();
+services.AddScoped<IIndicatorService, IndicatorService>();
+services.AddScoped<ITradeService, TradeService>();
+services.AddScoped<IScanService, ScanService>();
+services.AddScoped<IRecommendationService, RecommendationService>();
 services.AddScoped<TradingDataService>();
 
 services.AddHttpClient<UpstoxClient>();
@@ -75,20 +76,15 @@ TradingInstrument? activeInstrument = null;
 
 using (var scope = serviceProvider.CreateScope())
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<TradingDbContext>();
+    var instrumentService = scope.ServiceProvider.GetRequiredService<IInstrumentService>();
     try
     {
-        await dbContext.Database.CanConnectAsync();
+        activeInstrument = await instrumentService.GetByKeyAsync(tradingConfig.Instrument.ActiveInstrumentKey);
         Console.WriteLine("Database connection: SUCCESS");
-
-        var instrumentRepo = scope.ServiceProvider.GetRequiredService<IInstrumentRepository>();
-        activeInstrument = await instrumentRepo.GetByKeyAsync(tradingConfig.Instrument.ActiveInstrumentKey);
 
         if (activeInstrument == null)
         {
             Console.WriteLine($"Instrument '{tradingConfig.Instrument.ActiveInstrumentKey}' not found in database.");
-            Console.WriteLine("Run the SQL migration script to seed default instruments:");
-            Console.WriteLine("  psql -d trading -f src/TradingSystem.Data/Migrations/001_InitialSchema.sql");
             return;
         }
 
@@ -97,8 +93,6 @@ using (var scope = serviceProvider.CreateScope())
     catch (Exception ex)
     {
         Console.WriteLine($"Database connection: FAILED - {ex.Message}");
-        Console.WriteLine("Please ensure PostgreSQL is running and the connection string is correct.");
-        Console.WriteLine("You can run the SQL migration script at: src/TradingSystem.Data/Migrations/001_InitialSchema.sql");
         return;
     }
 }

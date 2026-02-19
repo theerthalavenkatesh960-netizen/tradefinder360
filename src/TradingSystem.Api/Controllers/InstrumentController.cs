@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using TradingSystem.Api.DTOs;
-using TradingSystem.Data;
+using TradingSystem.Data.Services;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
 
@@ -11,16 +10,19 @@ namespace TradingSystem.Api.Controllers;
 [Route("api/instrument")]
 public class InstrumentController : ControllerBase
 {
-    private readonly TradingDbContext _db;
+    private readonly IInstrumentService _instrumentService;
+    private readonly IIndicatorService _indicatorService;
     private readonly MarketScannerService _scanner;
     private readonly TradeRecommendationService _recommender;
 
     public InstrumentController(
-        TradingDbContext db,
+        IInstrumentService instrumentService,
+        IIndicatorService indicatorService,
         MarketScannerService scanner,
         TradeRecommendationService recommender)
     {
-        _db = db;
+        _instrumentService = instrumentService;
+        _indicatorService = indicatorService;
         _scanner = scanner;
         _recommender = recommender;
     }
@@ -30,16 +32,12 @@ public class InstrumentController : ControllerBase
         string key,
         [FromQuery] int timeframe = 15)
     {
-        var instrument = await _db.Instruments
-            .FirstOrDefaultAsync(i => i.InstrumentKey == key && i.IsActive);
+        var instrument = await _instrumentService.GetByKeyAsync(key);
 
-        if (instrument == null)
+        if (instrument == null || !instrument.IsActive)
             return NotFound($"Instrument '{key}' not found.");
 
-        var latestIndicator = await _db.IndicatorSnapshots
-            .Where(s => s.InstrumentKey == key && s.TimeframeMinutes == timeframe)
-            .OrderByDescending(s => s.Timestamp)
-            .FirstOrDefaultAsync();
+        var latestIndicator = await _indicatorService.GetLatestAsync(key, timeframe);
 
         if (latestIndicator == null)
             return NotFound($"No indicator data found for '{key}'. Ensure data has been fetched.");
@@ -119,12 +117,7 @@ public class InstrumentController : ControllerBase
         [FromQuery] int timeframe = 15,
         [FromQuery] int limit = 50)
     {
-        var snapshots = await _db.IndicatorSnapshots
-            .Where(s => s.InstrumentKey == key && s.TimeframeMinutes == timeframe)
-            .OrderByDescending(s => s.Timestamp)
-            .Take(limit)
-            .OrderBy(s => s.Timestamp)
-            .ToListAsync();
+        var snapshots = await _indicatorService.GetRecentAsync(key, timeframe, limit);
 
         if (!snapshots.Any())
             return NotFound($"No indicator history found for '{key}'.");
@@ -161,8 +154,7 @@ public class InstrumentController : ControllerBase
         if (recommendation == null)
             return NoContent();
 
-        var instrument = await _db.Instruments
-            .FirstOrDefaultAsync(i => i.InstrumentKey == key);
+        var instrument = await _instrumentService.GetByKeyAsync(key);
 
         return Ok(new RecommendationDto
         {

@@ -1,6 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using TradingSystem.Core.Models;
-using TradingSystem.Data;
+using TradingSystem.Data.Services;
 using TradingSystem.Indicators;
 using TradingSystem.Scanner.Models;
 
@@ -8,22 +7,32 @@ namespace TradingSystem.Scanner;
 
 public class MarketScannerService
 {
-    private readonly TradingDbContext _db;
+    private readonly IInstrumentService _instrumentService;
+    private readonly ICandleService _candleService;
+    private readonly IIndicatorService _indicatorService;
+    private readonly IScanService _scanService;
     private readonly SetupScoringService _scorer;
     private readonly ScannerConfig _config;
 
-    public MarketScannerService(TradingDbContext db, SetupScoringService scorer, ScannerConfig config)
+    public MarketScannerService(
+        IInstrumentService instrumentService,
+        ICandleService candleService,
+        IIndicatorService indicatorService,
+        IScanService scanService,
+        SetupScoringService scorer,
+        ScannerConfig config)
     {
-        _db = db;
+        _instrumentService = instrumentService;
+        _candleService = candleService;
+        _indicatorService = indicatorService;
+        _scanService = scanService;
         _scorer = scorer;
         _config = config;
     }
 
     public async Task<List<ScanResult>> ScanAllAsync(int timeframeMinutes = 15)
     {
-        var instruments = await _db.Instruments
-            .Where(i => i.IsActive)
-            .ToListAsync();
+        var instruments = await _instrumentService.GetActiveAsync();
 
         if (_config.ScanInstruments.Count > 0)
             instruments = instruments.Where(i => _config.ScanInstruments.Contains(i.InstrumentKey)).ToList();
@@ -44,22 +53,12 @@ public class MarketScannerService
 
     public async Task<ScanResult?> ScanInstrumentAsync(TradingInstrument instrument, int timeframeMinutes = 15)
     {
-        var candles = await _db.MarketCandles
-            .Where(c => c.InstrumentKey == instrument.InstrumentKey && c.TimeframeMinutes == timeframeMinutes)
-            .OrderByDescending(c => c.Timestamp)
-            .Take(100)
-            .OrderBy(c => c.Timestamp)
-            .ToListAsync();
+        var candles = await _candleService.GetRecentAsync(instrument.InstrumentKey, timeframeMinutes, 100);
 
         if (candles.Count < 50)
             return null;
 
-        var domainCandles = candles.Select(c => c.ToCandle()).ToList();
-
-        var latestIndicator = await _db.IndicatorSnapshots
-            .Where(s => s.InstrumentKey == instrument.InstrumentKey && s.TimeframeMinutes == timeframeMinutes)
-            .OrderByDescending(s => s.Timestamp)
-            .FirstOrDefaultAsync();
+        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.InstrumentKey, timeframeMinutes);
 
         IndicatorValues indicators;
         if (latestIndicator != null)
@@ -69,31 +68,23 @@ public class MarketScannerService
         else
         {
             var engine = new IndicatorEngine(20, 50, 14, 12, 26, 9, 14, 14, 20, 2.0m);
-            indicators = engine.Calculate(domainCandles.Last());
+            indicators = engine.Calculate(candles.Last());
         }
 
-        var result = _scorer.Score(instrument, indicators, domainCandles);
+        var result = _scorer.Score(instrument, indicators, candles);
         await PersistScanResultAsync(result);
         return result;
     }
 
     public async Task<List<ScanResult>> GetTopSetups(int minScore = 70, int limit = 10)
     {
-        var snapshots = await _db.ScanSnapshots
-            .Where(s => s.SetupScore >= minScore)
-            .GroupBy(s => s.InstrumentKey)
-            .Select(g => g.OrderByDescending(s => s.Timestamp).First())
-            .OrderByDescending(s => s.SetupScore)
-            .Take(limit)
-            .ToListAsync();
-
-        var instruments = await _db.Instruments
-            .Where(i => i.IsActive)
-            .ToDictionaryAsync(i => i.InstrumentKey);
+        var snapshots = await _scanService.GetTopAsync(minScore, limit);
+        var instrumentList = await _instrumentService.GetActiveAsync();
+        var instDict = instrumentList.ToDictionary(i => i.InstrumentKey);
 
         return snapshots.Select(s =>
         {
-            instruments.TryGetValue(s.InstrumentKey, out var inst);
+            instDict.TryGetValue(s.InstrumentKey, out var inst);
             return new ScanResult
             {
                 InstrumentKey = s.InstrumentKey,
@@ -138,8 +129,7 @@ public class MarketScannerService
             CreatedAt = DateTime.UtcNow
         };
 
-        await _db.ScanSnapshots.AddAsync(snapshot);
-        await _db.SaveChangesAsync();
+        await _scanService.SaveAsync(snapshot);
     }
 
     private static IndicatorValues MapToIndicatorValues(IndicatorSnapshot s) => new()

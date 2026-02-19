@@ -2,20 +2,20 @@ using Microsoft.EntityFrameworkCore;
 using TradingSystem.Core.Models;
 using TradingSystem.Indicators;
 
-namespace TradingSystem.Data.Repositories;
+namespace TradingSystem.Data.Services;
 
-public class IndicatorRepository : IIndicatorRepository
+public class IndicatorService : IIndicatorService
 {
-    private readonly TradingDbContext _context;
+    private readonly TradingDbContext _db;
 
-    public IndicatorRepository(TradingDbContext context)
+    public IndicatorService(TradingDbContext db)
     {
-        _context = context;
+        _db = db;
     }
 
     public async Task SaveAsync(string instrumentKey, int timeframeMinutes, IndicatorValues indicators)
     {
-        var snapshot = new IndicatorSnapshot
+        await _db.IndicatorSnapshots.AddAsync(new IndicatorSnapshot
         {
             InstrumentKey = instrumentKey,
             TimeframeMinutes = timeframeMinutes,
@@ -35,19 +35,21 @@ public class IndicatorRepository : IIndicatorRepository
             BollingerLower = indicators.BollingerLower,
             VWAP = indicators.VWAP,
             CreatedAt = DateTime.UtcNow
-        };
-
-        await _context.IndicatorSnapshots.AddAsync(snapshot);
-        await _context.SaveChangesAsync();
+        });
+        await _db.SaveChangesAsync();
     }
 
+    public async Task<IndicatorSnapshot?> GetLatestAsync(string instrumentKey, int timeframeMinutes)
+        => await _db.IndicatorSnapshots
+            .Where(s => s.InstrumentKey == instrumentKey && s.TimeframeMinutes == timeframeMinutes)
+            .OrderByDescending(s => s.Timestamp)
+            .FirstOrDefaultAsync();
+
     public async Task<List<IndicatorSnapshot>> GetRecentAsync(string instrumentKey, int timeframeMinutes, int count)
-    {
-        return await _context.IndicatorSnapshots
+        => await _db.IndicatorSnapshots
             .Where(s => s.InstrumentKey == instrumentKey && s.TimeframeMinutes == timeframeMinutes)
             .OrderByDescending(s => s.Timestamp)
             .Take(count)
             .OrderBy(s => s.Timestamp)
             .ToListAsync();
-    }
 }
