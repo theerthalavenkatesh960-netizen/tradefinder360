@@ -10,7 +10,7 @@ namespace TradingSystem.WorkerService.Scheduling
             {
                 new JobSchedule(
                     typeof(InstrumentSyncJob),
-                    "0 0/2 * * * ?",          // 6:30 AM IST
+                    "0 0 0 1 1 ?",          // 6:30 AM IST
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 ),
 
