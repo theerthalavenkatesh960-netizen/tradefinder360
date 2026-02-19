@@ -1,7 +1,7 @@
 using TradingSystem.Core.Models;
 using TradingSystem.Indicators;
 
-namespace TradingSystem.Data.Services;
+namespace TradingSystem.Data.Services.Interfaces;
 
 public interface IIndicatorService
 {

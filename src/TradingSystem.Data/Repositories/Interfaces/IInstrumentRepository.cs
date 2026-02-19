@@ -1,6 +1,6 @@
 using TradingSystem.Core.Models;
 
-namespace TradingSystem.Data.Repositories;
+namespace TradingSystem.Data.Repositories.Interfaces;
 
 public interface IInstrumentRepository : ICommonRepository<TradingInstrument>
 {

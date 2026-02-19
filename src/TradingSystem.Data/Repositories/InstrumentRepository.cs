@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TradingSystem.Core.Models;
+using TradingSystem.Data.Repositories.Interfaces;
 
 namespace TradingSystem.Data.Repositories;
 

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using System.Linq.Expressions;
+using TradingSystem.Data.Repositories.Interfaces;
 
 namespace TradingSystem.Data.Repositories;
 

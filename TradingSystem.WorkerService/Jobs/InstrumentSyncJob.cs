@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Quartz;
-using TradingSystem.Data.Repositories;
+using TradingSystem.Data.Repositories.Interfaces;
 using TradingSystem.Upstox.Services;
 
 namespace TradingSystem.WorkerService.Jobs;

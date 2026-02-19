@@ -1,4 +1,5 @@
 using TradingSystem.Core.Models;
+using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Indicators;
 
 namespace TradingSystem.Data.Services;

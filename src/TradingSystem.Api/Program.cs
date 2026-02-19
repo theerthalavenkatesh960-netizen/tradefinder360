@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
+using TradingSystem.Data.Repositories.Interfaces;
 using TradingSystem.Data.Services;
+using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
 

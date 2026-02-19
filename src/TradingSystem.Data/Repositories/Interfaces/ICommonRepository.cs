@@ -1,6 +1,6 @@
 using System.Linq.Expressions;
 
-namespace TradingSystem.Data.Repositories;
+namespace TradingSystem.Data.Repositories.Interfaces;
 
 public interface ICommonRepository<T> where T : class
 {

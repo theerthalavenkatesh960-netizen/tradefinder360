@@ -1,5 +1,5 @@
 using TradingSystem.Core.Models;
-using TradingSystem.Data.Services;
+using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Indicators;
 using TradingSystem.Scanner.Models;
 

@@ -1,6 +1,6 @@
 using TradingSystem.Core.Models;
 
-namespace TradingSystem.Data.Services;
+namespace TradingSystem.Data.Services.Interfaces;
 
 public interface ICandleService
 {

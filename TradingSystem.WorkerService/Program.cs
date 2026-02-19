@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Quartz;
 using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
+using TradingSystem.Data.Repositories.Interfaces;
 using TradingSystem.Upstox;
 using TradingSystem.Upstox.Models;
 using TradingSystem.Upstox.Services;
