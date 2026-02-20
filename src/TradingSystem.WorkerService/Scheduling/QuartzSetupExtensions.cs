@@ -17,12 +17,7 @@ namespace TradingSystem.WorkerService.Scheduling
             {
                 q.UsePersistentStore(store =>
                 {
-                    store.UsePostgres(pg =>
-                    {
-                        pg.ConnectionString = configuration.GetConnectionString("QuartzDb")!;
-                        pg.TablePrefix = string.Empty;
-                    });
-
+                    store.UsePostgres(configuration.GetConnectionString("QuartzDb")!);
                     store.UseNewtonsoftJsonSerializer();
                 });
 
