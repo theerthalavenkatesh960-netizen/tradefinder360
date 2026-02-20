@@ -1,4 +1,5 @@
 Symbol,Name,Exchange,instrument_key,industry,sector
+DATAPATTNS,Data Patterns (India) Limited,2,BSE_EQ|INE0IX101010,Aerospace & Defense,Aerospace & Defense
 ABB,ABB India Limited,2,BSE_EQ|INE117A01022,Heavy Electrical Equipment,Electrical Equipment
 AEGISLOG,Aegis Logistics Ltd.,2,BSE_EQ|INE208C01025,Trading - Gas,Gas
 ARE&M,Amara Raja Energy & Mobility Limited,2,BSE_EQ|INE885A01032,Auto Components & Equipments,Auto Components
@@ -3859,7 +3860,6 @@ JETFREIGHT,Jet Freight Logistics Limited,2,BSE_EQ|INE982V01025,Logistics Solutio
 MAPMYINDIA,C.E. Info Systems Limited,2,BSE_EQ|INE0BV301023,Software Products,IT - Software
 METROBRAND,Metro Brands Limited,2,BSE_EQ|INE317I01021,Footwear,Consumer Durables
 MEDPLUS,Medplus Health Services Limited,2,BSE_EQ|INE804L01022,Pharmacy Retail,Retailing
-DATAPATTNS,Data Patterns (India) Limited,2,BSE_EQ|INE0IX101010,Aerospace & Defense,Aerospace & Defense
 HPAL,HP Adhesives Limited,2,BSE_EQ|INE0GSL01024,Specialty Chemicals,Chemicals & Petrochemicals
 SUPRIYA,Supriya Lifescience Limited,2,BSE_EQ|INE07RO01027,Pharmaceuticals,Pharmaceuticals & Biotechnology
 CLARA,CLARA INDUSTRIES LIMITED,2,BSE_EQ|INE0JJS01014,Packaging,Industrial Products

@@ -16,7 +16,7 @@ namespace TradingSystem.WorkerService.Scheduling
 
                  new JobSchedule(
                      typeof(DailyPriceUpdateJob),
-                     "0 */10 * * * ?",        // Every 10 minutes
+                     "0 */10 * 1 * ?",        // Every 10 minutes
                      TimeZoneInfo.Utc
                  )
             };
