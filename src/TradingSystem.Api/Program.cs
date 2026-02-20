@@ -61,16 +61,21 @@ builder.Services.AddScoped<UpstoxClient>(sp =>
 {
     var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
     var config = sp.GetRequiredService<UpstoxConfig>();
-    var tokenProvider = sp.GetRequiredService<TradingSystem.Upstox.Services.IUpstoxTokenProvider>();
 
     var httpClient = httpClientFactory.CreateClient();
     var client = new UpstoxClient(httpClient, config);
 
-    var token = tokenProvider.GetAccessTokenAsync().GetAwaiter().GetResult();
-
-    if (!string.IsNullOrWhiteSpace(token))
+    try
     {
-        client.SetAccessToken(token);
+        var tokenProvider = sp.GetRequiredService<TradingSystem.Upstox.Services.IUpstoxTokenProvider>();
+        var token = tokenProvider.GetAccessTokenAsync().GetAwaiter().GetResult();
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            client.SetAccessToken(token);
+        }
+    }
+    catch
+    {
     }
 
     return client;
@@ -82,10 +87,16 @@ builder.Services.AddScoped<TradeRecommendationService>();
 
 var app = builder.Build();
 
+app.UseExceptionHandler("/error");
 app.UseSwagger();
-app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Trading System API v1"));
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Trading System API v1");
+    c.RoutePrefix = string.Empty;
+});
 
 app.UseCors();
 app.MapControllers();
+app.Map("/error", (HttpContext ctx) => Results.Problem());
 
 app.Run();

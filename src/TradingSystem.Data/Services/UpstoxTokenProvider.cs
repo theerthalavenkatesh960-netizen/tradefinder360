@@ -14,11 +14,18 @@ public class UpstoxTokenProvider : IUpstoxTokenProvider
 
     public async Task<string?> GetAccessTokenAsync()
     {
-        var profile = await _context.UserProfiles
-            .Where(x => x.UserId == "default_user")
-            .Select(x => x.UpstoxAccessToken)
-            .FirstOrDefaultAsync();
+        try
+        {
+            var profile = await _context.UserProfiles
+                .Where(x => x.UserId == "default_user")
+                .Select(x => x.UpstoxAccessToken)
+                .FirstOrDefaultAsync();
 
-        return profile;
+            return profile;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
