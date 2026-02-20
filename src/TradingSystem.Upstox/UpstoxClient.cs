@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using TradingSystem.Core.Models;
@@ -19,8 +20,27 @@ public class UpstoxClient
         _rateLimiter = new SemaphoreSlim(_config.RateLimitPerSecond);
 
         _httpClient.BaseAddress = new Uri(_config.BaseUrl);
-        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_config.AccessToken}");
-        _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+
+        _httpClient.DefaultRequestHeaders.Accept.Clear();
+        _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+    }
+
+    public void SetAccessToken(string accessToken)
+    {
+        _httpClient.DefaultRequestHeaders.Remove("Authorization");
+        if (!string.IsNullOrWhiteSpace(accessToken))
+        {
+            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
+        }
+    }
+
+    public async Task InitializeWithStoredTokenAsync(Func<Task<string?>> getTokenFunc)
+    {
+        var token = await getTokenFunc();
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            SetAccessToken(token);
+        }
     }
 
     private async Task WaitForRateLimit()
@@ -117,6 +137,78 @@ public class UpstoxClient
         {
             return new List<UpstoxInstrumentData>();
         }
+    }
+
+    // public async Task<TokenResponse> FetchTokenFromUpstoxAsync(string code)
+    // {
+    //     if (string.IsNullOrWhiteSpace(code))
+    //         throw new Exception("Upstox authorization code not available. Login first.");
+
+    //     var form = new Dictionary<string, string>
+    //     {
+    //         {"code", code},
+    //         {"client_id", _config.ClientId},
+    //         {"client_secret", _config.ClientSecret},
+    //         {"redirect_uri", _config.RedirectUri},
+    //         {"grant_type", "authorization_code"}
+    //     };
+
+    //     var response = await _httpClient.PostAsync("login/authorization/token", new FormUrlEncodedContent(form));
+
+    //     //response.EnsureSuccessStatusCode();
+    //     if (!response.IsSuccessStatusCode)
+    //     {
+    //         var error = await response.Content.ReadAsStringAsync();
+    //         throw new Exception($"Status: {response.StatusCode} - {error}");
+    //     }
+    //     var tokenResponse = await response.Content.ReadFromJsonAsync<TokenResponse>();
+
+    //     if (tokenResponse == null || string.IsNullOrWhiteSpace(tokenResponse.AccessToken))
+    //         throw new Exception("Failed to fetch Upstox token");
+
+    //     SetAccessToken(tokenResponse.AccessToken);
+
+    //     return tokenResponse;
+    // }
+
+    public async Task<TokenResponse> FetchTokenFromUpstoxAsync(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            throw new Exception("Upstox authorization code not available. Login first.");
+
+        var form = new Dictionary<string, string>
+        {
+            {"code", code},
+            {"client_id", _config.ClientId},
+            {"client_secret", _config.ClientSecret},
+            {"redirect_uri", _config.RedirectUri},
+            {"grant_type", "authorization_code"}
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "login/authorization/token") { Content = new FormUrlEncodedContent(form) };
+
+        var response = await _httpClient.SendAsync(request);
+
+        var responseContent = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception(
+                $"Upstox Token API Failed.\n" +
+                $"Status: {(int)response.StatusCode} {response.StatusCode}\n" +
+                $"Response: {responseContent}");
+        }
+
+        var tokenResponse = JsonSerializer.Deserialize<TokenResponse>(
+            responseContent,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        if (tokenResponse == null || string.IsNullOrWhiteSpace(tokenResponse.AccessToken))
+            throw new Exception($"Upstox returned invalid token response: {responseContent}");
+
+        SetAccessToken(tokenResponse.AccessToken);
+
+        return tokenResponse;
     }
 
     private List<Candle> ParseCandles(List<List<object>> candleData, string interval)

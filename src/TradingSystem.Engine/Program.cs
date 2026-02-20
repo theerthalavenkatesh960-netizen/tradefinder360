@@ -8,6 +8,7 @@ using TradingSystem.Data;
 using TradingSystem.Data.Services;
 using TradingSystem.Upstox;
 using TradingSystem.Engine;
+using TradingSystem.Data.Services.Interfaces;
 
 Console.WriteLine("=== MULTI-ASSET TRADING SYSTEM ===");
 Console.WriteLine("Professional Algorithmic Trading Platform");

@@ -21,6 +21,7 @@
     <ProjectReference Include="..\TradingSystem.Core\TradingSystem.Core.csproj" />
     <ProjectReference Include="..\TradingSystem.Configuration\TradingSystem.Configuration.csproj" />
     <ProjectReference Include="..\TradingSystem.Indicators\TradingSystem.Indicators.csproj" />
+    <ProjectReference Include="..\TradingSystem.Upstox\TradingSystem.Upstox.csproj" />
   </ItemGroup>
 
 </Project>

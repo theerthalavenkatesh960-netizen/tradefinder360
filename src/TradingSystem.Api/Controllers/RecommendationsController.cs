@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
-using TradingSystem.Data.Services;
+using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 
 namespace TradingSystem.Api.Controllers;

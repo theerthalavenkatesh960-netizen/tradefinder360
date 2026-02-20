@@ -1,6 +1,6 @@
 using TradingSystem.Core.Models;
 
-namespace TradingSystem.Data.Services;
+namespace TradingSystem.Data.Services.Interfaces;
 
 public interface IInstrumentService
 {
@@ -9,4 +9,5 @@ public interface IInstrumentService
     Task<Dictionary<string, string>> GetKeyToSymbolMapAsync();
     Task AddAsync(TradingInstrument instrument);
     Task UpdateAsync(TradingInstrument instrument);
+    Task<List<Sector>> GetSectorsAsync();
 }

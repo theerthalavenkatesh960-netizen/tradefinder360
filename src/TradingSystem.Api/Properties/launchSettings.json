@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "TradingSystem.Api": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:61577;http://localhost:61578"
+    }
+  }
+}
