@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
+using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
@@ -174,5 +175,13 @@ public class InstrumentController : ControllerBase
             Timestamp = recommendation.Timestamp,
             ExpiresAt = recommendation.ExpiresAt
         });
+    }
+    
+
+    [HttpPost("sectors")]
+    public async Task<ActionResult<List<Sector>>> GetSectors()
+    {
+        var sectors = await _instrumentService.GetSectorsAsync();
+        return Ok(sectors);
     }
 }

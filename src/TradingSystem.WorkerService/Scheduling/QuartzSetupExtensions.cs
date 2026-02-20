@@ -20,9 +20,11 @@ namespace TradingSystem.WorkerService.Scheduling
                     store.UsePostgres(pg =>
                     {
                         pg.ConnectionString = configuration.GetConnectionString("QuartzDb")!;
-                        pg.TablePrefix = "QRTZ_";
+                        pg.TablePrefix = "scheduler.QRTZ_";
                     });
                     store.UseNewtonsoftJsonSerializer();
+
+                    //store.PerformSchemaValidation = false;
                 });
 
 

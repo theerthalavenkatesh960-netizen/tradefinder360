@@ -1,5 +1,6 @@
 Symbol,Name,Exchange,instrument_key,industry,sector
 DATAPATTNS,Data Patterns (India) Limited,2,BSE_EQ|INE0IX101010,Aerospace & Defense,Aerospace & Defense
+DATAPATTNS,Data Patterns (India) Limited,1,NSE_EQ|INE0IX101010,Aerospace & Defense,Aerospace & Defense
 ABB,ABB India Limited,2,BSE_EQ|INE117A01022,Heavy Electrical Equipment,Electrical Equipment
 AEGISLOG,Aegis Logistics Ltd.,2,BSE_EQ|INE208C01025,Trading - Gas,Gas
 ARE&M,Amara Raja Energy & Mobility Limited,2,BSE_EQ|INE885A01032,Auto Components & Equipments,Auto Components
@@ -4774,7 +4775,6 @@ DALMIASUG,Dalmia Bharat Sugar and Industries Limited,1,NSE_EQ|INE495A01022,Sugar
 DAMODARIND,Damodar Industries Limited,1,NSE_EQ|INE497D01022,Other Textile Products,Textiles & Apparels
 DANGEE,Dangee Dums Limited,1,NSE_EQ|INE688Y01022,,
 DATAMATICS,Datamatics Global Services Limited,1,NSE_EQ|INE365B01017,IT Enabled Services,IT - Services
-DATAPATTNS,Data Patterns (India) Limited,1,NSE_EQ|INE0IX101010,Aerospace & Defense,Aerospace & Defense
 DAVANGERE,Davangere Sugar Company Limited,1,NSE_EQ|INE179G01029,Sugar,Agricultural Food & other Products
 DBCORP,D.B.Corp Limited,1,NSE_EQ|INE950I01011,Print Media,Media
 DBL,Dilip Buildcon Limited,1,NSE_EQ|INE917M01012,Civil Construction,Construction

@@ -23,5 +23,6 @@ namespace TradingSystem.Api.Controllers
 
             return Ok("Authorization code stored successfully.");
         }
+
     }
 }

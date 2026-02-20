@@ -74,6 +74,7 @@ public class CsvSeedService
                 {
                     dbSector.Description = s.Description;
                     dbSector.Code = s.Code;
+                    dbSector.UpdatedAt = DateTime.UtcNow;
                     toUpdate.Add(dbSector);
                 }
                 else
@@ -83,7 +84,9 @@ public class CsvSeedService
                         Name = s.Name,
                         Code = s.Code,
                         Description = s.Description,
-                        IsActive = true
+                        IsActive = true,
+                        UpdatedAt = DateTime.UtcNow,
+                        CreatedAt = DateTime.UtcNow
                     });
                 }
             }
@@ -168,7 +171,7 @@ public class CsvSeedService
                 .Where(x => x != null)
                 .GroupBy(x => x!.InstrumentKey, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First()!)
-                .ToList().Take(1).ToList();
+                .ToList().Take(2).ToList();
 
             _logger.LogInformation("Parsed {Count} unique instruments from CSV", csvInstruments.Count);
 
@@ -191,6 +194,7 @@ public class CsvSeedService
                     dbInstrument.SectorId = i.SectorId;
                     dbInstrument.Industry = i.Industry;
                     dbInstrument.ISIN = i.ISIN;
+                    dbInstrument.UpdatedAt = DateTime.UtcNow;
                     toUpdate.Add(dbInstrument);
                 }
                 else
@@ -209,7 +213,9 @@ public class CsvSeedService
                         TickSize = 0.05m,
                         IsDerivativesEnabled = false,
                         DefaultTradingMode = TradingMode.EQUITY,
-                        IsActive = true
+                        IsActive = true,
+                        UpdatedAt = DateTime.UtcNow,
+                        CreatedAt = DateTime.UtcNow
                     });
                 }
             }
