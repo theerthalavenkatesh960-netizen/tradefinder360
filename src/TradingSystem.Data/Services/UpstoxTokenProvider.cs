@@ -23,8 +23,8 @@ public class UpstoxTokenProvider : IUpstoxTokenProvider
 
             return profile;
         }
-        catch
-        {
+        catch (Exception ex)
+        {                           
             return null;
         }
     }
