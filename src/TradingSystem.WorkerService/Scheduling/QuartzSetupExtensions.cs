@@ -17,9 +17,14 @@ namespace TradingSystem.WorkerService.Scheduling
             {
                 q.UsePersistentStore(store =>
                 {
-                    store.UsePostgres(configuration.GetConnectionString("QuartzDb")!);
+                    store.UsePostgres(pg =>
+                    {
+                        pg.ConnectionString = configuration.GetConnectionString("QuartzDb")!;
+                        pg.TablePrefix = "QRTZ_";
+                    });
                     store.UseNewtonsoftJsonSerializer();
                 });
+
 
                 var schedules = QuartzJobRegistry.GetSchedules();
 
