@@ -1,186 +1,189 @@
--- Set the schema
+------------------------------------------------------------
+-- CREATE SCHEMA
+------------------------------------------------------------
 CREATE SCHEMA IF NOT EXISTS scheduler;
 SET search_path TO scheduler;
-
--- Drop existing Quartz tables if needed
+------------------------------------------------------------
+-- OPTIONAL REFRESH BLOCK
+-- Set DropDb = 1 to DROP existing Quartz tables
+------------------------------------------------------------
 DO $$
-  DECLARE DropDb INT := 0; -- Set 0 to skip DROP statements
+DECLARE DropDb INT := 1; -- Change to 0 in production
 BEGIN
   IF DropDb = 1 THEN
     SET client_min_messages = WARNING;
-    DROP TABLE IF EXISTS fired_triggers CASCADE;
-    DROP TABLE IF EXISTS paused_trigger_grps CASCADE;
-    DROP TABLE IF EXISTS scheduler_state CASCADE;
-    DROP TABLE IF EXISTS locks CASCADE;
-    DROP TABLE IF EXISTS simprop_triggers CASCADE;
-    DROP TABLE IF EXISTS simple_triggers CASCADE;
-    DROP TABLE IF EXISTS cron_triggers CASCADE;
-    DROP TABLE IF EXISTS blob_triggers CASCADE;
-    DROP TABLE IF EXISTS triggers CASCADE;
-    DROP TABLE IF EXISTS job_details CASCADE;
-    DROP TABLE IF EXISTS calendars CASCADE;
+
+    DROP TABLE IF EXISTS scheduler.QRTZ_FIRED_TRIGGERS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_PAUSED_TRIGGER_GRPS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_SCHEDULER_STATE CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_LOCKS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_SIMPROP_TRIGGERS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_SIMPLE_TRIGGERS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_CRON_TRIGGERS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_BLOB_TRIGGERS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_TRIGGERS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_JOB_DETAILS CASCADE;
+    DROP TABLE IF EXISTS scheduler.QRTZ_CALENDARS CASCADE;
+
     SET client_min_messages = NOTICE;
   END IF;
 END $$;
 
-CREATE TABLE scheduler.job_details
-(
-    sched_name TEXT NOT NULL,
-    job_name TEXT NOT NULL,
-    job_group TEXT NOT NULL,
-    description TEXT NULL,
-    job_class_name TEXT NOT NULL,
-    is_durable BOOL NOT NULL,
-    is_nonconcurrent BOOL NOT NULL,
-    is_update_data BOOL NOT NULL,
-    requests_recovery BOOL NOT NULL,
-    job_data BYTEA NULL,
-    PRIMARY KEY (sched_name, job_name, job_group)
+------------------------------------------------------------
+-- TABLES
+------------------------------------------------------------
+
+CREATE TABLE scheduler.QRTZ_JOB_DETAILS (
+    SCHED_NAME TEXT NOT NULL,
+    JOB_NAME TEXT NOT NULL,
+    JOB_GROUP TEXT NOT NULL,
+    DESCRIPTION TEXT NULL,
+    JOB_CLASS_NAME TEXT NOT NULL,
+    IS_DURABLE BOOL NOT NULL,
+    IS_NONCONCURRENT BOOL NOT NULL,
+    IS_UPDATE_DATA BOOL NOT NULL,
+    REQUESTS_RECOVERY BOOL NOT NULL,
+    JOB_DATA BYTEA NULL,
+    PRIMARY KEY (SCHED_NAME, JOB_NAME, JOB_GROUP)
 );
 
-CREATE TABLE scheduler.triggers
-(
-    sched_name TEXT NOT NULL,
-    trigger_name TEXT NOT NULL,
-    trigger_group TEXT NOT NULL,
-    job_name TEXT NOT NULL,
-    job_group TEXT NOT NULL,
-    description TEXT NULL,
-    next_fire_time BIGINT NULL,
-    prev_fire_time BIGINT NULL,
-    priority INTEGER NULL,
-    trigger_state TEXT NOT NULL,
-    trigger_type TEXT NOT NULL,
-    start_time BIGINT NOT NULL,
-    end_time BIGINT NULL,
-    calendar_name TEXT NULL,
-    misfire_instr SMALLINT NULL,
-    job_data BYTEA NULL,
-    PRIMARY KEY (sched_name, trigger_name, trigger_group),
-    FOREIGN KEY (sched_name, job_name, job_group)
-        REFERENCES scheduler.job_details (sched_name, job_name, job_group)
+CREATE TABLE scheduler.QRTZ_TRIGGERS (
+    SCHED_NAME TEXT NOT NULL,
+    TRIGGER_NAME TEXT NOT NULL,
+    TRIGGER_GROUP TEXT NOT NULL,
+    JOB_NAME TEXT NOT NULL,
+    JOB_GROUP TEXT NOT NULL,
+    DESCRIPTION TEXT NULL,
+    NEXT_FIRE_TIME BIGINT NULL,
+    PREV_FIRE_TIME BIGINT NULL,
+    PRIORITY INTEGER NULL,
+    TRIGGER_STATE TEXT NOT NULL,
+    TRIGGER_TYPE TEXT NOT NULL,
+    START_TIME BIGINT NOT NULL,
+    END_TIME BIGINT NULL,
+    CALENDAR_NAME TEXT NULL,
+    MISFIRE_INSTR SMALLINT NULL,
+    JOB_DATA BYTEA NULL,
+    PRIMARY KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP),
+    FOREIGN KEY (SCHED_NAME, JOB_NAME, JOB_GROUP)
+        REFERENCES scheduler.QRTZ_JOB_DETAILS (SCHED_NAME, JOB_NAME, JOB_GROUP)
 );
 
-CREATE TABLE scheduler.simple_triggers
-(
-    sched_name TEXT NOT NULL,
-    trigger_name TEXT NOT NULL,
-    trigger_group TEXT NOT NULL,
-    repeat_count BIGINT NOT NULL,
-    repeat_interval BIGINT NOT NULL,
-    times_triggered BIGINT NOT NULL,
-    PRIMARY KEY (sched_name, trigger_name, trigger_group),
-    FOREIGN KEY (sched_name, trigger_name, trigger_group)
-        REFERENCES scheduler.triggers (sched_name, trigger_name, trigger_group)
+CREATE TABLE scheduler.QRTZ_SIMPLE_TRIGGERS (
+    SCHED_NAME TEXT NOT NULL,
+    TRIGGER_NAME TEXT NOT NULL,
+    TRIGGER_GROUP TEXT NOT NULL,
+    REPEAT_COUNT BIGINT NOT NULL,
+    REPEAT_INTERVAL BIGINT NOT NULL,
+    TIMES_TRIGGERED BIGINT NOT NULL,
+    PRIMARY KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP),
+    FOREIGN KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP)
+        REFERENCES scheduler.QRTZ_TRIGGERS (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP)
         ON DELETE CASCADE
 );
 
-CREATE TABLE scheduler.simprop_triggers
-(
-    sched_name TEXT NOT NULL,
-    trigger_name TEXT NOT NULL,
-    trigger_group TEXT NOT NULL,
-    str_prop_1 TEXT NULL,
-    str_prop_2 TEXT NULL,
-    str_prop_3 TEXT NULL,
-    int_prop_1 INTEGER NULL,
-    int_prop_2 INTEGER NULL,
-    long_prop_1 BIGINT NULL,
-    long_prop_2 BIGINT NULL,
-    dec_prop_1 NUMERIC NULL,
-    dec_prop_2 NUMERIC NULL,
-    bool_prop_1 BOOL NULL,
-    bool_prop_2 BOOL NULL,
-    time_zone_id TEXT NULL,
-    PRIMARY KEY (sched_name, trigger_name, trigger_group),
-    FOREIGN KEY (sched_name, trigger_name, trigger_group)
-        REFERENCES scheduler.triggers (sched_name, trigger_name, trigger_group)
+CREATE TABLE scheduler.QRTZ_CRON_TRIGGERS (
+    SCHED_NAME TEXT NOT NULL,
+    TRIGGER_NAME TEXT NOT NULL,
+    TRIGGER_GROUP TEXT NOT NULL,
+    CRON_EXPRESSION TEXT NOT NULL,
+    TIME_ZONE_ID TEXT,
+    PRIMARY KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP),
+    FOREIGN KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP)
+        REFERENCES scheduler.QRTZ_TRIGGERS (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP)
         ON DELETE CASCADE
 );
 
-CREATE TABLE scheduler.cron_triggers
-(
-    sched_name TEXT NOT NULL,
-    trigger_name TEXT NOT NULL,
-    trigger_group TEXT NOT NULL,
-    cron_expression TEXT NOT NULL,
-    time_zone_id TEXT,
-    PRIMARY KEY (sched_name, trigger_name, trigger_group),
-    FOREIGN KEY (sched_name, trigger_name, trigger_group)
-        REFERENCES scheduler.triggers (sched_name, trigger_name, trigger_group)
+CREATE TABLE scheduler.QRTZ_SIMPROP_TRIGGERS (
+    SCHED_NAME TEXT NOT NULL,
+    TRIGGER_NAME TEXT NOT NULL,
+    TRIGGER_GROUP TEXT NOT NULL,
+    STR_PROP_1 TEXT NULL,
+    STR_PROP_2 TEXT NULL,
+    STR_PROP_3 TEXT NULL,
+    INT_PROP_1 INTEGER NULL,
+    INT_PROP_2 INTEGER NULL,
+    LONG_PROP_1 BIGINT NULL,
+    LONG_PROP_2 BIGINT NULL,
+    DEC_PROP_1 NUMERIC NULL,
+    DEC_PROP_2 NUMERIC NULL,
+    BOOL_PROP_1 BOOL NULL,
+    BOOL_PROP_2 BOOL NULL,
+    TIME_ZONE_ID TEXT NULL,
+    PRIMARY KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP),
+    FOREIGN KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP)
+        REFERENCES scheduler.QRTZ_TRIGGERS (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP)
         ON DELETE CASCADE
 );
 
-CREATE TABLE scheduler.blob_triggers
-(
-    sched_name TEXT NOT NULL,
-    trigger_name TEXT NOT NULL,
-    trigger_group TEXT NOT NULL,
-    blob_data BYTEA NULL,
-    PRIMARY KEY (sched_name, trigger_name, trigger_group),
-    FOREIGN KEY (sched_name, trigger_name, trigger_group)
-        REFERENCES scheduler.triggers (sched_name, trigger_name, trigger_group)
+CREATE TABLE scheduler.QRTZ_BLOB_TRIGGERS (
+    SCHED_NAME TEXT NOT NULL,
+    TRIGGER_NAME TEXT NOT NULL,
+    TRIGGER_GROUP TEXT NOT NULL,
+    BLOB_DATA BYTEA NULL,
+    PRIMARY KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP),
+    FOREIGN KEY (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP)
+        REFERENCES scheduler.QRTZ_TRIGGERS (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP)
         ON DELETE CASCADE
 );
 
-CREATE TABLE scheduler.calendars
-(
-    sched_name TEXT NOT NULL,
-    calendar_name TEXT NOT NULL,
-    calendar BYTEA NOT NULL,
-    PRIMARY KEY (sched_name, calendar_name)
+CREATE TABLE scheduler.QRTZ_CALENDARS (
+    SCHED_NAME TEXT NOT NULL,
+    CALENDAR_NAME TEXT NOT NULL,
+    CALENDAR BYTEA NOT NULL,
+    PRIMARY KEY (SCHED_NAME, CALENDAR_NAME)
 );
 
-CREATE TABLE scheduler.paused_trigger_grps
-(
-    sched_name TEXT NOT NULL,
-    trigger_group TEXT NOT NULL,
-    PRIMARY KEY (sched_name, trigger_group)
+CREATE TABLE scheduler.QRTZ_PAUSED_TRIGGER_GRPS (
+    SCHED_NAME TEXT NOT NULL,
+    TRIGGER_GROUP TEXT NOT NULL,
+    PRIMARY KEY (SCHED_NAME, TRIGGER_GROUP)
 );
 
-CREATE TABLE scheduler.fired_triggers
-(
-    sched_name TEXT NOT NULL,
-    entry_id TEXT NOT NULL,
-    trigger_name TEXT NOT NULL,
-    trigger_group TEXT NOT NULL,
-    instance_name TEXT NOT NULL,
-    fired_time BIGINT NOT NULL,
-    sched_time BIGINT NOT NULL,
-    priority INTEGER NOT NULL,
-    state TEXT NOT NULL,
-    job_name TEXT NULL,
-    job_group TEXT NULL,
-    is_nonconcurrent BOOL NOT NULL,
-    requests_recovery BOOL NULL,
-    PRIMARY KEY (sched_name, entry_id)
+CREATE TABLE scheduler.QRTZ_FIRED_TRIGGERS (
+    SCHED_NAME TEXT NOT NULL,
+    ENTRY_ID TEXT NOT NULL,
+    TRIGGER_NAME TEXT NOT NULL,
+    TRIGGER_GROUP TEXT NOT NULL,
+    INSTANCE_NAME TEXT NOT NULL,
+    FIRED_TIME BIGINT NOT NULL,
+    SCHED_TIME BIGINT NOT NULL,
+    PRIORITY INTEGER NOT NULL,
+    STATE TEXT NOT NULL,
+    JOB_NAME TEXT NULL,
+    JOB_GROUP TEXT NULL,
+    IS_NONCONCURRENT BOOL NOT NULL,
+    REQUESTS_RECOVERY BOOL NULL,
+    PRIMARY KEY (SCHED_NAME, ENTRY_ID)
 );
 
-CREATE TABLE scheduler.scheduler_state
-(
-    sched_name TEXT NOT NULL,
-    instance_name TEXT NOT NULL,
-    last_checkin_time BIGINT NOT NULL,
-    checkin_interval BIGINT NOT NULL,
-    PRIMARY KEY (sched_name, instance_name)
+CREATE TABLE scheduler.QRTZ_SCHEDULER_STATE (
+    SCHED_NAME TEXT NOT NULL,
+    INSTANCE_NAME TEXT NOT NULL,
+    LAST_CHECKIN_TIME BIGINT NOT NULL,
+    CHECKIN_INTERVAL BIGINT NOT NULL,
+    PRIMARY KEY (SCHED_NAME, INSTANCE_NAME)
 );
 
-CREATE TABLE scheduler.locks
-(
-    sched_name TEXT NOT NULL,
-    lock_name TEXT NOT NULL,
-    PRIMARY KEY (sched_name, lock_name)
+CREATE TABLE scheduler.QRTZ_LOCKS (
+    SCHED_NAME TEXT NOT NULL,
+    LOCK_NAME TEXT NOT NULL,
+    PRIMARY KEY (SCHED_NAME, LOCK_NAME)
 );
 
--- Indexes
-CREATE INDEX idx_j_req_recovery ON scheduler.job_details (requests_recovery);
-CREATE INDEX idx_t_next_fire_time ON scheduler.triggers (next_fire_time);
-CREATE INDEX idx_t_state ON scheduler.triggers (trigger_state);
-CREATE INDEX idx_t_nft_st ON scheduler.triggers (next_fire_time, trigger_state);
-CREATE INDEX idx_ft_trig_name ON scheduler.fired_triggers (trigger_name);
-CREATE INDEX idx_ft_trig_group ON scheduler.fired_triggers (trigger_group);
-CREATE INDEX idx_ft_trig_nm_gp ON scheduler.fired_triggers (sched_name, trigger_name, trigger_group);
-CREATE INDEX idx_ft_trig_inst_name ON scheduler.fired_triggers (instance_name);
-CREATE INDEX idx_ft_job_name ON scheduler.fired_triggers (job_name);
-CREATE INDEX idx_ft_job_group ON scheduler.fired_triggers (job_group);
-CREATE INDEX idx_ft_job_req_recovery ON scheduler.fired_triggers (requests_recovery);
+------------------------------------------------------------
+-- INDEXES
+------------------------------------------------------------
+
+CREATE INDEX idx_j_req_recovery ON scheduler.QRTZ_JOB_DETAILS (REQUESTS_RECOVERY);
+CREATE INDEX idx_t_next_fire_time ON scheduler.QRTZ_TRIGGERS (NEXT_FIRE_TIME);
+CREATE INDEX idx_t_state ON scheduler.QRTZ_TRIGGERS (TRIGGER_STATE);
+CREATE INDEX idx_t_nft_st ON scheduler.QRTZ_TRIGGERS (NEXT_FIRE_TIME, TRIGGER_STATE);
+
+CREATE INDEX idx_ft_trig_name ON scheduler.QRTZ_FIRED_TRIGGERS (TRIGGER_NAME);
+CREATE INDEX idx_ft_trig_group ON scheduler.QRTZ_FIRED_TRIGGERS (TRIGGER_GROUP);
+CREATE INDEX idx_ft_trig_nm_gp ON scheduler.QRTZ_FIRED_TRIGGERS (SCHED_NAME, TRIGGER_NAME, TRIGGER_GROUP);
+CREATE INDEX idx_ft_trig_inst_name ON scheduler.QRTZ_FIRED_TRIGGERS (INSTANCE_NAME);
+CREATE INDEX idx_ft_job_name ON scheduler.QRTZ_FIRED_TRIGGERS (JOB_NAME);
+CREATE INDEX idx_ft_job_group ON scheduler.QRTZ_FIRED_TRIGGERS (JOB_GROUP);
+CREATE INDEX idx_ft_job_req_recovery ON scheduler.QRTZ_FIRED_TRIGGERS (REQUESTS_RECOVERY);
