@@ -15,6 +15,17 @@ namespace TradingSystem.WorkerService.Scheduling
 
             services.AddQuartz(q =>
             {
+                q.UsePersistentStore(store =>
+                {
+                    store.UsePostgres(pg =>
+                    {
+                        pg.ConnectionString = configuration.GetConnectionString("QuartzDb")!;
+                        pg.TablePrefix = string.Empty;
+                    });
+
+                    store.UseNewtonsoftJsonSerializer();
+                });
+
                 var schedules = QuartzJobRegistry.GetSchedules();
 
                 foreach (var schedule in schedules)
@@ -51,17 +62,6 @@ namespace TradingSystem.WorkerService.Scheduling
                         .StartNow()
                         .WithSimpleSchedule(x => x.WithRepeatCount(0)));
                 }
-
-                q.UsePersistentStore(store =>
-                {
-                    store.UsePostgres(pg =>
-                    {
-                        pg.ConnectionString = configuration.GetConnectionString("QuartzDb")!;
-                        pg.TablePrefix = string.Empty;
-                    });
-
-                    store.UseNewtonsoftJsonSerializer();
-                });
             });
 
             services.AddQuartzHostedService(options =>
