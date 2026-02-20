@@ -50,11 +50,11 @@ public class TradingDbContext : DbContext
             e.Property(x => x.Industry).HasColumnName("industry");
             e.Property(x => x.MarketCap).HasColumnName("market_cap").HasPrecision(18, 2);
             e.Property(x => x.ISIN).HasColumnName("isin");
-            e.Property(x => x.InstrumentType).HasColumnName("instrument_type").IsRequired();
+            e.Property(x => x.InstrumentType).HasColumnName("instrument_type").HasConversion<string>().IsRequired();
             e.Property(x => x.LotSize).HasColumnName("lot_size");
             e.Property(x => x.TickSize).HasColumnName("tick_size").HasPrecision(18, 4);
             e.Property(x => x.IsDerivativesEnabled).HasColumnName("is_derivatives_enabled");
-            e.Property(x => x.DefaultTradingMode).HasColumnName("default_trading_mode");
+            e.Property(x => x.DefaultTradingMode).HasColumnName("default_trading_mode").HasConversion<string>();
             e.Property(x => x.IsActive).HasColumnName("is_active");
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");

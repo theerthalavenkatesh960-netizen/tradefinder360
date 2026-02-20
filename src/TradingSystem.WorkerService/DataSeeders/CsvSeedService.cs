@@ -55,7 +55,7 @@ public class CsvSeedService
                 .Where(x => x != null)
                 .GroupBy(x => x!.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First()!)
-                .ToList().Take(1).ToList();
+                .ToList();
 
             _logger.LogInformation("Parsed {Count} unique sectors from CSV", csvSectors.Count);
 
@@ -171,7 +171,7 @@ public class CsvSeedService
                 .Where(x => x != null)
                 .GroupBy(x => x!.InstrumentKey, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First()!)
-                .ToList().Take(2).ToList();
+                .ToList();
 
             _logger.LogInformation("Parsed {Count} unique instruments from CSV", csvInstruments.Count);
 
