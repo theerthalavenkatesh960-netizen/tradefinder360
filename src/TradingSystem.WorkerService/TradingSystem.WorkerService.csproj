@@ -12,9 +12,7 @@
 		<PackageReference Include="Microsoft.Extensions.Http" Version="10.0.1" />
 		<PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
 		<PackageReference Include="Quartz" Version="3.15.1" />
-		<PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.15.1" />
 		<PackageReference Include="Quartz.Extensions.Hosting" Version="3.15.1" />
-		<PackageReference Include="Quartz.Jobs.Postgresql" Version="3.15.1" />
 		<PackageReference Include="Quartz.Serialization.Json" Version="3.15.1" />
 	</ItemGroup>
 
@@ -22,6 +20,12 @@
 	  <ProjectReference Include="..\TradingSystem.Core\TradingSystem.Core.csproj" />
 	  <ProjectReference Include="..\TradingSystem.Data\TradingSystem.Data.csproj" />
 	  <ProjectReference Include="..\TradingSystem.Upstox\TradingSystem.Upstox.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <None Update="appsettings.json">
+	    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+	  </None>
 	</ItemGroup>
 
 </Project>

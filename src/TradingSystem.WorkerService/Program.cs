@@ -13,11 +13,16 @@ using TradingSystem.WorkerService.DataSeeders;
 using TradingSystem.WorkerService.Scheduling;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Configuration
+    .AddJsonFile("appsettings.json", optional: false)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true)
+    .AddEnvironmentVariables();
 
+var connectionString = builder.Configuration.GetConnectionString("Supabase");
 builder.Services.AddDbContextFactory<TradingDbContext>(options =>
 {
     options.UseNpgsql(
-        builder.Configuration.GetConnectionString("Supabase"),
+        connectionString,
         npgsql =>
         {
             npgsql.EnableRetryOnFailure();
