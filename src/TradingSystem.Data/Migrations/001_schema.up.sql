@@ -42,12 +42,7 @@ INSERT INTO instruments
     (instrument_key, exchange, symbol, instrument_type, lot_size, tick_size, is_derivatives_enabled, default_trading_mode)
 VALUES
     ('NSE:NIFTY',     'NSE', 'NIFTY',     'INDEX', 50, 0.05, true,  'OPTIONS'),
-    ('NSE:BANKNIFTY', 'NSE', 'BANKNIFTY', 'INDEX', 25, 0.05, true,  'OPTIONS'),
-    ('NSE:RELIANCE',  'NSE', 'RELIANCE',  'STOCK',  1, 0.05, true,  'EQUITY'),
-    ('NSE:TCS',       'NSE', 'TCS',       'STOCK',  1, 0.05, true,  'EQUITY'),
-    ('NSE:INFY',      'NSE', 'INFY',      'STOCK',  1, 0.05, true,  'EQUITY'),
-    ('NSE:HDFCBANK',  'NSE', 'HDFCBANK',  'STOCK',  1, 0.05, true,  'EQUITY'),
-    ('NSE:ICICIBANK', 'NSE', 'ICICIBANK', 'STOCK',  1, 0.05, true,  'EQUITY')
+    ('NSE:BANKNIFTY', 'NSE', 'BANKNIFTY', 'INDEX', 25, 0.05, true,  'OPTIONS')
 ON CONFLICT (instrument_key) DO NOTHING;
 
 -- ─────────────────────────────────────────────
