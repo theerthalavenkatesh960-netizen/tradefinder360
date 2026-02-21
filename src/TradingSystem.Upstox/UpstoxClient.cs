@@ -82,8 +82,9 @@ public class UpstoxClient
 
                 return ParseCandles(result.Data.Candles, interval);
             }
-            catch (HttpRequestException) when (retry < _config.MaxRetries - 1)
+            catch (HttpRequestException ex) when (retry < _config.MaxRetries - 1)
             {
+                
                 await Task.Delay(_config.RetryDelayMs * (retry + 1));
             }
         }

@@ -40,23 +40,28 @@ var upstoxConfig = new UpstoxConfig();
 builder.Configuration.GetSection("Upstox").Bind(upstoxConfig);
 builder.Services.AddSingleton(upstoxConfig);
 
-builder.Services.AddScoped<IUpstoxTokenProvider, UpstoxTokenProvider>();
+// builder.Services.AddScoped<IUpstoxTokenProvider, UpstoxTokenProvider>();
 
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<UpstoxClient>(sp =>
 {
     var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
     var config = sp.GetRequiredService<UpstoxConfig>();
-    var tokenProvider = sp.GetRequiredService<IUpstoxTokenProvider>();
 
     var httpClient = httpClientFactory.CreateClient();
     var client = new UpstoxClient(httpClient, config);
 
-    var token = tokenProvider.GetAccessTokenAsync().GetAwaiter().GetResult();
-
-    if (!string.IsNullOrWhiteSpace(token))
+    try
     {
-        client.SetAccessToken(token);
+        var tokenProvider = sp.GetRequiredService<IUpstoxTokenProvider>();
+        var token = tokenProvider.GetAccessTokenAsync().GetAwaiter().GetResult();
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            client.SetAccessToken(token);
+        }
+    }
+    catch
+    {
     }
 
     return client;

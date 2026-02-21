@@ -1,5 +1,7 @@
 using Npgsql;
 using Quartz;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 
 namespace TradingSystem.WorkerService.Jobs;
 
@@ -24,13 +26,13 @@ public class PartitionMaintenanceJob : IJob
     public async Task Execute(IJobExecutionContext context)
     {
         _logger.LogInformation("=== Partition Maintenance Job Started ===");
-        _logger.LogInformation("Scheduled Fire Time: {ScheduledFireTime}", context.ScheduledFireTime);
+        _logger.LogInformation("Scheduled Fire Time: {ScheduledFireTime}", context.ScheduledFireTimeUtc);
 
-        var connectionString = _configuration.GetConnectionString("DefaultConnection");
+        var connectionString = _configuration.GetConnectionString("Supabase");
         if (string.IsNullOrEmpty(connectionString))
         {
             _logger.LogError("Database connection string is missing. Cannot proceed with partition maintenance.");
-            throw new InvalidOperationException("Database connection string 'DefaultConnection' not found.");
+            throw new InvalidOperationException("Database connection string 'Supabase' not found.");
         }
 
         try
