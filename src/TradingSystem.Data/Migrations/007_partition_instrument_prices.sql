@@ -19,7 +19,7 @@
 
   3. Partitioning Strategy
     - Monthly partitions: Each partition holds one month of data
-    - Partition naming: `instrument_prices_y{year}_m{month}` (e.g., instrument_prices_y2026_m02)
+    - Partition naming: `instrument_prices_{year}_{month}` (e.g., instrument_prices_2026_02)
     - Auto-creation: Trigger creates partition on-the-fly if missing during INSERT
     - Scheduled creation: Quartz job creates partitions monthly in advance (see PartitionMaintenanceJob)
 
@@ -68,7 +68,7 @@ BEGIN
     end_date := start_date + INTERVAL '1 month';
 
     -- Generate partition name
-    partition_name := 'instrument_prices_y' || partition_year || '_m' || LPAD(partition_month::TEXT, 2, '0');
+    partition_name := 'instrument_prices_' || partition_year || '_' || LPAD(partition_month::TEXT, 2, '0');
 
     -- Check if partition already exists
     IF EXISTS (
@@ -141,7 +141,7 @@ CREATE TABLE instrument_prices (
     PRIMARY KEY (id, timestamp),
     CONSTRAINT fk_instrument_prices_instrument
         FOREIGN KEY (instrument_id)
-        REFERENCES trading_instruments(id)
+        REFERENCES instruments(id)
         ON DELETE CASCADE
 ) PARTITION BY RANGE (timestamp);
 
@@ -229,7 +229,7 @@ CREATE POLICY "Authenticated users can delete instrument prices"
 -- =====================================================
 
 -- To verify partitions created:
--- SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'instrument_prices_y%' ORDER BY tablename;
+-- SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'instrument_prices_%' ORDER BY tablename;
 
 -- To manually create a specific partition:
 -- SELECT create_monthly_partition(2026, 6);
