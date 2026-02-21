@@ -40,7 +40,7 @@ var upstoxConfig = new UpstoxConfig();
 builder.Configuration.GetSection("Upstox").Bind(upstoxConfig);
 builder.Services.AddSingleton(upstoxConfig);
 
-// builder.Services.AddScoped<IUpstoxTokenProvider, UpstoxTokenProvider>();
+builder.Services.AddScoped<TradingSystem.Upstox.Services.IUpstoxTokenProvider, UpstoxTokenProvider>();
 
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<UpstoxClient>(sp =>
@@ -53,15 +53,17 @@ builder.Services.AddScoped<UpstoxClient>(sp =>
 
     try
     {
-        var tokenProvider = sp.GetRequiredService<IUpstoxTokenProvider>();
+        var tokenProvider = sp.GetRequiredService<TradingSystem.Upstox.Services.IUpstoxTokenProvider>();
         var token = tokenProvider.GetAccessTokenAsync().GetAwaiter().GetResult();
         if (!string.IsNullOrWhiteSpace(token))
         {
             client.SetAccessToken(token);
         }
     }
-    catch
+    catch (Exception ex)
     {
+        var logger = sp.GetRequiredService<ILogger<UpstoxClient>>();
+        logger.LogWarning(ex, "Failed to initialize UpstoxClient with stored token");
     }
 
     return client;
