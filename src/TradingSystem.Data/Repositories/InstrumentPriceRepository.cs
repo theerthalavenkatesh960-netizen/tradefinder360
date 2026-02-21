@@ -60,7 +60,7 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
                      && timeframes.Contains(p.Timeframe)
                      && timestamps.Contains(p.Timestamp))
             .ToDictionaryAsync(
-                p => $"{p.InstrumentId}_{p.Timestamp:yyyyMMddHHmmss}",
+                p => $"{p.InstrumentId}_{p.Timeframe}_{p.Timestamp:yyyyMMddHHmmss}",
                 cancellationToken);
 
         var toAdd = new List<InstrumentPrice>();
