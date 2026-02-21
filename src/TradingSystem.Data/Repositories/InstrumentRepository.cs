@@ -12,7 +12,7 @@ public class InstrumentRepository : CommonRepository<TradingInstrument>, IInstru
 
     public async Task<TradingInstrument?> GetBySymbolAsync(string symbol, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.FirstOrDefaultAsync(i => i.Symbol == symbol, cancellationToken);
+        return await _dbSet.FirstOrDefaultAsync(i => i.IsActive && i.Symbol == symbol , cancellationToken);
     }
 
     public async Task<TradingInstrument?> GetByInstrumentKeyAsync(string instrumentKey, CancellationToken cancellationToken = default)

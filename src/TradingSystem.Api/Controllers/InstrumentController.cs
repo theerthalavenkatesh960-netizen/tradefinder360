@@ -28,25 +28,24 @@ public class InstrumentController : ControllerBase
         _recommender = recommender;
     }
 
-    [HttpGet("{key}/analysis")]
+    [HttpGet("{symbol}/analysis")]
     public async Task<ActionResult<AnalysisDto>> GetAnalysis(
-        string key,
+        string symbol,
         [FromQuery] int timeframe = 15)
     {
-        var instrument = await _instrumentService.GetByKeyAsync(key);
+        var instrument = await _instrumentService.GetBySymbolAsync(symbol);
 
         if (instrument == null || !instrument.IsActive)
-            return NotFound($"Instrument '{key}' not found.");
+            return NotFound($"Instrument '{symbol}' not found.");
 
-        var latestIndicator = await _indicatorService.GetLatestAsync(key, timeframe);
+        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.InstrumentKey, timeframe);
 
         if (latestIndicator == null)
-            return NotFound($"No indicator data found for '{key}'. Ensure data has been fetched.");
+            return NotFound($"No indicator data found for '{symbol}'. Ensure data has been fetched.");
 
         var scanResult = await _scanner.ScanInstrumentAsync(instrument, timeframe);
 
-        var recommendation = await _recommender.GetLatestForInstrumentAsync(key);
-
+        var recommendation = await _recommender.GetLatestForInstrumentAsync(instrument.InstrumentKey);
         EntryGuidanceDto? guidance = null;
         if (recommendation != null)
         {
@@ -145,17 +144,24 @@ public class InstrumentController : ControllerBase
         return Ok(dtos);
     }
 
-    [HttpPost("{key}/recommend")]
+    [HttpPost("{symbol}/recommend")]
     public async Task<ActionResult<RecommendationDto>> GenerateRecommendation(
-        string key,
+        string symbol,
         [FromQuery] int timeframe = 15)
     {
+        var instrument = await _instrumentService.GetBySymbolAsync(symbol);
+        if (instrument == null)
+        {
+            return NotFound($"Instrument '{symbol}' not found.");
+        }
+
+        var key = instrument.InstrumentKey;
         var recommendation = await _recommender.GenerateAsync(key, timeframe);
 
         if (recommendation == null)
             return NoContent();
 
-        var instrument = await _instrumentService.GetByKeyAsync(key);
+        //var instrument = await _instrumentService.GetByKeyAsync(key);
 
         return Ok(new RecommendationDto
         {

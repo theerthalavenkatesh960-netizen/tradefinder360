@@ -18,6 +18,9 @@ public class InstrumentService : IInstrumentService
 
     public async Task<TradingInstrument?> GetByKeyAsync(string instrumentKey)
         => await _repository.GetByInstrumentKeyAsync(instrumentKey);
+    
+    public async Task<TradingInstrument?> GetBySymbolAsync(string symbol)
+        => await _repository.GetBySymbolAsync(symbol);
 
     public async Task<List<TradingInstrument>> GetActiveAsync()
         => (await _repository.GetActiveInstrumentsAsync()).ToList();
