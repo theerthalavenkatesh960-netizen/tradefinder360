@@ -86,7 +86,7 @@ public class UpstoxPriceService : IUpstoxPriceService
                 (i / batchSize) + 1,
                 (keyList.Count + batchSize - 1) / batchSize);
 
-            await Task.Delay(1000, cancellationToken);
+            //await Task.Delay(1000, cancellationToken);
         }
 
         return result;

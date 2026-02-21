@@ -17,5 +17,4 @@ public class Candle
     public decimal BodySize => Math.Abs(Close - Open);
     public decimal UpperWick => High - Math.Max(Open, Close);
     public decimal LowerWick => Math.Min(Open, Close) - Low;
-    //test
 }

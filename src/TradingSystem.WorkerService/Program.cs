@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
 using TradingSystem.Data.Repositories.Interfaces;
@@ -40,23 +41,30 @@ var upstoxConfig = new UpstoxConfig();
 builder.Configuration.GetSection("Upstox").Bind(upstoxConfig);
 builder.Services.AddSingleton(upstoxConfig);
 
-builder.Services.AddScoped<IUpstoxTokenProvider, UpstoxTokenProvider>();
+builder.Services.AddScoped<TradingSystem.Upstox.Services.IUpstoxTokenProvider, UpstoxTokenProvider>();
 
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<UpstoxClient>(sp =>
 {
     var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
     var config = sp.GetRequiredService<UpstoxConfig>();
-    var tokenProvider = sp.GetRequiredService<IUpstoxTokenProvider>();
 
     var httpClient = httpClientFactory.CreateClient();
     var client = new UpstoxClient(httpClient, config);
 
-    var token = tokenProvider.GetAccessTokenAsync().GetAwaiter().GetResult();
-
-    if (!string.IsNullOrWhiteSpace(token))
+    try
     {
-        client.SetAccessToken(token);
+        var tokenProvider = sp.GetRequiredService<TradingSystem.Upstox.Services.IUpstoxTokenProvider>();
+        var token = tokenProvider.GetAccessTokenAsync().GetAwaiter().GetResult();
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            client.SetAccessToken(token);
+        }
+    }
+    catch (Exception ex)
+    {
+        var logger = sp.GetRequiredService<ILogger<UpstoxClient>>();
+        logger.LogWarning(ex, "Failed to initialize UpstoxClient with stored token");
     }
 
     return client;

@@ -50,7 +50,7 @@ public class DailyPriceUpdateJob : IJob
 
             var bulkPrices = await _upstoxPriceService.FetchBulkHistoricalPricesAsync(
                 instrumentKeys,
-                "1day",
+                "1minute",
                 fromDate,
                 toDate,
                 batchSize,
