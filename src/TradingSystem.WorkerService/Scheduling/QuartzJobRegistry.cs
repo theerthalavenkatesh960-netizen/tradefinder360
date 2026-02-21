@@ -18,6 +18,12 @@ namespace TradingSystem.WorkerService.Scheduling
                      typeof(DailyPriceUpdateJob),
                      "0 */10 * 1 * ?",        // Every 10 minutes
                      TimeZoneInfo.Utc
+                 ),
+
+                 new JobSchedule(
+                     typeof(PartitionMaintenanceJob),
+                     "0 0 2 28 * ?",         // 2:00 AM on the 28th of every month
+                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                  )
             };
         }
