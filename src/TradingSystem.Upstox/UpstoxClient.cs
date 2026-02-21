@@ -66,7 +66,7 @@ public class UpstoxClient
     {
         await WaitForRateLimit();
 
-        var url = $"/historical-candle/{instrumentKey}/{interval}/{fromDate:yyyy-MM-dd}/{toDate:yyyy-MM-dd}";
+        var url = $"historical-candle/{instrumentKey}/{interval}/{toDate:yyyy-MM-dd}/{fromDate:yyyy-MM-dd}";
 
         for (int retry = 0; retry < _config.MaxRetries; retry++)
         {
@@ -84,7 +84,7 @@ public class UpstoxClient
             }
             catch (HttpRequestException ex) when (retry < _config.MaxRetries - 1)
             {
-                
+
                 await Task.Delay(_config.RetryDelayMs * (retry + 1));
             }
         }
@@ -224,20 +224,30 @@ public class UpstoxClient
             try
             {
                 var timestamp = candle[0].ToString();
+                // var parsedCandle = new Candle
+                // {
+                //     Timestamp = DateTime.Parse(timestamp!),
+                //     Open = Convert.ToDecimal(candle[1]),
+                //     High = Convert.ToDecimal(candle[2]),
+                //     Low = Convert.ToDecimal(candle[3]),
+                //     Close = Convert.ToDecimal(candle[4]),
+                //     Volume = Convert.ToInt64(candle[5]),
+                //     TimeframeMinutes = timeframeMinutes
+                // };    
                 var parsedCandle = new Candle
                 {
-                    Timestamp = DateTime.Parse(timestamp!),
-                    Open = Convert.ToDecimal(candle[1]),
-                    High = Convert.ToDecimal(candle[2]),
-                    Low = Convert.ToDecimal(candle[3]),
-                    Close = Convert.ToDecimal(candle[4]),
-                    Volume = Convert.ToInt64(candle[5]),
+                    Timestamp = ((JsonElement)candle[0]).GetDateTimeOffset().UtcDateTime,
+                    Open = ((JsonElement)candle[1]).GetDecimal(),
+                    High = ((JsonElement)candle[2]).GetDecimal(),
+                    Low = ((JsonElement)candle[3]).GetDecimal(),
+                    Close = ((JsonElement)candle[4]).GetDecimal(),
+                    Volume = ((JsonElement)candle[5]).GetInt64(),
                     TimeframeMinutes = timeframeMinutes
                 };
 
                 candles.Add(parsedCandle);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 continue;
             }
