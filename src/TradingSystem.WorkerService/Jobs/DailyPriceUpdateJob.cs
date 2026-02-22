@@ -40,26 +40,23 @@ public class DailyPriceUpdateJob : IJob
                 return;
             }
 
-            var toDate = DateTime.UtcNow.Date;
-            var fromDate = toDate.AddDays(-30);
-
             var instrumentKeys = activeInstruments.Select(i => i.InstrumentKey).ToList();
-            var batchSize = 50;
+            var instrumentMap = activeInstruments.ToDictionary(i => i.InstrumentKey, i => i.Id);
+            const int batchSize = 500;
 
-            _logger.LogInformation("Fetching prices from {FromDate} to {ToDate}", fromDate, toDate);
+            _logger.LogInformation("Fetching current quotes for {Count} instruments in batches of {BatchSize}",
+                instrumentKeys.Count, batchSize);
 
-            var bulkPrices = await _upstoxPriceService.FetchBulkHistoricalPricesAsync(
+            var allQuotes = await _upstoxPriceService.FetchCurrentQuotesAsync(
                 instrumentKeys,
-                "1minute",
-                fromDate,
-                toDate,
                 batchSize,
                 context.CancellationToken);
 
-            var instrumentMap = activeInstruments.ToDictionary(i => i.InstrumentKey, i => i.Id);
-            var totalSaved = 0;
+            _logger.LogInformation("Received {Count} quotes from Upstox", allQuotes.Count);
 
-            foreach (var (instrumentKey, prices) in bulkPrices)
+            var pricesToUpsert = new List<Core.Models.InstrumentPrice>();
+
+            foreach (var (instrumentKey, quote) in allQuotes)
             {
                 if (!instrumentMap.TryGetValue(instrumentKey, out var instrumentId))
                 {
@@ -67,24 +64,31 @@ public class DailyPriceUpdateJob : IJob
                     continue;
                 }
 
-                foreach (var price in prices)
-                {
-                    price.InstrumentId = instrumentId;
-                }
+                quote.InstrumentId = instrumentId;
+                quote.Timeframe = "1D";
+                quote.CreatedAt = DateTime.UtcNow;
+                quote.UpdatedAt = DateTime.UtcNow;
 
+                pricesToUpsert.Add(quote);
+            }
+
+            if (pricesToUpsert.Any())
+            {
                 try
                 {
-                    var saved = await _priceRepository.BulkUpsertAsync(prices, context.CancellationToken);
-                    totalSaved += saved;
-                    _logger.LogDebug("Saved {Count} prices for instrument {InstrumentKey}", saved, instrumentKey);
+                    var totalSaved = await _priceRepository.BulkUpsertAsync(pricesToUpsert, context.CancellationToken);
+                    _logger.LogInformation("Daily price update job completed. Total records saved: {Count}", totalSaved);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error saving prices for instrument: {InstrumentKey}", instrumentKey);
+                    _logger.LogError(ex, "Error saving prices to database");
+                    throw;
                 }
             }
-
-            _logger.LogInformation("Daily price update job completed. Total records saved: {Count}", totalSaved);
+            else
+            {
+                _logger.LogWarning("No prices to save");
+            }
         }
         catch (Exception ex)
         {

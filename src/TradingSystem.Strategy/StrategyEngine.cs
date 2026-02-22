@@ -127,16 +127,18 @@ public class StrategyEngine
         return signal;
     }
 
-    private bool IsTradingHoursValid(DateTime timestamp)
+    private bool IsTradingHoursValid(DateTimeOffset timestamp)
     {
-        var time = TimeOnly.FromDateTime(timestamp);
-        return time >= _limitsConfig.TradingStartTime &&
-               time <= _limitsConfig.TradingEndTime;
+        var utcTime = timestamp.UtcDateTime.TimeOfDay;
+
+        return utcTime >= _limitsConfig.TradingStartTime.ToTimeSpan() &&
+            utcTime <= _limitsConfig.TradingEndTime.ToTimeSpan();
     }
 
-    public bool ShouldAllowNewTrade(DateTime timestamp)
+    public bool ShouldAllowNewTrade(DateTimeOffset timestamp)
     {
-        var time = TimeOnly.FromDateTime(timestamp);
-        return time <= _limitsConfig.NoNewTradesAfter;
+        var utcTime = timestamp.UtcDateTime.TimeOfDay;
+
+        return utcTime <= _limitsConfig.NoNewTradesAfter.ToTimeSpan();
     }
 }

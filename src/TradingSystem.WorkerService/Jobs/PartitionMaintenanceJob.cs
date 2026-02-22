@@ -6,7 +6,7 @@ using Microsoft.Extensions.Configuration;
 namespace TradingSystem.WorkerService.Jobs;
 
 /// <summary>
-/// Scheduled job that maintains database partitions for the instrument_prices table.
+/// Scheduled job that maintains database partitions for the market_candles table.
 /// Runs monthly to ensure partitions exist for upcoming months.
 /// </summary>
 [DisallowConcurrentExecution]
@@ -62,7 +62,7 @@ public class PartitionMaintenanceJob : IJob
         await connection.OpenAsync();
 
         await using var command = new NpgsqlCommand(
-            "SELECT create_next_n_months_partitions(@monthsAhead)",
+            "SELECT create_next_n_months_market_candles_partitions(@monthsAhead)",
             connection);
 
         command.Parameters.AddWithValue("monthsAhead", monthsAhead);
@@ -99,7 +99,7 @@ public class PartitionMaintenanceJob : IJob
     }
 
     /// <summary>
-    /// Logs all existing partitions for the instrument_prices table for visibility.
+    /// Logs all existing partitions for the market_candles table for visibility.
     /// </summary>
     private async Task LogExistingPartitions(string connectionString)
     {
@@ -115,7 +115,7 @@ public class PartitionMaintenanceJob : IJob
             FROM pg_class c
             JOIN pg_inherits i ON i.inhrelid = c.oid
             JOIN pg_class parent ON parent.oid = i.inhparent
-            WHERE parent.relname = 'instrument_prices'
+            WHERE parent.relname = 'market_candles'
             AND c.relkind = 'r'
             ORDER BY c.relname;
         ";
@@ -144,7 +144,7 @@ public class PartitionMaintenanceJob : IJob
         }
         else
         {
-            _logger.LogWarning("No partitions found for instrument_prices table!");
+            _logger.LogWarning("No partitions found for market_candles table!");
         }
     }
 }

@@ -92,6 +92,55 @@ public class UpstoxClient
         return new List<Candle>();
     }
 
+    public async Task<Dictionary<string, InstrumentPrice>> GetQuotesAsync(string commaSeparatedKeys)
+    {
+        await WaitForRateLimit();
+
+        var url = $"market-quote/quotes?instrument_key={commaSeparatedKeys}";
+
+        try
+        {
+            var response = await _httpClient.GetAsync(url);
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<UpstoxQuoteResponse>();
+
+            if (result?.Data == null || !result.Data.Any())
+                return new Dictionary<string, InstrumentPrice>();
+
+            var quotes = new Dictionary<string, InstrumentPrice>();
+
+            foreach (var (key, quoteData) in result.Data)
+            {
+                if (quoteData?.Ohlc == null || string.IsNullOrEmpty(quoteData.Symbol))
+                    continue;
+
+                var instrumentToken = quoteData.Instrument_Token ?? string.Empty;
+                if (string.IsNullOrEmpty(instrumentToken))
+                    continue;
+
+                var price = new InstrumentPrice
+                {
+                    Timestamp = quoteData.Timestamp == default ? DateTimeOffset.UtcNow : quoteData.Timestamp.ToUniversalTime(),
+                    Open = quoteData.Ohlc.Open,
+                    High = quoteData.Ohlc.High,
+                    Low = quoteData.Ohlc.Low,
+                    Close = quoteData.Ohlc.Close,
+                    Volume = quoteData.Volume,
+                    Timeframe = "1D"
+                };
+
+                quotes[instrumentToken] = price;
+            }
+
+            return quotes;
+        }
+        catch (Exception)
+        {
+            return new Dictionary<string, InstrumentPrice>();
+        }
+    }
+
     public async Task<decimal?> GetLivePrice(string instrumentKey)
     {
         await WaitForRateLimit();
@@ -139,38 +188,6 @@ public class UpstoxClient
             return new List<UpstoxInstrumentData>();
         }
     }
-
-    // public async Task<TokenResponse> FetchTokenFromUpstoxAsync(string code)
-    // {
-    //     if (string.IsNullOrWhiteSpace(code))
-    //         throw new Exception("Upstox authorization code not available. Login first.");
-
-    //     var form = new Dictionary<string, string>
-    //     {
-    //         {"code", code},
-    //         {"client_id", _config.ClientId},
-    //         {"client_secret", _config.ClientSecret},
-    //         {"redirect_uri", _config.RedirectUri},
-    //         {"grant_type", "authorization_code"}
-    //     };
-
-    //     var response = await _httpClient.PostAsync("login/authorization/token", new FormUrlEncodedContent(form));
-
-    //     //response.EnsureSuccessStatusCode();
-    //     if (!response.IsSuccessStatusCode)
-    //     {
-    //         var error = await response.Content.ReadAsStringAsync();
-    //         throw new Exception($"Status: {response.StatusCode} - {error}");
-    //     }
-    //     var tokenResponse = await response.Content.ReadFromJsonAsync<TokenResponse>();
-
-    //     if (tokenResponse == null || string.IsNullOrWhiteSpace(tokenResponse.AccessToken))
-    //         throw new Exception("Failed to fetch Upstox token");
-
-    //     SetAccessToken(tokenResponse.AccessToken);
-
-    //     return tokenResponse;
-    // }
 
     public async Task<TokenResponse> FetchTokenFromUpstoxAsync(string code)
     {
@@ -223,17 +240,7 @@ public class UpstoxClient
 
             try
             {
-                var timestamp = candle[0].ToString();
-                // var parsedCandle = new Candle
-                // {
-                //     Timestamp = DateTime.Parse(timestamp!),
-                //     Open = Convert.ToDecimal(candle[1]),
-                //     High = Convert.ToDecimal(candle[2]),
-                //     Low = Convert.ToDecimal(candle[3]),
-                //     Close = Convert.ToDecimal(candle[4]),
-                //     Volume = Convert.ToInt64(candle[5]),
-                //     TimeframeMinutes = timeframeMinutes
-                // };    
+                var timestamp = candle[0].ToString(); 
                 var parsedCandle = new Candle
                 {
                     Timestamp = ((JsonElement)candle[0]).GetDateTimeOffset().UtcDateTime,
@@ -255,7 +262,6 @@ public class UpstoxClient
 
         return candles;
     }
-
     private int ParseInterval(string interval)
     {
         return interval switch
