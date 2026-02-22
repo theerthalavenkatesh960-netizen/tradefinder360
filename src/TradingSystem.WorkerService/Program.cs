@@ -7,6 +7,7 @@ using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
 using TradingSystem.Data.Repositories.Interfaces;
 using TradingSystem.Data.Services;
+using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Upstox;
 using TradingSystem.Upstox.Models;
 using TradingSystem.Upstox.Services;
@@ -35,6 +36,7 @@ builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
 builder.Services.AddScoped<IInstrumentPriceRepository, InstrumentPriceRepository>();
 builder.Services.AddScoped<ISectorRepository, SectorRepository>();
 builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
+builder.Services.AddScoped<IIndicatorService, IndicatorService>();
 
 builder.Services.AddScoped<CsvSeedService>();
 
