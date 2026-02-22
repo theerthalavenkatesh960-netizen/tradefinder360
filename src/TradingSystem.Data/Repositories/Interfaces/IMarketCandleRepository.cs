@@ -7,8 +7,8 @@ public interface IMarketCandleRepository : ICommonRepository<MarketCandle>
     Task<IReadOnlyList<MarketCandle>> GetByInstrumentIdAsync(
         int instrumentId,
         int timeframeMinutes,
-        DateTime? from = null,
-        DateTime? to = null,
+        DateTime fromDate,
+        DateTime toDate,
         CancellationToken cancellationToken = default);
 
     Task<MarketCandle?> GetLatestCandleAsync(

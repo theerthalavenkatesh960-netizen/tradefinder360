@@ -6,6 +6,7 @@ public interface ICandleService
 {
     Task SaveAsync(int instrumentId, Candle candle);
     Task SaveBatchAsync(int instrumentId, List<Candle> candles);
-    Task<List<Candle>> GetRecentAsync(int instrumentId, int timeframeMinutes, int count);
-    Task<List<Candle>> GetRangeAsync(int instrumentId, int timeframeMinutes, DateTime startTime, DateTime endTime);
+    Task<List<Candle>> GetCandlesAsync(int instrumentId, int timeframeMinutes, DateTime fromDate, DateTime toDate);
+    Task<List<Candle>> GetRecentCandlesAsync(int instrumentId, int timeframeMinutes, int daysBack = 30);
+    Task<Candle?> GetLatestCandleAsync(int instrumentId, int timeframeMinutes);
 }

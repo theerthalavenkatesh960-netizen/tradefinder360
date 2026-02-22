@@ -26,8 +26,8 @@ public class TradingDataService
     public async Task<TradingInstrument?> GetInstrumentAsync(string instrumentKey)
         => await _instrumentService.GetByKeyAsync(instrumentKey);
 
-    public async Task<List<Candle>> GetRecentCandlesAsync(int instrumentId, int timeframeMinutes, int count)
-        => await _candleService.GetRecentAsync(instrumentId, timeframeMinutes, count);
+    public async Task<List<Candle>> GetCandlesAsync(int instrumentId, int timeframeMinutes, DateTime fromDate, DateTime toDate)
+        => await _candleService.GetCandlesAsync(instrumentId, timeframeMinutes, fromDate, toDate);
 
     public async Task SaveCandleAsync(int instrumentId, Candle candle)
         => await _candleService.SaveAsync(instrumentId, candle);

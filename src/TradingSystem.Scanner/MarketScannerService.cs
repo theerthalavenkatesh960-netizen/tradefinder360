@@ -53,7 +53,7 @@ public class MarketScannerService
 
     public async Task<ScanResult?> ScanInstrumentAsync(TradingInstrument instrument, int timeframeMinutes = 15)
     {
-        var candles = await _candleService.GetRecentAsync(instrument.Id, timeframeMinutes, 100);
+        var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes);
 
         if (candles.Count < 50)
             return null;

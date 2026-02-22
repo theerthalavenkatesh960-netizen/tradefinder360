@@ -32,7 +32,7 @@ public class TradeRecommendationService
         var instrument = await _instrumentService.GetByKeyAsync(instrumentKey);
         if (instrument == null || !instrument.IsActive) return null;
 
-        var candles = await _candleService.GetRecentAsync(instrument.Id, timeframeMinutes, 100);
+        var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes);
         if (candles.Count < 50) return null;
 
         var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframeMinutes);

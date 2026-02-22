@@ -1,58 +1,67 @@
-using Microsoft.EntityFrameworkCore;
-using TradingSystem.Core.Models;
+﻿using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
+using TradingSystem.Data.Repositories.Interfaces;
 
 namespace TradingSystem.Data.Services;
 
 public class CandleService : ICandleService
 {
-    private readonly TradingDbContext _db;
+    private readonly IMarketCandleRepository _candleRepository;
 
-    public CandleService(TradingDbContext db)
+    public CandleService(IMarketCandleRepository candleRepository)
     {
-        _db = db;
+        _candleRepository = candleRepository;
     }
 
     public async Task SaveAsync(int instrumentId, Candle candle)
     {
-        await _db.MarketCandles.AddAsync(ToMarketCandle(instrumentId, candle));
-        await _db.SaveChangesAsync();
+        var marketCandle = ToMarketCandle(instrumentId, candle);
+        await _candleRepository.AddAsync(marketCandle);
     }
 
     public async Task SaveBatchAsync(int instrumentId, List<Candle> candles)
     {
-        await _db.MarketCandles.AddRangeAsync(candles.Select(c => ToMarketCandle(instrumentId, c)));
-        await _db.SaveChangesAsync();
+        var marketCandles = candles.Select(c => ToMarketCandle(instrumentId, c)).ToList();
+        await _candleRepository.BulkUpsertAsync(marketCandles);
     }
 
-    public async Task<List<Candle>> GetRecentAsync(int instrumentId, int timeframeMinutes, int count)
+    public async Task<List<Candle>> GetCandlesAsync(int instrumentId, int timeframeMinutes, DateTime fromDate, DateTime toDate)
     {
-        var rows = await _db.MarketCandles
-            .Where(c => c.InstrumentId == instrumentId && c.TimeframeMinutes == timeframeMinutes)
-            .OrderByDescending(c => c.Timestamp)
-            .Take(count)
-            .OrderBy(c => c.Timestamp)
-            .ToListAsync();
-        return rows.Select(c => c.ToCandle()).ToList();
+        // Repository handles aggregation per day, never mixing days
+        var marketCandles = await _candleRepository.GetByInstrumentIdAsync(
+            instrumentId,
+            timeframeMinutes,
+            fromDate,
+            toDate);
+
+        return marketCandles.Select(c => c.ToCandle()).ToList();
     }
 
-    public async Task<List<Candle>> GetRangeAsync(int instrumentId, int timeframeMinutes, DateTime startTime, DateTime endTime)
+    public async Task<List<Candle>> GetRecentCandlesAsync(int instrumentId, int timeframeMinutes, int daysBack = 30)
     {
-        var rows = await _db.MarketCandles
-            .Where(c => c.InstrumentId == instrumentId
-                     && c.TimeframeMinutes == timeframeMinutes
-                     && c.Timestamp >= startTime
-                     && c.Timestamp <= endTime)
-            .OrderBy(c => c.Timestamp)
-            .ToListAsync();
-        return rows.Select(c => c.ToCandle()).ToList();
+        var toDate = DateTime.Today.AddDays(1); // Include today
+        var fromDate = DateTime.Today.AddDays(-daysBack);
+
+        var marketCandles = await _candleRepository.GetByInstrumentIdAsync(
+            instrumentId,
+            timeframeMinutes,
+            fromDate,
+            toDate);
+
+        return marketCandles.Select(c => c.ToCandle()).ToList();
+    }
+
+    public async Task<Candle?> GetLatestCandleAsync(int instrumentId, int timeframeMinutes)
+    {
+        var marketCandle = await _candleRepository.GetLatestCandleAsync(instrumentId, timeframeMinutes);
+        return marketCandle?.ToCandle();
     }
 
     private static MarketCandle ToMarketCandle(int instrumentId, Candle candle) => new()
     {
         InstrumentId = instrumentId,
         TimeframeMinutes = candle.TimeframeMinutes,
-        Timestamp = candle.Timestamp,
+        Timestamp = candle.Timestamp, // Already in IST
         Open = candle.Open,
         High = candle.High,
         Low = candle.Low,
