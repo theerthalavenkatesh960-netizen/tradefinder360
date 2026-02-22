@@ -115,6 +115,10 @@ public class UpstoxClient
                 if (quoteData?.Ohlc == null || string.IsNullOrEmpty(quoteData.Symbol))
                     continue;
 
+                var instrumentToken = quoteData.Instrument_Token ?? string.Empty;
+                if (string.IsNullOrEmpty(instrumentToken))
+                    continue;
+
                 var price = new InstrumentPrice
                 {
                     Timestamp = quoteData.Timestamp == default ? DateTime.UtcNow : quoteData.Timestamp,
@@ -126,7 +130,7 @@ public class UpstoxClient
                     Timeframe = "1D"
                 };
 
-                quotes[key] = price;
+                quotes[instrumentToken] = price;
             }
 
             return quotes;
