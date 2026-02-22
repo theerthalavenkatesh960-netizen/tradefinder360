@@ -8,7 +8,7 @@ public class VWAP
 
     public decimal Value { get; private set; }
 
-    public void Calculate(decimal typical, long volume, DateTime timestamp)
+    public void Calculate(decimal typical, long volume, DateTimeOffset timestamp)
     {
         var date = timestamp.Date;
 

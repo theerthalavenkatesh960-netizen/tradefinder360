@@ -171,7 +171,7 @@ public class CsvSeedService
                 .Where(x => x != null)
                 .GroupBy(x => x!.InstrumentKey, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First()!)
-                .ToList();
+                .ToList().Take(2).ToList();
 
             _logger.LogInformation("Parsed {Count} unique instruments from CSV", csvInstruments.Count);
 

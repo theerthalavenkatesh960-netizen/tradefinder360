@@ -10,7 +10,7 @@ public enum MarketState
 public class MarketStateInfo
 {
     public MarketState State { get; set; }
-    public DateTime Timestamp { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
     public string Reason { get; set; } = string.Empty;
     public Dictionary<string, decimal> Indicators { get; set; } = new(); 
 }

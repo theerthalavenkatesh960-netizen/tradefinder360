@@ -19,7 +19,7 @@ public class IndicatorValues
     public decimal BollingerLower { get; set; }
     public decimal BollingerWidth { get; set; }
     public decimal VWAP { get; set; }
-    public DateTime Timestamp { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
 }
 
 public class IndicatorEngine

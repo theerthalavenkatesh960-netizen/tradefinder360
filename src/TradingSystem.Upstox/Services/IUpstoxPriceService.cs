@@ -18,4 +18,9 @@ public interface IUpstoxPriceService
         DateTime toDate,
         int batchSize = 10,
         CancellationToken cancellationToken = default);
+
+    Task<Dictionary<string, InstrumentPrice>> FetchCurrentQuotesAsync(
+        IEnumerable<string> instrumentKeys,
+        int batchSize = 500,
+        CancellationToken cancellationToken = default);
 }

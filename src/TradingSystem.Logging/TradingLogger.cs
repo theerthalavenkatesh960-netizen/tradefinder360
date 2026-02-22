@@ -27,7 +27,7 @@ public class TradingLogger
             candle.Timestamp, candle.Open, candle.High, candle.Low, candle.Close, candle.Volume);
     }
 
-    public void LogIndicators(Dictionary<string, decimal> indicators, DateTime timestamp)
+    public void LogIndicators(Dictionary<string, decimal> indicators, DateTimeOffset timestamp)
     {
         _logger.Information("Indicators at {Timestamp}: {@Indicators}",
             timestamp, indicators);

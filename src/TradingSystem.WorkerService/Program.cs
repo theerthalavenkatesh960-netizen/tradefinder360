@@ -34,6 +34,7 @@ builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<
 builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
 builder.Services.AddScoped<IInstrumentPriceRepository, InstrumentPriceRepository>();
 builder.Services.AddScoped<ISectorRepository, SectorRepository>();
+builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
 
 builder.Services.AddScoped<CsvSeedService>();
 
