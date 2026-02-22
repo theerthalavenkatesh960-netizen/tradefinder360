@@ -86,7 +86,57 @@ public class UpstoxPriceService : IUpstoxPriceService
                 (i / batchSize) + 1,
                 (keyList.Count + batchSize - 1) / batchSize);
 
-            //await Task.Delay(1000, cancellationToken);
+            await Task.Delay(1000, cancellationToken);
+        }
+
+        return result;
+    }
+
+    public async Task<Dictionary<string, InstrumentPrice>> FetchCurrentQuotesAsync(
+        IEnumerable<string> instrumentKeys,
+        int batchSize = 500,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, InstrumentPrice>();
+        var keyList = instrumentKeys.ToList();
+
+        _logger.LogInformation("Fetching current quotes for {Count} instruments in batches of {BatchSize}", keyList.Count, batchSize);
+
+        for (int i = 0; i < keyList.Count; i += batchSize)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("Quote fetch cancelled");
+                break;
+            }
+
+            var batch = keyList.Skip(i).Take(batchSize).ToList();
+            var commaSeparatedKeys = string.Join(",", batch);
+
+            try
+            {
+                var quotes = await _upstoxClient.GetQuotesAsync(commaSeparatedKeys);
+
+                foreach (var (key, price) in quotes)
+                {
+                    result[key] = price;
+                }
+
+                _logger.LogInformation("Fetched quotes for batch {CurrentBatch}/{TotalBatches} ({Count} instruments)",
+                    (i / batchSize) + 1,
+                    (keyList.Count + batchSize - 1) / batchSize,
+                    quotes.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching quotes for batch {CurrentBatch}", (i / batchSize) + 1);
+            }
+
+            // Small delay between batches to respect rate limits
+            if (i + batchSize < keyList.Count)
+            {
+                await Task.Delay(500, cancellationToken);
+            }
         }
 
         return result;

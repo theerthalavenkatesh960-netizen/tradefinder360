@@ -21,6 +21,12 @@ namespace TradingSystem.WorkerService.Scheduling
                  ),
 
                  new JobSchedule(
+                     typeof(MarketCandlesUpdateJob),
+                     "0 3 * * * ?",        // Daily 3:00 AM IST
+                     TimeZoneInfo.Utc
+                 ),
+
+                 new JobSchedule(
                      typeof(PartitionMaintenanceJob),
                      "0 0 2 28 * ?",         // 2:00 AM on the 28th of every month
                      TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
