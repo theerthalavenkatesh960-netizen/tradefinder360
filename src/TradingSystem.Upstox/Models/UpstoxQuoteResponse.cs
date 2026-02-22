@@ -12,7 +12,7 @@ public class UpstoxQuoteData
     public string? Instrument_Token { get; set; }
     public decimal Last_Price { get; set; }
     public long Volume { get; set; }
-    public DateTime Timestamp { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
     public UpstoxOhlc? Ohlc { get; set; }
 }
 

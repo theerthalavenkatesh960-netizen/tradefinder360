@@ -16,13 +16,13 @@ namespace TradingSystem.WorkerService.Scheduling
 
                  new JobSchedule(
                      typeof(DailyPriceUpdateJob),
-                     "0 */30 * 1 * ?",        // Every 10 minutes
+                     "0 */2 * 1 * ?",        // Every 10 minutes
                      TimeZoneInfo.Utc
                  ),
 
                  new JobSchedule(
                      typeof(MarketCandlesUpdateJob),
-                     "0 3 * * * ?",        // Daily 3:00 AM IST
+                     "0 */4 * 1 * ?",        // Daily 3:00 AM IST
                      TimeZoneInfo.Utc
                  ),
 

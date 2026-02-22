@@ -12,7 +12,7 @@ public class AnalysisDto
     public int Confidence { get; set; }
     public string Explanation { get; set; } = string.Empty;
     public List<string> ReasoningPoints { get; set; } = new();
-    public DateTime AnalysedAt { get; set; }
+    public DateTimeOffset AnalysedAt { get; set; }
 }
 
 public class IndicatorSnapshotDto
@@ -31,7 +31,7 @@ public class IndicatorSnapshotDto
     public decimal BollingerMiddle { get; set; }
     public decimal BollingerLower { get; set; }
     public decimal VWAP { get; set; }
-    public DateTime Timestamp { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
 }
 
 public class TrendStateDto

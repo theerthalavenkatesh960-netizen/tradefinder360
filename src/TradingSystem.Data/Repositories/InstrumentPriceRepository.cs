@@ -53,14 +53,14 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
 
         var instrumentIds = priceList.Select(p => p.InstrumentId).Distinct().ToList();
         var timeframes = priceList.Select(p => p.Timeframe).Distinct().ToList();
-        var timestamps = priceList.Select(p => p.Timestamp).Distinct().ToList();
+        // var timestamps = priceList.Select(p => p.Timestamp).Distinct().ToList();
 
         var existingPrices = await _dbSet
             .Where(p => instrumentIds.Contains(p.InstrumentId)
-                     && timeframes.Contains(p.Timeframe)
-                     && timestamps.Contains(p.Timestamp))
+                     && timeframes.Contains(p.Timeframe))
+                     //&& timestamps.Contains(p.Timestamp))
             .ToDictionaryAsync(
-                p => $"{p.InstrumentId}_{p.Timeframe}_{p.Timestamp:yyyyMMddHHmmss}",
+                p => $"{p.InstrumentId}_{p.Timeframe}",
                 cancellationToken);
 
         var toAdd = new List<InstrumentPrice>();
@@ -69,7 +69,7 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
 
         foreach (var price in priceList)
         {
-            var key = $"{price.InstrumentId}_{price.Timeframe}_{price.Timestamp:yyyyMMddHHmmss}";
+            var key = $"{price.InstrumentId}_{price.Timeframe}";
 
             if (existingPrices.TryGetValue(key, out var existing))
             {

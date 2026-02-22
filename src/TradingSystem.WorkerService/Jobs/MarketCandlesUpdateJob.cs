@@ -42,7 +42,7 @@ public class MarketCandlesUpdateJob : IJob
             }
 
             var toDate = DateTime.UtcNow.Date;
-            var fromDate = toDate.AddDays(-180);
+            var fromDate = toDate.AddDays(-30);
 
             var instrumentKeys = activeInstruments.Select(i => i.InstrumentKey).ToList();
             var batchSize = 50;

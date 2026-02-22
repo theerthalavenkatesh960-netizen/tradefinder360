@@ -5,7 +5,7 @@ public class IndicatorSnapshot
     public long Id { get; set; }
     public string InstrumentKey { get; set; } = string.Empty;
     public int TimeframeMinutes { get; set; }
-    public DateTime Timestamp { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
 
     public decimal EMAFast { get; set; }
     public decimal EMASlow { get; set; }
@@ -22,5 +22,5 @@ public class IndicatorSnapshot
     public decimal BollingerLower { get; set; }
     public decimal VWAP { get; set; }
 
-    public DateTime CreatedAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
 }
