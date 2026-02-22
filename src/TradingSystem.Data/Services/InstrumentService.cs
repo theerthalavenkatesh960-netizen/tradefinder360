@@ -25,10 +25,10 @@ public class InstrumentService : IInstrumentService
     public async Task<List<TradingInstrument>> GetActiveAsync()
         => (await _repository.GetActiveInstrumentsAsync()).ToList();
 
-    public async Task<Dictionary<string, string>> GetKeyToSymbolMapAsync()
+    public async Task<Dictionary<int, string>> GetIdToSymbolMapAsync()
     {
         var instruments = await _repository.GetAllAsync();
-        return instruments.ToDictionary(i => i.InstrumentKey, i => i.Symbol);
+        return instruments.ToDictionary(i => i.Id, i => i.Symbol);
     }
 
     public async Task AddAsync(TradingInstrument instrument)

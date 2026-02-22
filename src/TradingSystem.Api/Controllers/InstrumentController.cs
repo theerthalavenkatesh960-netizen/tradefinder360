@@ -38,14 +38,14 @@ public class InstrumentController : ControllerBase
         if (instrument == null || !instrument.IsActive)
             return NotFound($"Instrument '{symbol}' not found.");
 
-        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.InstrumentKey, timeframe);
+        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframe);
 
         if (latestIndicator == null)
             return NotFound($"No indicator data found for '{symbol}'. Ensure data has been fetched.");
 
         var scanResult = await _scanner.ScanInstrumentAsync(instrument, timeframe);
 
-        var recommendation = await _recommender.GetLatestForInstrumentAsync(instrument.InstrumentKey);
+        var recommendation = await _recommender.GetLatestForInstrumentAsync(instrument.Id);
         EntryGuidanceDto? guidance = null;
         if (recommendation != null)
         {
@@ -111,16 +111,20 @@ public class InstrumentController : ControllerBase
         return Ok(dto);
     }
 
-    [HttpGet("{key}/indicators")]
+    [HttpGet("{symbol}/indicators")]
     public async Task<ActionResult<List<IndicatorSnapshotDto>>> GetIndicatorHistory(
-        string key,
+        string symbol,
         [FromQuery] int timeframe = 15,
         [FromQuery] int limit = 50)
     {
-        var snapshots = await _indicatorService.GetRecentAsync(key, timeframe, limit);
+        var instrument = await _instrumentService.GetBySymbolAsync(symbol);
+        if (instrument == null)
+            return NotFound($"Instrument '{symbol}' not found.");
+
+        var snapshots = await _indicatorService.GetRecentAsync(instrument.Id, timeframe, limit);
 
         if (!snapshots.Any())
-            return NotFound($"No indicator history found for '{key}'.");
+            return NotFound($"No indicator history found for '{symbol}'.");
 
         var dtos = snapshots.Select(s => new IndicatorSnapshotDto
         {
@@ -166,7 +170,7 @@ public class InstrumentController : ControllerBase
         return Ok(new RecommendationDto
         {
             Id = recommendation.Id,
-            InstrumentKey = recommendation.InstrumentKey,
+            InstrumentId = instrument.Id,
             Symbol = instrument?.Symbol ?? key,
             Direction = recommendation.Direction,
             EntryPrice = recommendation.EntryPrice,

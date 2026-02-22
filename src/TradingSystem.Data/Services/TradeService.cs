@@ -13,12 +13,12 @@ public class TradeService : ITradeService
         _db = db;
     }
 
-    public async Task SaveAsync(string instrumentKey, Trade trade)
+    public async Task SaveAsync(int instrumentId, Trade trade)
     {
         var record = new TradeRecord
         {
             Id = trade.Id,
-            InstrumentKey = instrumentKey,
+            InstrumentId = instrumentId,
             TradeType = !string.IsNullOrEmpty(trade.OptionSymbol) ? "OPTIONS" : "SPOT",
             EntryTime = trade.EntryTime,
             ExitTime = trade.ExitTime,
@@ -50,19 +50,19 @@ public class TradeService : ITradeService
         await _db.SaveChangesAsync();
     }
 
-    public async Task<List<TradeRecord>> GetByInstrumentAsync(string instrumentKey, DateTime? startDate = null, DateTime? endDate = null)
+    public async Task<List<TradeRecord>> GetByInstrumentAsync(int instrumentId, DateTime? startDate = null, DateTime? endDate = null)
     {
-        var query = _db.Trades.Where(t => t.InstrumentKey == instrumentKey);
+        var query = _db.Trades.Where(t => t.InstrumentId == instrumentId);
         if (startDate.HasValue) query = query.Where(t => t.EntryTime >= startDate.Value);
         if (endDate.HasValue) query = query.Where(t => t.EntryTime <= endDate.Value);
         return await query.OrderByDescending(t => t.EntryTime).ToListAsync();
     }
 
-    public async Task<List<TradeRecord>> GetTodayAsync(string instrumentKey)
+    public async Task<List<TradeRecord>> GetTodayAsync(int instrumentId)
     {
         var today = DateTime.UtcNow.Date;
         return await _db.Trades
-            .Where(t => t.InstrumentKey == instrumentKey && t.EntryTime >= today)
+            .Where(t => t.InstrumentId == instrumentId && t.EntryTime >= today)
             .OrderBy(t => t.EntryTime)
             .ToListAsync();
     }

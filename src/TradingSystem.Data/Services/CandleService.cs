@@ -13,22 +13,22 @@ public class CandleService : ICandleService
         _db = db;
     }
 
-    public async Task SaveAsync(string instrumentKey, Candle candle)
+    public async Task SaveAsync(int instrumentId, Candle candle)
     {
-        await _db.MarketCandles.AddAsync(ToMarketCandle(instrumentKey, candle));
+        await _db.MarketCandles.AddAsync(ToMarketCandle(instrumentId, candle));
         await _db.SaveChangesAsync();
     }
 
-    public async Task SaveBatchAsync(string instrumentKey, List<Candle> candles)
+    public async Task SaveBatchAsync(int instrumentId, List<Candle> candles)
     {
-        await _db.MarketCandles.AddRangeAsync(candles.Select(c => ToMarketCandle(instrumentKey, c)));
+        await _db.MarketCandles.AddRangeAsync(candles.Select(c => ToMarketCandle(instrumentId, c)));
         await _db.SaveChangesAsync();
     }
 
-    public async Task<List<Candle>> GetRecentAsync(string instrumentKey, int timeframeMinutes, int count)
+    public async Task<List<Candle>> GetRecentAsync(int instrumentId, int timeframeMinutes, int count)
     {
         var rows = await _db.MarketCandles
-            .Where(c => c.InstrumentKey == instrumentKey && c.TimeframeMinutes == timeframeMinutes)
+            .Where(c => c.InstrumentId == instrumentId && c.TimeframeMinutes == timeframeMinutes)
             .OrderByDescending(c => c.Timestamp)
             .Take(count)
             .OrderBy(c => c.Timestamp)
@@ -36,10 +36,10 @@ public class CandleService : ICandleService
         return rows.Select(c => c.ToCandle()).ToList();
     }
 
-    public async Task<List<Candle>> GetRangeAsync(string instrumentKey, int timeframeMinutes, DateTime startTime, DateTime endTime)
+    public async Task<List<Candle>> GetRangeAsync(int instrumentId, int timeframeMinutes, DateTime startTime, DateTime endTime)
     {
         var rows = await _db.MarketCandles
-            .Where(c => c.InstrumentKey == instrumentKey
+            .Where(c => c.InstrumentId == instrumentId
                      && c.TimeframeMinutes == timeframeMinutes
                      && c.Timestamp >= startTime
                      && c.Timestamp <= endTime)
@@ -48,9 +48,9 @@ public class CandleService : ICandleService
         return rows.Select(c => c.ToCandle()).ToList();
     }
 
-    private static MarketCandle ToMarketCandle(string instrumentKey, Candle candle) => new()
+    private static MarketCandle ToMarketCandle(int instrumentId, Candle candle) => new()
     {
-        InstrumentKey = instrumentKey,
+        InstrumentId = instrumentId,
         TimeframeMinutes = candle.TimeframeMinutes,
         Timestamp = candle.Timestamp,
         Open = candle.Open,

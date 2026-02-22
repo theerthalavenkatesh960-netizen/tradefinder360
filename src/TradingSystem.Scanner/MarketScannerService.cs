@@ -53,12 +53,12 @@ public class MarketScannerService
 
     public async Task<ScanResult?> ScanInstrumentAsync(TradingInstrument instrument, int timeframeMinutes = 15)
     {
-        var candles = await _candleService.GetRecentAsync(instrument.InstrumentKey, timeframeMinutes, 100);
+        var candles = await _candleService.GetRecentAsync(instrument.Id, timeframeMinutes, 100);
 
         if (candles.Count < 50)
             return null;
 
-        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.InstrumentKey, timeframeMinutes);
+        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframeMinutes);
 
         IndicatorValues indicators;
         if (latestIndicator != null)
@@ -80,15 +80,20 @@ public class MarketScannerService
     {
         var snapshots = await _scanService.GetTopAsync(minScore, limit);
         var instrumentList = await _instrumentService.GetActiveAsync();
-        var instDict = instrumentList.ToDictionary(i => i.InstrumentKey);
+        var instDict = instrumentList.ToDictionary(i => i.Id, i => new
+        {
+                Symbol = i.Symbol,
+                InstrumentKey = i.InstrumentKey,
+                Exchange = i.Exchange
+        });
 
         return snapshots.Select(s =>
         {
-            instDict.TryGetValue(s.InstrumentKey, out var inst);
+            instDict.TryGetValue(s.InstrumentId, out var inst);
             return new ScanResult
             {
-                InstrumentKey = s.InstrumentKey,
-                Symbol = inst?.Symbol ?? s.InstrumentKey,
+                InstrumentId = s.InstrumentId,
+                Symbol = inst?.Symbol ?? string.Empty,
                 Exchange = inst?.Exchange ?? string.Empty,
                 MarketState = Enum.TryParse<ScanMarketState>(s.MarketState, out var ms) ? ms : ScanMarketState.SIDEWAYS,
                 SetupScore = s.SetupScore,
@@ -113,7 +118,7 @@ public class MarketScannerService
     {
         var snapshot = new ScanSnapshot
         {
-            InstrumentKey = result.InstrumentKey,
+            InstrumentId = result.InstrumentId,
             Timestamp = result.ScannedAt,
             MarketState = result.MarketState.ToString(),
             SetupScore = result.SetupScore,

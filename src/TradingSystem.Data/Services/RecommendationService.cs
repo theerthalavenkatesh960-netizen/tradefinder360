@@ -25,9 +25,9 @@ public class RecommendationService : IRecommendationService
             .OrderByDescending(r => r.Confidence)
             .ToListAsync();
 
-    public async Task<Recommendation?> GetLatestForInstrumentAsync(string instrumentKey)
+    public async Task<Recommendation?> GetLatestForInstrumentAsync(int instrumentId)
         => await _db.Recommendations
-            .Where(r => r.InstrumentKey == instrumentKey && r.IsActive)
+            .Where(r => r.InstrumentId == instrumentId && r.IsActive)
             .OrderByDescending(r => r.Timestamp)
             .FirstOrDefaultAsync();
 

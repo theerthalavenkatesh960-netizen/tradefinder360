@@ -3,7 +3,7 @@ namespace TradingSystem.Core.Models;
 public class IndicatorSnapshot
 {
     public long Id { get; set; }
-    public string InstrumentKey { get; set; } = string.Empty;
+    public int InstrumentId { get; set; }
     public int TimeframeMinutes { get; set; }
     public DateTimeOffset Timestamp { get; set; }
 
@@ -23,4 +23,5 @@ public class IndicatorSnapshot
     public decimal VWAP { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
+    public TradingInstrument? Instrument { get; set; }
 }

@@ -10,15 +10,15 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
     {
     }
 
-    public async Task<IReadOnlyList<MarketCandle>> GetByInstrumentKeyAsync(
-        string instrumentKey,
+    public async Task<IReadOnlyList<MarketCandle>> GetByInstrumentIdAsync(
+        int instrumentId,
         int timeframeMinutes,
         DateTime? from = null,
         DateTime? to = null,
         CancellationToken cancellationToken = default)
     {
         var query = _dbSet
-            .Where(c => c.InstrumentKey == instrumentKey && c.TimeframeMinutes == timeframeMinutes);
+            .Where(c => c.InstrumentId == instrumentId && c.TimeframeMinutes == timeframeMinutes);
 
         if (from.HasValue)
         {
@@ -36,12 +36,12 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
     }
 
     public async Task<MarketCandle?> GetLatestCandleAsync(
-        string instrumentKey,
+        int instrumentId,
         int timeframeMinutes,
         CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .Where(c => c.InstrumentKey == instrumentKey && c.TimeframeMinutes == timeframeMinutes)
+            .Where(c => c.InstrumentId == instrumentId && c.TimeframeMinutes == timeframeMinutes)
             .OrderByDescending(c => c.Timestamp)
             .FirstOrDefaultAsync(cancellationToken);
     }
@@ -56,16 +56,16 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
             return 0;
         }
 
-        var instrumentKeys = candleList.Select(c => c.InstrumentKey).Distinct().ToList();
+        var instrumentIds = candleList.Select(c => c.InstrumentId).Distinct().ToList();
         var timeframes = candleList.Select(c => c.TimeframeMinutes).Distinct().ToList();
         var timestamps = candleList.Select(c => c.Timestamp).Distinct().ToList();
 
         var existingCandles = await _dbSet
-            .Where(c => instrumentKeys.Contains(c.InstrumentKey)
+            .Where(c => instrumentIds.Contains(c.InstrumentId)
                      && timeframes.Contains(c.TimeframeMinutes)
                      && timestamps.Contains(c.Timestamp))
             .ToDictionaryAsync(
-                c => $"{c.InstrumentKey}_{c.TimeframeMinutes}_{c.Timestamp:yyyyMMddHHmmss}",
+                c => $"{c.InstrumentId}_{c.TimeframeMinutes}_{c.Timestamp:yyyyMMddHHmmss}",
                 cancellationToken);
 
         var toAdd = new List<MarketCandle>();
@@ -74,7 +74,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
 
         foreach (var candle in candleList)
         {
-            var key = $"{candle.InstrumentKey}_{candle.TimeframeMinutes}_{candle.Timestamp:yyyyMMddHHmmss}";
+            var key = $"{candle.InstrumentId}_{candle.TimeframeMinutes}_{candle.Timestamp:yyyyMMddHHmmss}";
 
             if (existingCandles.TryGetValue(key, out var existing))
             {

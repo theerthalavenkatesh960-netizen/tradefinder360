@@ -14,11 +14,11 @@ public class IndicatorService : IIndicatorService
         _db = db;
     }
 
-    public async Task SaveAsync(string instrumentKey, int timeframeMinutes, IndicatorValues indicators)
+    public async Task SaveAsync(int instrumentId, int timeframeMinutes, IndicatorValues indicators)
     {
         await _db.IndicatorSnapshots.AddAsync(new IndicatorSnapshot
         {
-            InstrumentKey = instrumentKey,
+            InstrumentId = instrumentId,
             TimeframeMinutes = timeframeMinutes,
             Timestamp = indicators.Timestamp,
             EMAFast = indicators.EMAFast,
@@ -40,15 +40,15 @@ public class IndicatorService : IIndicatorService
         await _db.SaveChangesAsync();
     }
 
-    public async Task<IndicatorSnapshot?> GetLatestAsync(string instrumentKey, int timeframeMinutes)
+    public async Task<IndicatorSnapshot?> GetLatestAsync(int instrumentId, int timeframeMinutes)
         => await _db.IndicatorSnapshots
-            .Where(s => s.InstrumentKey == instrumentKey && s.TimeframeMinutes == timeframeMinutes)
+            .Where(s => s.InstrumentId == instrumentId && s.TimeframeMinutes == timeframeMinutes)
             .OrderByDescending(s => s.Timestamp)
             .FirstOrDefaultAsync();
 
-    public async Task<List<IndicatorSnapshot>> GetRecentAsync(string instrumentKey, int timeframeMinutes, int count)
+    public async Task<List<IndicatorSnapshot>> GetRecentAsync(int instrumentId, int timeframeMinutes, int count)
         => await _db.IndicatorSnapshots
-            .Where(s => s.InstrumentKey == instrumentKey && s.TimeframeMinutes == timeframeMinutes)
+            .Where(s => s.InstrumentId == instrumentId && s.TimeframeMinutes == timeframeMinutes)
             .OrderByDescending(s => s.Timestamp)
             .Take(count)
             .OrderBy(s => s.Timestamp)

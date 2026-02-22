@@ -3,7 +3,7 @@ namespace TradingSystem.Core.Models;
 public class Recommendation
 {
     public Guid Id { get; set; }
-    public string InstrumentKey { get; set; } = string.Empty;
+    public int InstrumentId { get; set; }
     public DateTime Timestamp { get; set; }
     public string Direction { get; set; } = string.Empty;
     public decimal EntryPrice { get; set; }
@@ -18,4 +18,5 @@ public class Recommendation
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; }
     public DateTime? ExpiresAt { get; set; }
+    public TradingInstrument? Instrument { get; set; }
 }

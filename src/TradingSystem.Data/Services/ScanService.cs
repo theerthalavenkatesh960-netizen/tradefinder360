@@ -22,7 +22,7 @@ public class ScanService : IScanService
     public async Task<List<ScanSnapshot>> GetTopAsync(int minScore, int limit)
         => await _db.ScanSnapshots
             .Where(s => s.SetupScore >= minScore)
-            .GroupBy(s => s.InstrumentKey)
+            .GroupBy(s => s.InstrumentId)
             .Select(g => g.OrderByDescending(s => s.Timestamp).First())
             .OrderByDescending(s => s.SetupScore)
             .Take(limit)

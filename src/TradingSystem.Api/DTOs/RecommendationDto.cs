@@ -3,7 +3,7 @@ namespace TradingSystem.Api.DTOs;
 public class RecommendationDto
 {
     public Guid Id { get; set; }
-    public string InstrumentKey { get; set; } = string.Empty;
+    public int InstrumentId { get; set; }
     public string Symbol { get; set; } = string.Empty;
     public string Direction { get; set; } = string.Empty;
     public decimal EntryPrice { get; set; }

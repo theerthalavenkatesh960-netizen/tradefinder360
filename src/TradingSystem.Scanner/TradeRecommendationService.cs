@@ -32,10 +32,10 @@ public class TradeRecommendationService
         var instrument = await _instrumentService.GetByKeyAsync(instrumentKey);
         if (instrument == null || !instrument.IsActive) return null;
 
-        var candles = await _candleService.GetRecentAsync(instrumentKey, timeframeMinutes, 100);
+        var candles = await _candleService.GetRecentAsync(instrument.Id, timeframeMinutes, 100);
         if (candles.Count < 50) return null;
 
-        var latestIndicator = await _indicatorService.GetLatestAsync(instrumentKey, timeframeMinutes);
+        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframeMinutes);
         if (latestIndicator == null) return null;
 
         var indicators = MapToIndicatorValues(latestIndicator);
@@ -53,8 +53,8 @@ public class TradeRecommendationService
     public async Task<List<Recommendation>> GetActiveRecommendationsAsync()
         => await _recommendationService.GetActiveAsync();
 
-    public async Task<Recommendation?> GetLatestForInstrumentAsync(string instrumentKey)
-        => await _recommendationService.GetLatestForInstrumentAsync(instrumentKey);
+    public async Task<Recommendation?> GetLatestForInstrumentAsync(int instrumentId)
+        => await _recommendationService.GetLatestForInstrumentAsync(instrumentId);
 
     public async Task ExpireOldRecommendationsAsync()
         => await _recommendationService.ExpireOldAsync(60);
@@ -89,7 +89,7 @@ public class TradeRecommendationService
         return new Recommendation
         {
             Id = Guid.NewGuid(),
-            InstrumentKey = instrument.InstrumentKey,
+            InstrumentId = instrument.Id,
             Timestamp = DateTime.UtcNow,
             Direction = direction,
             EntryPrice = Math.Round(entry, 2),
