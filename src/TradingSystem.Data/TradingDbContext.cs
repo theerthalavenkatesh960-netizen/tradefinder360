@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingSystem.Core.Models;
 
@@ -258,7 +259,12 @@ public class TradingDbContext : DbContext
             entity.Property(e => e.OptionType).HasColumnName("option_type").HasMaxLength(10);
             entity.Property(e => e.OptionStrike).HasColumnName("option_strike").HasPrecision(18, 4);
             entity.Property(e => e.ExplanationText).HasColumnName("explanation_text");
-            entity.Property(e => e.ReasoningPoints).HasColumnName("reasoning_points");
+            entity.Property(e => e.ReasoningPoints).HasColumnName("reasoning_points")
+            .HasColumnType("jsonb")
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+            );
             entity.Property(e => e.IsActive).HasColumnName("is_active");
             entity.Property(e => e.CreatedAt).HasColumnName("created_at");
             entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");

@@ -15,6 +15,6 @@ public class RecommendationDto
     public decimal? OptionStrike { get; set; }
     public string ExplanationText { get; set; } = string.Empty;
     public List<string> ReasoningPoints { get; set; } = new();
-    public DateTime Timestamp { get; set; }
-    public DateTime? ExpiresAt { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
+    public DateTimeOffset? ExpiresAt { get; set; }
 }

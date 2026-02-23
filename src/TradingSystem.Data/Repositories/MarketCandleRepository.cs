@@ -49,55 +49,44 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
     }
 
     private async Task<IReadOnlyList<MarketCandle>> AggregateToTimeframeAsync(
-        int instrumentId,
-        int timeframeMinutes,
-        DateTime fromDate,
-        DateTime toDate,
-        CancellationToken cancellationToken)
+    int instrumentId,
+    int timeframeMinutes,
+    DateTimeOffset fromDate,
+    DateTimeOffset toDate,
+    CancellationToken cancellationToken)
     {
-        // Fetch 1-minute candles for the date range
+        fromDate = fromDate.ToUniversalTime();
+        toDate   = toDate.ToUniversalTime();
+
         var oneMinuteCandles = await _dbSet
-            .Where(c => c.InstrumentId == instrumentId 
-                     && c.TimeframeMinutes == 1
-                     && c.Timestamp >= fromDate
-                     && c.Timestamp <= toDate)
+            .Where(c => c.InstrumentId == instrumentId
+                    && c.TimeframeMinutes == 1
+                    && c.Timestamp >= fromDate
+                    && c.Timestamp <= toDate)
             .OrderBy(c => c.Timestamp)
-            .Select(c => new
-            {
-                c.InstrumentId,
-                c.Timestamp,
-                c.Open,
-                c.High,
-                c.Low,
-                c.Close,
-                c.Volume
-            })
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
         if (!oneMinuteCandles.Any())
-        {
             return Array.Empty<MarketCandle>();
-        }
 
-        // Group by Date AND Timeframe Bucket - ensures candles don't mix across days
         var aggregated = oneMinuteCandles
             .GroupBy(c => new
             {
-                Date = c.Timestamp.Date,
-                BucketTime = GetTimeframeBucket(c.Timestamp, timeframeMinutes)
+                Date = c.Timestamp.UtcDateTime.Date,
+                BucketTime = GetTimeframeBucket(c.Timestamp.UtcDateTime, timeframeMinutes)
             })
             .Select(g => new MarketCandle
             {
                 InstrumentId = instrumentId,
                 TimeframeMinutes = timeframeMinutes,
-                Timestamp = g.Key.BucketTime,
+                Timestamp = new DateTimeOffset(g.Key.BucketTime, TimeSpan.Zero),
                 Open = g.OrderBy(x => x.Timestamp).First().Open,
                 High = g.Max(x => x.High),
                 Low = g.Min(x => x.Low),
                 Close = g.OrderByDescending(x => x.Timestamp).First().Close,
                 Volume = g.Sum(x => x.Volume),
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTimeOffset.UtcNow
             })
             .OrderBy(c => c.Timestamp)
             .ToList();

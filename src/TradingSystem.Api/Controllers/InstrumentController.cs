@@ -42,7 +42,7 @@ public class InstrumentController : ControllerBase
 
         if (latestIndicator == null)
             return NotFound($"No indicator data found for '{symbol}'. Ensure data has been fetched.");
-
+ 
         var scanResult = await _scanner.ScanInstrumentAsync(instrument, timeframe);
 
         var recommendation = await _recommender.GetLatestForInstrumentAsync(instrument.Id);
@@ -160,6 +160,13 @@ public class InstrumentController : ControllerBase
         }
 
         var key = instrument.InstrumentKey;
+        try
+        {
+            var r = await _recommender.GenerateAsync(key, timeframe);
+        }catch (Exception ex)
+        {
+            return StatusCode(500, $"Error generating recommendation: {ex.Message}");
+        }
         var recommendation = await _recommender.GenerateAsync(key, timeframe);
 
         if (recommendation == null)

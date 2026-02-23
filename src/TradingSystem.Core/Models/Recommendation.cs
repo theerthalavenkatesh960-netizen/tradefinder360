@@ -4,7 +4,7 @@ public class Recommendation
 {
     public Guid Id { get; set; }
     public int InstrumentId { get; set; }
-    public DateTime Timestamp { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
     public string Direction { get; set; } = string.Empty;
     public decimal EntryPrice { get; set; }
     public decimal StopLoss { get; set; }
@@ -16,7 +16,7 @@ public class Recommendation
     public string ExplanationText { get; set; } = string.Empty;
     public List<string> ReasoningPoints { get; set; } = new();
     public bool IsActive { get; set; } = true;
-    public DateTime CreatedAt { get; set; }
-    public DateTime? ExpiresAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? ExpiresAt { get; set; }
     public TradingInstrument? Instrument { get; set; }
 }

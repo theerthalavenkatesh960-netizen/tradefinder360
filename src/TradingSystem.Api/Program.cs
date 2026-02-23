@@ -89,6 +89,7 @@ builder.Services.AddScoped<UpstoxClient>(sp =>
 builder.Services.AddScoped<SetupScoringService>();
 builder.Services.AddScoped<MarketScannerService>();
 builder.Services.AddScoped<TradeRecommendationService>();
+builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
 
 var app = builder.Build();
 

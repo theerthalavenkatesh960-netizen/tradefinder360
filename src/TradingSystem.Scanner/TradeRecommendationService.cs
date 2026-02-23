@@ -45,8 +45,16 @@ public class TradeRecommendationService
             return null;
 
         var recommendation = BuildRecommendation(instrument, indicators, scanResult, candles);
-
-        await PersistAsync(recommendation);
+        try 
+        {
+            await PersistAsync(recommendation);
+        }
+        catch (Exception ex)
+        {
+            // Log the error (not implemented here)
+            Console.WriteLine($"Error saving recommendation: {ex.Message}");
+        }
+        //await PersistAsync(recommendation);
         return recommendation;
     }
 
@@ -90,7 +98,7 @@ public class TradeRecommendationService
         {
             Id = Guid.NewGuid(),
             InstrumentId = instrument.Id,
-            Timestamp = DateTime.UtcNow,
+            Timestamp = DateTimeOffset.UtcNow,
             Direction = direction,
             EntryPrice = Math.Round(entry, 2),
             StopLoss = Math.Round(stopLoss, 2),
@@ -102,8 +110,8 @@ public class TradeRecommendationService
             ReasoningPoints = reasons,
             ExplanationText = explanation,
             IsActive = true,
-            CreatedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.AddMinutes(60)
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(60)
         };
     }
 
@@ -164,6 +172,7 @@ public class TradeRecommendationService
     }
 
     private async Task PersistAsync(Recommendation recommendation)
+
         => await _recommendationService.SaveAsync(recommendation);
 
     private static decimal RoundToStrike(decimal price, decimal tickSize)
