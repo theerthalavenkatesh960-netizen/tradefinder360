@@ -4,7 +4,7 @@ namespace TradingSystem.Scanner.Models;
 
 public class ScanResult
 {
-    public string InstrumentKey { get; set; } = string.Empty;
+    public int InstrumentId { get; set; }
     public string Symbol { get; set; } = string.Empty;
     public string Exchange { get; set; } = string.Empty;
     public ScanMarketState MarketState { get; set; }

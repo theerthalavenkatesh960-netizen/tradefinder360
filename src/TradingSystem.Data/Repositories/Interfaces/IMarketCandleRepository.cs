@@ -4,15 +4,15 @@ namespace TradingSystem.Data.Repositories.Interfaces;
 
 public interface IMarketCandleRepository : ICommonRepository<MarketCandle>
 {
-    Task<IReadOnlyList<MarketCandle>> GetByInstrumentKeyAsync(
-        string instrumentKey,
+    Task<IReadOnlyList<MarketCandle>> GetByInstrumentIdAsync(
+        int instrumentId,
         int timeframeMinutes,
-        DateTime? from = null,
-        DateTime? to = null,
+        DateTime fromDate,
+        DateTime toDate,
         CancellationToken cancellationToken = default);
 
     Task<MarketCandle?> GetLatestCandleAsync(
-        string instrumentKey,
+        int instrumentId,
         int timeframeMinutes,
         CancellationToken cancellationToken = default);
 

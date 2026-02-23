@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Repositories.Interfaces;
 
@@ -6,44 +6,170 @@ namespace TradingSystem.Data.Repositories;
 
 public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCandleRepository
 {
+    // Market constants (IST)
+    private const int MarketOpenHour = 9;
+    private const int MarketOpenMinute = 15;
+    private const int MarketOpenMinuteOfDay = (9 * 60) + 15; // 555 minutes from midnight
+
     public MarketCandleRepository(TradingDbContext context) : base(context)
     {
     }
 
-    public async Task<IReadOnlyList<MarketCandle>> GetByInstrumentKeyAsync(
-        string instrumentKey,
+    public async Task<IReadOnlyList<MarketCandle>> GetByInstrumentIdAsync(
+        int instrumentId,
         int timeframeMinutes,
-        DateTime? from = null,
-        DateTime? to = null,
+        DateTime fromDate,
+        DateTime toDate,
         CancellationToken cancellationToken = default)
     {
-        var query = _dbSet
-            .Where(c => c.InstrumentKey == instrumentKey && c.TimeframeMinutes == timeframeMinutes);
-
-        if (from.HasValue)
+        // If requesting 1-minute candles, return directly from database
+        if (timeframeMinutes == 1)
         {
-            query = query.Where(c => c.Timestamp >= from.Value);
+            return await GetOneMinuteCandlesAsync(instrumentId, fromDate, toDate, cancellationToken);
         }
 
-        if (to.HasValue)
-        {
-            query = query.Where(c => c.Timestamp <= to.Value);
-        }
+        // For other timeframes, aggregate 1-minute candles
+        return await AggregateToTimeframeAsync(instrumentId, timeframeMinutes, fromDate, toDate, cancellationToken);
+    }
 
-        return await query
+    private async Task<IReadOnlyList<MarketCandle>> GetOneMinuteCandlesAsync(
+        int instrumentId,
+        DateTime fromDate,
+        DateTime toDate,
+        CancellationToken cancellationToken)
+    {
+        return await _dbSet
+            .Where(c => c.InstrumentId == instrumentId 
+                     && c.TimeframeMinutes == 1
+                     && c.Timestamp >= fromDate
+                     && c.Timestamp <= toDate)
             .OrderBy(c => c.Timestamp)
+            .AsNoTracking()
             .ToListAsync(cancellationToken);
     }
 
+    private async Task<IReadOnlyList<MarketCandle>> AggregateToTimeframeAsync(
+    int instrumentId,
+    int timeframeMinutes,
+    DateTimeOffset fromDate,
+    DateTimeOffset toDate,
+    CancellationToken cancellationToken)
+    {
+        fromDate = fromDate.ToUniversalTime();
+        toDate   = toDate.ToUniversalTime();
+
+        var oneMinuteCandles = await _dbSet
+            .Where(c => c.InstrumentId == instrumentId
+                    && c.TimeframeMinutes == 1
+                    && c.Timestamp >= fromDate
+                    && c.Timestamp <= toDate)
+            .OrderBy(c => c.Timestamp)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        if (!oneMinuteCandles.Any())
+            return Array.Empty<MarketCandle>();
+
+        var aggregated = oneMinuteCandles
+            .GroupBy(c => new
+            {
+                Date = c.Timestamp.UtcDateTime.Date,
+                BucketTime = GetTimeframeBucket(c.Timestamp.UtcDateTime, timeframeMinutes)
+            })
+            .Select(g => new MarketCandle
+            {
+                InstrumentId = instrumentId,
+                TimeframeMinutes = timeframeMinutes,
+                Timestamp = new DateTimeOffset(g.Key.BucketTime, TimeSpan.Zero),
+                Open = g.OrderBy(x => x.Timestamp).First().Open,
+                High = g.Max(x => x.High),
+                Low = g.Min(x => x.Low),
+                Close = g.OrderByDescending(x => x.Timestamp).First().Close,
+                Volume = g.Sum(x => x.Volume),
+                CreatedAt = DateTimeOffset.UtcNow
+            })
+            .OrderBy(c => c.Timestamp)
+            .ToList();
+
+        return aggregated;
+    }
+
+    /// <summary>
+    /// Calculate the timeframe bucket start time for a given timestamp.
+    /// Aligns to market open at 9:15 AM IST.
+    /// Ensures candles from different days are never mixed.
+    /// 
+    /// Example for 15-min timeframe:
+    /// - 2024-01-15 09:15 → 2024-01-15 09:15
+    /// - 2024-01-15 09:28 → 2024-01-15 09:15
+    /// - 2024-01-15 09:30 → 2024-01-15 09:30
+    /// - 2024-01-15 15:29 → 2024-01-15 15:15
+    /// </summary>
+    private static DateTime GetTimeframeBucket(DateTimeOffset timestamp, int timeframeMinutes)
+    {
+        // Calculate minutes from midnight for this timestamp
+        var minutesFromMidnight = (timestamp.Hour * 60) + timestamp.Minute;
+
+        // Calculate minutes from market open (9:15 AM)
+        var minutesFromMarketOpen = minutesFromMidnight - MarketOpenMinuteOfDay;
+
+        // If before market open, snap to market open (edge case)
+        if (minutesFromMarketOpen < 0)
+        {
+            return new DateTime(
+                timestamp.Year,
+                timestamp.Month,
+                timestamp.Day,
+                MarketOpenHour,
+                MarketOpenMinute,
+                0,
+                DateTimeKind.Unspecified);
+        }
+
+        // Calculate which bucket this falls into (0-indexed from market open)
+        var bucketIndex = minutesFromMarketOpen / timeframeMinutes;
+
+        // Calculate the start time of this bucket
+        var bucketStartMinutes = MarketOpenMinuteOfDay + (bucketIndex * timeframeMinutes);
+        var bucketHour = bucketStartMinutes / 60;
+        var bucketMinute = bucketStartMinutes % 60;
+
+        return new DateTime(
+            timestamp.Year,
+            timestamp.Month,
+            timestamp.Day,
+            bucketHour,
+            bucketMinute,
+            0,
+            DateTimeKind.Unspecified);
+    }
+
     public async Task<MarketCandle?> GetLatestCandleAsync(
-        string instrumentKey,
+        int instrumentId,
         int timeframeMinutes,
         CancellationToken cancellationToken = default)
     {
-        return await _dbSet
-            .Where(c => c.InstrumentKey == instrumentKey && c.TimeframeMinutes == timeframeMinutes)
-            .OrderByDescending(c => c.Timestamp)
-            .FirstOrDefaultAsync(cancellationToken);
+        if (timeframeMinutes == 1)
+        {
+            return await _dbSet
+                .Where(c => c.InstrumentId == instrumentId && c.TimeframeMinutes == 1)
+                .OrderByDescending(c => c.Timestamp)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        // For other timeframes, get last 2 days of data and aggregate
+        var today = DateTime.Today;
+        var fromDate = today.AddDays(-2);
+
+        var recentCandles = await GetByInstrumentIdAsync(
+            instrumentId,
+            timeframeMinutes,
+            fromDate,
+            today.AddDays(1),
+            cancellationToken);
+
+        return recentCandles.OrderByDescending(c => c.Timestamp).FirstOrDefault();
     }
 
     public async Task<int> BulkUpsertAsync(
@@ -56,16 +182,26 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
             return 0;
         }
 
-        var instrumentKeys = candleList.Select(c => c.InstrumentKey).Distinct().ToList();
-        var timeframes = candleList.Select(c => c.TimeframeMinutes).Distinct().ToList();
+        // Validate: Only 1-minute candles should be stored
+        var invalidCandles = candleList.Where(c => c.TimeframeMinutes != 1).ToList();
+        if (invalidCandles.Any())
+        {
+            throw new InvalidOperationException(
+                $"Only 1-minute candles can be stored in the database. " +
+                $"Found {invalidCandles.Count} candle(s) with timeframe != 1 minute. " +
+                $"Other timeframes are calculated on-the-fly.");
+        }
+
+        var instrumentIds = candleList.Select(c => c.InstrumentId).Distinct().ToList();
         var timestamps = candleList.Select(c => c.Timestamp).Distinct().ToList();
 
+        // Fetch existing candles for upsert logic
         var existingCandles = await _dbSet
-            .Where(c => instrumentKeys.Contains(c.InstrumentKey)
-                     && timeframes.Contains(c.TimeframeMinutes)
+            .Where(c => instrumentIds.Contains(c.InstrumentId)
+                     && c.TimeframeMinutes == 1
                      && timestamps.Contains(c.Timestamp))
             .ToDictionaryAsync(
-                c => $"{c.InstrumentKey}_{c.TimeframeMinutes}_{c.Timestamp:yyyyMMddHHmmss}",
+                c => $"{c.InstrumentId}_{c.Timestamp:yyyyMMddHHmmss}",
                 cancellationToken);
 
         var toAdd = new List<MarketCandle>();
@@ -74,10 +210,11 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
 
         foreach (var candle in candleList)
         {
-            var key = $"{candle.InstrumentKey}_{candle.TimeframeMinutes}_{candle.Timestamp:yyyyMMddHHmmss}";
+            var key = $"{candle.InstrumentId}_{candle.Timestamp:yyyyMMddHHmmss}";
 
             if (existingCandles.TryGetValue(key, out var existing))
             {
+                // Update existing candle (in case of corrections)
                 existing.Open = candle.Open;
                 existing.High = candle.High;
                 existing.Low = candle.Low;
@@ -87,7 +224,9 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
             }
             else
             {
+                // Add new candle
                 candle.CreatedAt = now;
+                candle.TimeframeMinutes = 1; // Ensure it's 1-minute
                 toAdd.Add(candle);
             }
         }

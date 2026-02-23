@@ -86,8 +86,8 @@ public class TradingEngine
 
             if (_config.Database.EnablePersistence)
             {
-                await _dataService.SaveCandleAsync(_instrument.InstrumentKey, candle);
-                await _dataService.SaveIndicatorsAsync(_instrument.InstrumentKey, _config.Timeframe.ActiveTimeframeMinutes, _currentIndicators);
+                await _dataService.SaveCandleAsync(_instrument.Id, candle);
+                await _dataService.SaveIndicatorsAsync(_instrument.Id, _config.Timeframe.ActiveTimeframeMinutes, _currentIndicators);
             }
 
             if (_tradeManager.HasActiveTrade())
@@ -137,7 +137,7 @@ public class TradingEngine
                     _logger.LogTradeExit(completedTrade, exitSignal.Reason);
 
                     if (_config.Database.EnablePersistence)
-                        await _dataService.SaveTradeAsync(_instrument.InstrumentKey, completedTrade);
+                        await _dataService.SaveTradeAsync(_instrument.Id, completedTrade);
 
                     _risk.RecordTrade(completedTrade.PnL ?? 0, DateTime.Now);
                 }
@@ -213,7 +213,7 @@ public class TradingEngine
             _logger.LogTradeEntry(trade, entrySignal.Reason);
 
             if (_config.Database.EnablePersistence)
-                await _dataService.SaveTradeAsync(_instrument.InstrumentKey, trade);
+                await _dataService.SaveTradeAsync(_instrument.Id, trade);
         }
         else
         {

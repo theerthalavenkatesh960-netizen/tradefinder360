@@ -2,7 +2,7 @@ namespace TradingSystem.Api.DTOs;
 
 public class RadarItemDto
 {
-    public string InstrumentKey { get; set; } = string.Empty;
+    public int instrumentId { get; set; }
     public string Symbol { get; set; } = string.Empty;
     public string Exchange { get; set; } = string.Empty;
     public string MarketState { get; set; } = string.Empty;

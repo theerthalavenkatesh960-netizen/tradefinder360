@@ -32,10 +32,10 @@ public class TradeRecommendationService
         var instrument = await _instrumentService.GetByKeyAsync(instrumentKey);
         if (instrument == null || !instrument.IsActive) return null;
 
-        var candles = await _candleService.GetRecentAsync(instrumentKey, timeframeMinutes, 100);
+        var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes);
         if (candles.Count < 50) return null;
 
-        var latestIndicator = await _indicatorService.GetLatestAsync(instrumentKey, timeframeMinutes);
+        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframeMinutes);
         if (latestIndicator == null) return null;
 
         var indicators = MapToIndicatorValues(latestIndicator);
@@ -45,16 +45,24 @@ public class TradeRecommendationService
             return null;
 
         var recommendation = BuildRecommendation(instrument, indicators, scanResult, candles);
-
-        await PersistAsync(recommendation);
+        try 
+        {
+            await PersistAsync(recommendation);
+        }
+        catch (Exception ex)
+        {
+            // Log the error (not implemented here)
+            Console.WriteLine($"Error saving recommendation: {ex.Message}");
+        }
+        //await PersistAsync(recommendation);
         return recommendation;
     }
 
     public async Task<List<Recommendation>> GetActiveRecommendationsAsync()
         => await _recommendationService.GetActiveAsync();
 
-    public async Task<Recommendation?> GetLatestForInstrumentAsync(string instrumentKey)
-        => await _recommendationService.GetLatestForInstrumentAsync(instrumentKey);
+    public async Task<Recommendation?> GetLatestForInstrumentAsync(int instrumentId)
+        => await _recommendationService.GetLatestForInstrumentAsync(instrumentId);
 
     public async Task ExpireOldRecommendationsAsync()
         => await _recommendationService.ExpireOldAsync(60);
@@ -89,8 +97,8 @@ public class TradeRecommendationService
         return new Recommendation
         {
             Id = Guid.NewGuid(),
-            InstrumentKey = instrument.InstrumentKey,
-            Timestamp = DateTime.UtcNow,
+            InstrumentId = instrument.Id,
+            Timestamp = DateTimeOffset.UtcNow,
             Direction = direction,
             EntryPrice = Math.Round(entry, 2),
             StopLoss = Math.Round(stopLoss, 2),
@@ -102,8 +110,8 @@ public class TradeRecommendationService
             ReasoningPoints = reasons,
             ExplanationText = explanation,
             IsActive = true,
-            CreatedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.AddMinutes(60)
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(60)
         };
     }
 
@@ -164,6 +172,7 @@ public class TradeRecommendationService
     }
 
     private async Task PersistAsync(Recommendation recommendation)
+
         => await _recommendationService.SaveAsync(recommendation);
 
     private static decimal RoundToStrike(decimal price, decimal tickSize)

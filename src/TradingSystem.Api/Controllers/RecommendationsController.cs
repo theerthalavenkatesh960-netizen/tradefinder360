@@ -23,13 +23,13 @@ public class RecommendationsController : ControllerBase
     {
         var recommendations = await _recommender.GetActiveRecommendationsAsync();
 
-        var instruments = await _instrumentService.GetKeyToSymbolMapAsync();
+        var instruments = await _instrumentService.GetIdToSymbolMapAsync();
 
         var dtos = recommendations.Select(r => new RecommendationDto
         {
             Id = r.Id,
-            InstrumentKey = r.InstrumentKey,
-            Symbol = instruments.TryGetValue(r.InstrumentKey, out var sym) ? sym : r.InstrumentKey,
+            InstrumentId = r.InstrumentId,
+            Symbol = instruments.TryGetValue(r.InstrumentId, out var sym) ? sym : string.Empty,
             Direction = r.Direction,
             EntryPrice = r.EntryPrice,
             StopLoss = r.StopLoss,

@@ -3,7 +3,7 @@ namespace TradingSystem.Core.Models;
 public class MarketCandle
 {
     public long Id { get; set; }
-    public string InstrumentKey { get; set; } = string.Empty;
+    public int InstrumentId { get; set; }
     public int TimeframeMinutes { get; set; }
     public DateTimeOffset Timestamp { get; set; }
     public decimal Open { get; set; }
@@ -13,6 +13,7 @@ public class MarketCandle
     public long Volume { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 
+    public TradingInstrument? Instrument { get; set; }
     public Candle ToCandle() => new Candle
     {
         Timestamp = Timestamp,

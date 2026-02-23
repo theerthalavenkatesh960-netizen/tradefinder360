@@ -5,7 +5,7 @@ namespace TradingSystem.Data.Services.Interfaces;
 
 public interface IIndicatorService
 {
-    Task SaveAsync(string instrumentKey, int timeframeMinutes, IndicatorValues indicators);
-    Task<IndicatorSnapshot?> GetLatestAsync(string instrumentKey, int timeframeMinutes);
-    Task<List<IndicatorSnapshot>> GetRecentAsync(string instrumentKey, int timeframeMinutes, int count);
+    Task SaveAsync(int instrumentId, int timeframeMinutes, IndicatorValues indicators);
+    Task<IndicatorSnapshot?> GetLatestAsync(int instrumentId, int timeframeMinutes);
+    Task<List<IndicatorSnapshot>> GetRecentAsync(int instrumentId, int timeframeMinutes, int count);
 }
