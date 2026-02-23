@@ -29,7 +29,7 @@ public class RadarController : ControllerBase
 
         var items = filtered.Select(r => new RadarItemDto
         {
-            InstrumentKey = r.InstrumentKey,
+            instrumentId = r.InstrumentId,
             Symbol = r.Symbol,
             Exchange = r.Exchange,
             MarketState = r.MarketState.ToString(),
@@ -60,7 +60,7 @@ public class RadarController : ControllerBase
 
         var items = results.Select(r => new RadarItemDto
         {
-            InstrumentKey = r.InstrumentKey,
+            instrumentId = r.InstrumentId,
             Symbol = r.Symbol,
             Exchange = r.Exchange,
             MarketState = r.MarketState.ToString(),

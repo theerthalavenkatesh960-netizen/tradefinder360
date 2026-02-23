@@ -17,7 +17,7 @@ public class SetupScoringService
     {
         var result = new ScanResult
         {
-            InstrumentKey = instrument.InstrumentKey,
+            InstrumentId = instrument.Id,
             Symbol = instrument.Symbol,
             Exchange = instrument.Exchange,
             LastClose = recentCandles.LastOrDefault()?.Close ?? 0,

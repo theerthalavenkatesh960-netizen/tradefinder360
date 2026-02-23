@@ -4,8 +4,9 @@ namespace TradingSystem.Data.Services.Interfaces;
 
 public interface ICandleService
 {
-    Task SaveAsync(string instrumentKey, Candle candle);
-    Task SaveBatchAsync(string instrumentKey, List<Candle> candles);
-    Task<List<Candle>> GetRecentAsync(string instrumentKey, int timeframeMinutes, int count);
-    Task<List<Candle>> GetRangeAsync(string instrumentKey, int timeframeMinutes, DateTime startTime, DateTime endTime);
+    Task SaveAsync(int instrumentId, Candle candle);
+    Task SaveBatchAsync(int instrumentId, List<Candle> candles);
+    Task<List<Candle>> GetCandlesAsync(int instrumentId, int timeframeMinutes, DateTime fromDate, DateTime toDate);
+    Task<List<Candle>> GetRecentCandlesAsync(int instrumentId, int timeframeMinutes, int daysBack = 30);
+    Task<Candle?> GetLatestCandleAsync(int instrumentId, int timeframeMinutes);
 }

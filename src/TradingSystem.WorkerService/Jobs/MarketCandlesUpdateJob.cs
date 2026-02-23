@@ -59,10 +59,17 @@ public class MarketCandlesUpdateJob : IJob
                 batchSize,
                 context.CancellationToken);
 
+            var instrumentMap = activeInstruments.ToDictionary(i => i.InstrumentKey, i => i.Id);
             var totalSaved = 0;
 
             foreach (var (instrumentKey, prices) in bulkPrices)
             {
+                if (!instrumentMap.TryGetValue(instrumentKey, out var instrumentId))
+                {
+                    _logger.LogWarning("Instrument not found for key: {InstrumentKey}", instrumentKey);
+                    continue;
+                }
+
                 if (!prices.Any())
                 {
                     _logger.LogDebug("No prices found for instrument {InstrumentKey}", instrumentKey);
@@ -72,7 +79,7 @@ public class MarketCandlesUpdateJob : IJob
                 // Convert InstrumentPrice to MarketCandle
                 var candles = prices.Select(p => new MarketCandle
                 {
-                    InstrumentKey = instrumentKey,
+                    InstrumentId = instrumentId,
                     TimeframeMinutes = timeframeMinutes,
                     Timestamp = p.Timestamp,
                     Open = p.Open,

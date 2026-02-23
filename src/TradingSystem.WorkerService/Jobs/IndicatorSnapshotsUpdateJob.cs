@@ -57,7 +57,7 @@ public class IndicatorSnapshotsUpdateJob : IJob
                 {
                     // Get the latest indicator snapshot to avoid recalculating
                     var latestSnapshot = await _indicatorService.GetLatestAsync(
-                        instrument.InstrumentKey, 
+                        instrument.Id, 
                         timeframeMinutes);
 
                     var fromDate = latestSnapshot?.Timestamp.DateTime.AddMinutes(timeframeMinutes) 
@@ -65,8 +65,8 @@ public class IndicatorSnapshotsUpdateJob : IJob
                     var toDate = DateTime.UtcNow;
 
                     // Fetch candles for this instrument
-                    var marketCandles = await _candleRepository.GetByInstrumentKeyAsync(
-                        instrument.InstrumentKey,
+                    var marketCandles = await _candleRepository.GetByInstrumentIdAsync(
+                        instrument.Id,
                         timeframeMinutes,
                         fromDate,
                         toDate,
@@ -112,7 +112,7 @@ public class IndicatorSnapshotsUpdateJob : IJob
 
                         // Save indicator snapshot
                         await _indicatorService.SaveAsync(
-                            instrument.InstrumentKey,
+                            instrument.Id,
                             timeframeMinutes,
                             indicators);
 

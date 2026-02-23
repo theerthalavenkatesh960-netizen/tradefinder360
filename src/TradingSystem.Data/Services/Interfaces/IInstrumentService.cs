@@ -7,7 +7,7 @@ public interface IInstrumentService
     Task<TradingInstrument?> GetByKeyAsync(string instrumentKey);
     Task<TradingInstrument?> GetBySymbolAsync(string symbol);
     Task<List<TradingInstrument>> GetActiveAsync();
-    Task<Dictionary<string, string>> GetKeyToSymbolMapAsync();
+    Task<Dictionary<int, string>> GetIdToSymbolMapAsync();
     Task AddAsync(TradingInstrument instrument);
     Task UpdateAsync(TradingInstrument instrument);
     Task<List<Sector>> GetSectorsAsync();

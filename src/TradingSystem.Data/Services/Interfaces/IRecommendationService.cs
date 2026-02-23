@@ -6,6 +6,6 @@ public interface IRecommendationService
 {
     Task SaveAsync(Recommendation recommendation);
     Task<List<Recommendation>> GetActiveAsync();
-    Task<Recommendation?> GetLatestForInstrumentAsync(string instrumentKey);
+    Task<Recommendation?> GetLatestForInstrumentAsync(int instrumentId);
     Task ExpireOldAsync(int olderThanMinutes = 60);
 }

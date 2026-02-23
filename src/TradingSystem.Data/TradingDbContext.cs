@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingSystem.Core.Models;
 
@@ -15,212 +16,284 @@ public class TradingDbContext : DbContext
     public DbSet<Recommendation> Recommendations { get; set; } = null!;
     public DbSet<UserProfile> UserProfiles { get; set; } = null!;
 
-    public TradingDbContext(DbContextOptions<TradingDbContext> options)
+    public TradingDbContext(DbContextOptions<TradingDbContext> options) 
         : base(options)
     {
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<Sector>(e =>
-        {
-            e.ToTable("sectors");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.Name).HasColumnName("name").IsRequired();
-            e.Property(x => x.Code).HasColumnName("code").IsRequired();
-            e.Property(x => x.Description).HasColumnName("description");
-            e.Property(x => x.IsActive).HasColumnName("is_active");
-            e.Property(x => x.CreatedAt).HasColumnName("created_at");
-            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-            e.HasIndex(x => x.Code).IsUnique();
-            e.HasIndex(x => x.Name);
-        });
+        base.OnModelCreating(modelBuilder);
 
-        modelBuilder.Entity<TradingInstrument>(e =>
+        // Sectors
+        modelBuilder.Entity<Sector>(entity =>
         {
-            e.ToTable("instruments");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.InstrumentKey).HasColumnName("instrument_key").IsRequired();
-            e.Property(x => x.Exchange).HasColumnName("exchange").IsRequired();
-            e.Property(x => x.Symbol).HasColumnName("symbol").IsRequired();
-            e.Property(x => x.Name).HasColumnName("name").IsRequired();
-            e.Property(x => x.SectorId).HasColumnName("sector_id");
-            e.Property(x => x.Industry).HasColumnName("industry");
-            e.Property(x => x.MarketCap).HasColumnName("market_cap").HasPrecision(18, 2);
-            e.Property(x => x.ISIN).HasColumnName("isin");
-            e.Property(x => x.InstrumentType).HasColumnName("instrument_type").HasConversion<string>().IsRequired();
-            e.Property(x => x.LotSize).HasColumnName("lot_size");
-            e.Property(x => x.TickSize).HasColumnName("tick_size").HasPrecision(18, 4);
-            e.Property(x => x.IsDerivativesEnabled).HasColumnName("is_derivatives_enabled");
-            e.Property(x => x.DefaultTradingMode).HasColumnName("default_trading_mode").HasConversion<string>();
-            e.Property(x => x.IsActive).HasColumnName("is_active");
-            e.Property(x => x.CreatedAt).HasColumnName("created_at");
-            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-            e.HasIndex(x => x.InstrumentKey).IsUnique();
-            e.HasIndex(x => x.Symbol);
-            e.HasIndex(x => x.SectorId);
-            e.HasOne(x => x.Sector)
-                .WithMany(x => x.Instruments)
-                .HasForeignKey(x => x.SectorId)
+            entity.ToTable("sectors");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.Name).HasColumnName("name").IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Code).HasColumnName("code").IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Description).HasColumnName("description");
+            entity.Property(e => e.IsActive).HasColumnName("is_active");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(e => e.Code).IsUnique().HasDatabaseName("idx_sectors_code");
+            entity.HasIndex(e => e.Name).HasDatabaseName("idx_sectors_name");
+
+            entity.HasMany(e => e.Instruments)
+                .WithOne(i => i.Sector)
+                .HasForeignKey(i => i.SectorId)
                 .OnDelete(DeleteBehavior.SetNull);
-            e.HasMany(x => x.Prices)
-                .WithOne(x => x.Instrument)
-                .HasForeignKey(x => x.InstrumentId)
+        });
+        
+        // Instruments
+        modelBuilder.Entity<TradingInstrument>(entity =>
+        {
+            entity.ToTable("instruments");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.InstrumentKey).HasColumnName("instrument_key").IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Name).HasColumnName("name").IsRequired();
+            entity.Property(e => e.Exchange).HasColumnName("exchange").IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Symbol).HasColumnName("symbol").IsRequired().HasMaxLength(50);
+            entity.Property(e => e.InstrumentType).HasColumnName("instrument_type").IsRequired().HasMaxLength(10).HasConversion<string>();
+            entity.Property(e => e.LotSize).HasColumnName("lot_size").IsRequired();
+            entity.Property(e => e.TickSize).HasColumnName("tick_size").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.IsDerivativesEnabled).HasColumnName("is_derivatives_enabled").IsRequired();
+            entity.Property(e => e.DefaultTradingMode).HasColumnName("default_trading_mode").IsRequired().HasMaxLength(10).HasConversion<string>();
+            entity.Property(e => e.IsActive).HasColumnName("is_active").IsRequired();
+            entity.Property(e => e.SectorId).HasColumnName("sector_id");
+            entity.Property(e => e.Industry).HasColumnName("industry");
+            entity.Property(e => e.MarketCap).HasColumnName("market_cap").HasPrecision(18, 2);
+            entity.Property(e => e.ISIN).HasColumnName("isin");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+
+            entity.HasIndex(e => e.InstrumentKey).IsUnique().HasDatabaseName("idx_instruments_key");
+            entity.HasIndex(e => e.Symbol).HasDatabaseName("idx_instruments_symbol");
+            entity.HasIndex(e => e.IsActive).HasDatabaseName("idx_instruments_active");
+            entity.HasIndex(e => e.SectorId).HasDatabaseName("idx_instruments_sector_id");
+
+            entity.HasOne(e => e.Sector)
+                .WithMany(s => s.Instruments)
+                .HasForeignKey(e => e.SectorId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasMany(e => e.Prices)
+                .WithOne(p => p.Instrument)
+                .HasForeignKey(p => p.InstrumentId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<InstrumentPrice>(e =>
+        // MarketCandles
+        modelBuilder.Entity<MarketCandle>(entity =>
         {
-            e.ToTable("instrument_prices");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.InstrumentId).HasColumnName("instrument_id").IsRequired();
-            e.Property(x => x.Timestamp).HasColumnName("timestamp").IsRequired();
-            e.Property(x => x.Open).HasColumnName("open").HasPrecision(18, 4);
-            e.Property(x => x.High).HasColumnName("high").HasPrecision(18, 4);
-            e.Property(x => x.Low).HasColumnName("low").HasPrecision(18, 4);
-            e.Property(x => x.Close).HasColumnName("close").HasPrecision(18, 4);
-            e.Property(x => x.Volume).HasColumnName("volume");
-            e.Property(x => x.Timeframe).HasColumnName("timeframe").IsRequired();
-            e.Property(x => x.CreatedAt).HasColumnName("created_at");
-            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-            e.HasIndex(x => new { x.InstrumentId, x.Timeframe, x.Timestamp }).IsUnique();
-            e.HasIndex(x => x.Timestamp);
+            entity.ToTable("market_candles");
+            entity.HasKey(e => new { e.Id, e.Timestamp });
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            entity.Property(e => e.TimeframeMinutes).HasColumnName("timeframe_minutes").IsRequired();
+            entity.Property(e => e.Timestamp).HasColumnName("timestamp").IsRequired();
+            entity.Property(e => e.Open).HasColumnName("open").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.High).HasColumnName("high").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.Low).HasColumnName("low").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.Close).HasColumnName("close").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.Volume).HasColumnName("volume").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+
+            entity.HasIndex(e => new { e.InstrumentId, e.TimeframeMinutes, e.Timestamp }).HasDatabaseName("idx_market_candles_lookup");
+            entity.HasIndex(e => e.InstrumentId).HasDatabaseName("idx_market_candles_instrument");
+
+            entity.HasOne(e => e.Instrument)
+                .WithMany()
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<MarketCandle>(e =>
+        // InstrumentPrices
+        modelBuilder.Entity<InstrumentPrice>(entity =>
         {
-            e.ToTable("market_candles");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.InstrumentKey).HasColumnName("instrument_key").IsRequired();
-            e.Property(x => x.TimeframeMinutes).HasColumnName("timeframe_minutes");
-            e.Property(x => x.Timestamp).HasColumnName("timestamp");
-            e.Property(x => x.Open).HasColumnName("open").HasPrecision(18, 4);
-            e.Property(x => x.High).HasColumnName("high").HasPrecision(18, 4);
-            e.Property(x => x.Low).HasColumnName("low").HasPrecision(18, 4);
-            e.Property(x => x.Close).HasColumnName("close").HasPrecision(18, 4);
-            e.Property(x => x.Volume).HasColumnName("volume");
-            e.Property(x => x.CreatedAt).HasColumnName("created_at");
-            e.HasIndex(x => new { x.InstrumentKey, x.TimeframeMinutes, x.Timestamp });
+            entity.ToTable("instrument_prices");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            entity.Property(e => e.Timestamp).HasColumnName("timestamp").IsRequired();
+            entity.Property(e => e.Open).HasColumnName("open").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.High).HasColumnName("high").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.Low).HasColumnName("low").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.Close).HasColumnName("close").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.Volume).HasColumnName("volume").IsRequired();
+            entity.Property(e => e.Timeframe).HasColumnName("timeframe").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(e => new { e.InstrumentId, e.Timeframe, e.Timestamp }).IsUnique().HasDatabaseName("idx_instrument_prices_unique");
+            entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_instrument_prices_timestamp");
+            entity.HasIndex(e => new { e.InstrumentId, e.Timeframe }).HasDatabaseName("idx_instrument_prices_instrument_timeframe");
+
+            entity.HasOne(e => e.Instrument)
+                .WithMany(i => i.Prices)
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<IndicatorSnapshot>(e =>
+        // IndicatorSnapshots
+        modelBuilder.Entity<IndicatorSnapshot>(entity =>
         {
-            e.ToTable("indicator_snapshots");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.InstrumentKey).HasColumnName("instrument_key").IsRequired();
-            e.Property(x => x.TimeframeMinutes).HasColumnName("timeframe_minutes");
-            e.Property(x => x.Timestamp).HasColumnName("timestamp");
-            e.Property(x => x.EMAFast).HasColumnName("ema_fast").HasPrecision(18, 4);
-            e.Property(x => x.EMASlow).HasColumnName("ema_slow").HasPrecision(18, 4);
-            e.Property(x => x.RSI).HasColumnName("rsi").HasPrecision(18, 4);
-            e.Property(x => x.MacdLine).HasColumnName("macd_line").HasPrecision(18, 4);
-            e.Property(x => x.MacdSignal).HasColumnName("macd_signal").HasPrecision(18, 4);
-            e.Property(x => x.MacdHistogram).HasColumnName("macd_histogram").HasPrecision(18, 4);
-            e.Property(x => x.ADX).HasColumnName("adx").HasPrecision(18, 4);
-            e.Property(x => x.PlusDI).HasColumnName("plus_di").HasPrecision(18, 4);
-            e.Property(x => x.MinusDI).HasColumnName("minus_di").HasPrecision(18, 4);
-            e.Property(x => x.ATR).HasColumnName("atr").HasPrecision(18, 4);
-            e.Property(x => x.BollingerUpper).HasColumnName("bollinger_upper").HasPrecision(18, 4);
-            e.Property(x => x.BollingerMiddle).HasColumnName("bollinger_middle").HasPrecision(18, 4);
-            e.Property(x => x.BollingerLower).HasColumnName("bollinger_lower").HasPrecision(18, 4);
-            e.Property(x => x.VWAP).HasColumnName("vwap").HasPrecision(18, 4);
-            e.Property(x => x.CreatedAt).HasColumnName("created_at");
-            e.HasIndex(x => new { x.InstrumentKey, x.TimeframeMinutes, x.Timestamp });
+            entity.ToTable("indicator_snapshots");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            entity.Property(e => e.TimeframeMinutes).HasColumnName("timeframe_minutes").IsRequired();
+            entity.Property(e => e.Timestamp).HasColumnName("timestamp").IsRequired();
+            entity.Property(e => e.EMAFast).HasColumnName("ema_fast").HasPrecision(18, 4);
+            entity.Property(e => e.EMASlow).HasColumnName("ema_slow").HasPrecision(18, 4);
+            entity.Property(e => e.RSI).HasColumnName("rsi").HasPrecision(18, 4);
+            entity.Property(e => e.MacdLine).HasColumnName("macd_line").HasPrecision(18, 4);
+            entity.Property(e => e.MacdSignal).HasColumnName("macd_signal").HasPrecision(18, 4);
+            entity.Property(e => e.MacdHistogram).HasColumnName("macd_histogram").HasPrecision(18, 4);
+            entity.Property(e => e.ADX).HasColumnName("adx").HasPrecision(18, 4);
+            entity.Property(e => e.PlusDI).HasColumnName("plus_di").HasPrecision(18, 4);
+            entity.Property(e => e.MinusDI).HasColumnName("minus_di").HasPrecision(18, 4);
+            entity.Property(e => e.ATR).HasColumnName("atr").HasPrecision(18, 4);
+            entity.Property(e => e.BollingerUpper).HasColumnName("bollinger_upper").HasPrecision(18, 4);
+            entity.Property(e => e.BollingerMiddle).HasColumnName("bollinger_middle").HasPrecision(18, 4);
+            entity.Property(e => e.BollingerLower).HasColumnName("bollinger_lower").HasPrecision(18, 4);
+            entity.Property(e => e.VWAP).HasColumnName("vwap").HasPrecision(18, 4);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
+
+            entity.HasIndex(e => new { e.InstrumentId, e.TimeframeMinutes, e.Timestamp }).HasDatabaseName("idx_indicator_snapshots_lookup");
+            entity.HasIndex(e => e.InstrumentId).HasDatabaseName("idx_indicator_snapshots_instrument");
+
+            entity.HasOne(e => e.Instrument)
+                .WithMany()
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<TradeRecord>(e =>
+        // Trades
+        modelBuilder.Entity<TradeRecord>(entity =>
         {
-            e.ToTable("trades");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.InstrumentKey).HasColumnName("instrument_key").IsRequired();
-            e.Property(x => x.TradeType).HasColumnName("trade_type");
-            e.Property(x => x.EntryTime).HasColumnName("entry_time");
-            e.Property(x => x.ExitTime).HasColumnName("exit_time");
-            e.Property(x => x.EntryPrice).HasColumnName("entry_price").HasPrecision(18, 4);
-            e.Property(x => x.ExitPrice).HasColumnName("exit_price").HasPrecision(18, 4);
-            e.Property(x => x.Quantity).HasColumnName("quantity");
-            e.Property(x => x.StopLoss).HasColumnName("stop_loss").HasPrecision(18, 4);
-            e.Property(x => x.Target).HasColumnName("target").HasPrecision(18, 4);
-            e.Property(x => x.ATRAtEntry).HasColumnName("atr_at_entry").HasPrecision(18, 4);
-            e.Property(x => x.OptionSymbol).HasColumnName("option_symbol");
-            e.Property(x => x.OptionStrike).HasColumnName("option_strike").HasPrecision(18, 4);
-            e.Property(x => x.OptionEntryPrice).HasColumnName("option_entry_price").HasPrecision(18, 4);
-            e.Property(x => x.OptionExitPrice).HasColumnName("option_exit_price").HasPrecision(18, 4);
-            e.Property(x => x.EntryReason).HasColumnName("entry_reason");
-            e.Property(x => x.ExitReason).HasColumnName("exit_reason");
-            e.Property(x => x.Direction).HasColumnName("direction");
-            e.Property(x => x.State).HasColumnName("state");
-            e.Property(x => x.PnL).HasColumnName("pnl").HasPrecision(18, 4);
-            e.Property(x => x.PnLPercent).HasColumnName("pnl_percent").HasPrecision(18, 4);
-            e.Property(x => x.CreatedAt).HasColumnName("created_at");
-            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-            e.HasIndex(x => new { x.InstrumentKey, x.EntryTime });
+            entity.ToTable("trades");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            entity.Property(e => e.TradeType).HasColumnName("trade_type").IsRequired().HasMaxLength(20);
+            entity.Property(e => e.EntryTime).HasColumnName("entry_time").IsRequired();
+            entity.Property(e => e.ExitTime).HasColumnName("exit_time");
+            entity.Property(e => e.EntryPrice).HasColumnName("entry_price").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.ExitPrice).HasColumnName("exit_price").HasPrecision(18, 4);
+            entity.Property(e => e.Quantity).HasColumnName("quantity").IsRequired();
+            entity.Property(e => e.StopLoss).HasColumnName("stop_loss").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.Target).HasColumnName("target").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.ATRAtEntry).HasColumnName("atr_at_entry").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.OptionSymbol).HasColumnName("option_symbol").HasMaxLength(100);
+            entity.Property(e => e.OptionStrike).HasColumnName("option_strike").HasPrecision(18, 4);
+            entity.Property(e => e.OptionEntryPrice).HasColumnName("option_entry_price").HasPrecision(18, 4);
+            entity.Property(e => e.OptionExitPrice).HasColumnName("option_exit_price").HasPrecision(18, 4);
+            entity.Property(e => e.EntryReason).HasColumnName("entry_reason").IsRequired();
+            entity.Property(e => e.ExitReason).HasColumnName("exit_reason");
+            entity.Property(e => e.Direction).HasColumnName("direction").IsRequired().HasMaxLength(10);
+            entity.Property(e => e.State).HasColumnName("state").IsRequired().HasMaxLength(20);
+            entity.Property(e => e.PnL).HasColumnName("pnl").HasPrecision(18, 4);
+            entity.Property(e => e.PnLPercent).HasColumnName("pnl_percent").HasPrecision(18, 4);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(e => e.InstrumentId).HasDatabaseName("idx_trades_instrument");
+            entity.HasIndex(e => e.EntryTime).HasDatabaseName("idx_trades_entry_time");
+            entity.HasIndex(e => e.State).HasDatabaseName("idx_trades_state");
+
+            entity.HasOne(e => e.Instrument)
+                .WithMany()
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<ScanSnapshot>(e =>
+        // ScanSnapshots
+        modelBuilder.Entity<ScanSnapshot>(entity =>
         {
-            e.ToTable("scan_snapshots");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.InstrumentKey).HasColumnName("instrument_key").IsRequired();
-            e.Property(x => x.Timestamp).HasColumnName("timestamp");
-            e.Property(x => x.MarketState).HasColumnName("market_state");
-            e.Property(x => x.SetupScore).HasColumnName("setup_score");
-            e.Property(x => x.Bias).HasColumnName("bias");
-            e.Property(x => x.AdxScore).HasColumnName("adx_score");
-            e.Property(x => x.RsiScore).HasColumnName("rsi_score");
-            e.Property(x => x.EmaVwapScore).HasColumnName("ema_vwap_score");
-            e.Property(x => x.VolumeScore).HasColumnName("volume_score");
-            e.Property(x => x.BollingerScore).HasColumnName("bollinger_score");
-            e.Property(x => x.StructureScore).HasColumnName("structure_score");
-            e.Property(x => x.LastClose).HasColumnName("last_close").HasPrecision(18, 4);
-            e.Property(x => x.ATR).HasColumnName("atr").HasPrecision(18, 4);
-            e.Property(x => x.CreatedAt).HasColumnName("created_at");
-            e.HasIndex(x => new { x.InstrumentKey, x.Timestamp });
+            entity.ToTable("scan_snapshots");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            entity.Property(e => e.Timestamp).HasColumnName("timestamp");
+            entity.Property(e => e.MarketState).HasColumnName("market_state").IsRequired().HasMaxLength(30);
+            entity.Property(e => e.SetupScore).HasColumnName("setup_score");
+            entity.Property(e => e.Bias).HasColumnName("bias").HasMaxLength(10);
+            entity.Property(e => e.AdxScore).HasColumnName("adx_score");
+            entity.Property(e => e.RsiScore).HasColumnName("rsi_score");
+            entity.Property(e => e.EmaVwapScore).HasColumnName("ema_vwap_score");
+            entity.Property(e => e.VolumeScore).HasColumnName("volume_score");
+            entity.Property(e => e.BollingerScore).HasColumnName("bollinger_score");
+            entity.Property(e => e.StructureScore).HasColumnName("structure_score");
+            entity.Property(e => e.LastClose).HasColumnName("last_close").HasPrecision(18, 4);
+            entity.Property(e => e.ATR).HasColumnName("atr").HasPrecision(18, 4);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
+
+            entity.HasIndex(e => new { e.InstrumentId, e.Timestamp }).HasDatabaseName("idx_scan_snapshots_lookup");
+            entity.HasIndex(e => new { e.SetupScore, e.Timestamp }).HasDatabaseName("idx_scan_snapshots_score");
+            entity.HasIndex(e => e.InstrumentId).HasDatabaseName("idx_scan_snapshots_instrument");
+
+            entity.HasOne(e => e.Instrument)
+                .WithMany()
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<Recommendation>(e =>
+        // Recommendations
+        modelBuilder.Entity<Recommendation>(entity =>
         {
-            e.ToTable("recommendations");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.InstrumentKey).HasColumnName("instrument_key").IsRequired();
-            e.Property(x => x.Timestamp).HasColumnName("timestamp");
-            e.Property(x => x.Direction).HasColumnName("direction");
-            e.Property(x => x.EntryPrice).HasColumnName("entry_price").HasPrecision(18, 4);
-            e.Property(x => x.StopLoss).HasColumnName("stop_loss").HasPrecision(18, 4);
-            e.Property(x => x.Target).HasColumnName("target").HasPrecision(18, 4);
-            e.Property(x => x.RiskRewardRatio).HasColumnName("risk_reward_ratio").HasPrecision(18, 4);
-            e.Property(x => x.Confidence).HasColumnName("confidence");
-            e.Property(x => x.OptionType).HasColumnName("option_type");
-            e.Property(x => x.OptionStrike).HasColumnName("option_strike").HasPrecision(18, 4);
-            e.Property(x => x.ExplanationText).HasColumnName("explanation_text");
-            e.Property(x => x.ReasoningPoints).HasColumnName("reasoning_points")
-                .HasColumnType("jsonb");
-            e.Property(x => x.IsActive).HasColumnName("is_active");
-            e.Property(x => x.CreatedAt).HasColumnName("created_at");
-            e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
-            e.HasIndex(x => new { x.InstrumentKey, x.IsActive });
+            entity.ToTable("recommendations");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            entity.Property(e => e.Timestamp).HasColumnName("timestamp");
+            entity.Property(e => e.Direction).HasColumnName("direction").IsRequired().HasMaxLength(10);
+            entity.Property(e => e.EntryPrice).HasColumnName("entry_price").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.StopLoss).HasColumnName("stop_loss").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.Target).HasColumnName("target").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.RiskRewardRatio).HasColumnName("risk_reward_ratio").HasPrecision(8, 2);
+            entity.Property(e => e.Confidence).HasColumnName("confidence");
+            entity.Property(e => e.OptionType).HasColumnName("option_type").HasMaxLength(10);
+            entity.Property(e => e.OptionStrike).HasColumnName("option_strike").HasPrecision(18, 4);
+            entity.Property(e => e.ExplanationText).HasColumnName("explanation_text");
+            entity.Property(e => e.ReasoningPoints).HasColumnName("reasoning_points")
+            .HasColumnType("jsonb")
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+            );
+            entity.Property(e => e.IsActive).HasColumnName("is_active");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
+            entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");
+
+            entity.HasIndex(e => new { e.InstrumentId, e.Timestamp }).HasDatabaseName("idx_recommendations_instrument");
+            entity.HasIndex(e => new { e.IsActive, e.Timestamp }).HasDatabaseName("idx_recommendations_active");
+            entity.HasIndex(e => new { e.Confidence, e.Timestamp }).HasDatabaseName("idx_recommendations_confidence");
+
+            entity.HasOne(e => e.Instrument)
+                .WithMany()
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<UserProfile>(e =>
+        // UserProfiles
+        modelBuilder.Entity<UserProfile>(entity =>
         {
-            e.ToTable("user_profiles");
-            e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.UserId).HasColumnName("user_id").IsRequired();
-            e.Property(x => x.UpstoxAccessToken).HasColumnName("upstox_access_token");
-            e.Property(x => x.UpstoxRefreshToken).HasColumnName("upstox_refresh_token");
-            e.Property(x => x.TokenIssuedAt).HasColumnName("token_issued_at");
-            e.Property(x => x.CreatedOn).HasColumnName("created_on");
-            e.Property(x => x.UpdatedOn).HasColumnName("updated_on");
-            e.HasIndex(x => x.UserId).IsUnique();
+            entity.ToTable("user_profiles");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.UserId).HasColumnName("user_id").IsRequired().HasMaxLength(100);
+            entity.Property(e => e.UpstoxAccessToken).HasColumnName("upstox_access_token");
+            entity.Property(e => e.UpstoxRefreshToken).HasColumnName("upstox_refresh_token");
+            entity.Property(e => e.TokenIssuedAt).HasColumnName("token_issued_at");
+            entity.Property(e => e.CreatedOn).HasColumnName("created_on").IsRequired();
+            entity.Property(e => e.UpdatedOn).HasColumnName("updated_on").IsRequired();
+
+            entity.HasIndex(e => e.UserId).IsUnique().HasDatabaseName("idx_user_profiles_user_id");
+            entity.HasIndex(e => e.UpdatedOn).HasDatabaseName("idx_user_profiles_updated_on");
         });
     }
 }

@@ -84,7 +84,7 @@ public class IndicatorEngine
             BollingerLower = _bollingerBands.LowerBand,
             BollingerWidth = _bollingerBands.BandWidth,
             VWAP = _vwap.Value,
-            Timestamp = candle.Timestamp
+            Timestamp = candle.Timestamp.ToUniversalTime()
         };
     }
 }
