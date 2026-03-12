@@ -27,4 +27,10 @@ public class ScanService : IScanService
             .OrderByDescending(s => s.SetupScore)
             .Take(limit)
             .ToListAsync();
+
+    public async Task<ScanSnapshot?> GetLatestSnapshotAsync(int instrumentId)
+        => await _db.ScanSnapshots
+            .Where(s => s.InstrumentId == instrumentId)
+            .OrderByDescending(s => s.Timestamp)
+            .FirstOrDefaultAsync();
 }
