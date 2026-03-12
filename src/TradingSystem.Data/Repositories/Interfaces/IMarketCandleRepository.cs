@@ -28,8 +28,13 @@ public interface IMarketCandleRepository : ICommonRepository<MarketCandle>
         CancellationToken cancellationToken = default);
 }
 
-public class DateRange
+public class DateRange : IEquatable<DateRange>
 {
     public DateTime FromDate { get; set; }
     public DateTime ToDate { get; set; }
+
+    public bool Equals(DateRange? other)
+    {
+        throw new NotImplementedException();
+    }
 }

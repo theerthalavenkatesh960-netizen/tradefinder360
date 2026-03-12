@@ -54,8 +54,111 @@ public class TradeRecommendationService
             // Log the error (not implemented here)
             Console.WriteLine($"Error saving recommendation: {ex.Message}");
         }
-        //await PersistAsync(recommendation);
+        await PersistAsync(recommendation);
         return recommendation;
+    }
+
+    /// <summary>
+    /// Generate recommendations for all active instruments based on user criteria
+    /// </summary>
+    public async Task<List<Recommendation>> GenerateRecommendationsAsync(
+        decimal targetReturnPercentage,
+        decimal riskTolerance,
+        decimal minRiskRewardRatio,
+        int timeframeMinutes = 15)
+    {
+        var recommendations = new List<Recommendation>();
+        
+        // Get all active instruments
+        var instruments = await _instrumentService.GetActiveAsync();
+        
+        if (!instruments.Any())
+            return recommendations;
+
+        // Scan each instrument
+        foreach (var instrument in instruments)
+        {
+            try
+            {
+                // Get candles for the instrument
+                var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes);
+                if (candles.Count < 50) 
+                    continue;
+
+                // Get latest indicators
+                var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframeMinutes);
+                if (latestIndicator == null) 
+                    continue;
+
+                var indicators = MapToIndicatorValues(latestIndicator);
+                var scanResult = _scorer.Score(instrument, indicators, candles);
+
+                // Filter based on setup score
+                if (scanResult.SetupScore < 50 || scanResult.Bias == ScanBias.NONE)
+                    continue;
+
+                // Build recommendation
+                var recommendation = BuildRecommendation(instrument, indicators, scanResult, candles);
+
+                // Apply user filters
+                if (!MeetsUserCriteria(recommendation, targetReturnPercentage, riskTolerance, minRiskRewardRatio))
+                    continue;
+
+                // Save to database
+                try
+                {
+                    await PersistAsync(recommendation);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error saving recommendation for {instrument.Symbol}: {ex.Message}");
+                }
+
+                recommendations.Add(recommendation);
+            }
+            catch (Exception ex)
+            {
+                // Log and continue with next instrument
+                Console.WriteLine($"Error processing instrument {instrument.Symbol}: {ex.Message}");
+            }
+        }
+
+        // Sort by confidence and risk-reward ratio
+        return recommendations
+            .OrderByDescending(r => r.Confidence)
+            .ThenByDescending(r => r.RiskRewardRatio)
+            .ToList();
+    }
+
+    private bool MeetsUserCriteria(
+        Recommendation recommendation,
+        decimal targetReturnPercentage,
+        decimal riskTolerance,
+        decimal minRiskRewardRatio)
+    {
+        // Check minimum risk-reward ratio
+        if (recommendation.RiskRewardRatio < minRiskRewardRatio)
+            return false;
+
+        // Calculate expected return percentage
+        var expectedReturn = recommendation.Direction == "BUY"
+            ? ((recommendation.Target - recommendation.EntryPrice) / recommendation.EntryPrice) * 100
+            : ((recommendation.EntryPrice - recommendation.Target) / recommendation.EntryPrice) * 100;
+
+        // Check if expected return meets or exceeds target
+        if (expectedReturn < targetReturnPercentage)
+            return false;
+
+        // Calculate risk percentage
+        var risk = recommendation.Direction == "BUY"
+            ? ((recommendation.EntryPrice - recommendation.StopLoss) / recommendation.EntryPrice) * 100
+            : ((recommendation.StopLoss - recommendation.EntryPrice) / recommendation.EntryPrice) * 100;
+
+        // Check if risk is within tolerance
+        if (risk > riskTolerance)
+            return false;
+
+        return true;
     }
 
     public async Task<List<Recommendation>> GetActiveRecommendationsAsync()
@@ -172,7 +275,6 @@ public class TradeRecommendationService
     }
 
     private async Task PersistAsync(Recommendation recommendation)
-
         => await _recommendationService.SaveAsync(recommendation);
 
     private static decimal RoundToStrike(decimal price, decimal tickSize)
