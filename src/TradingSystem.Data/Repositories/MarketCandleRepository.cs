@@ -32,6 +32,76 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         return await AggregateToTimeframeAsync(instrumentId, timeframeMinutes, fromDate, toDate, cancellationToken);
     }
 
+    public async Task<List<DateRange>> GetMissingDataRangesAsync(
+        int instrumentId,
+        DateTime fromDate,
+        DateTime toDate,
+        CancellationToken cancellationToken = default)
+    {
+        var missingRanges = new List<DateRange>();
+        
+        // Get all dates that have data
+        var datesWithData = await _dbSet
+            .Where(c => c.InstrumentId == instrumentId 
+                     && c.TimeframeMinutes == 1
+                     && c.Timestamp >= fromDate
+                     && c.Timestamp <= toDate)
+            .Select(c => c.Timestamp.Date)
+            .Distinct()
+            .OrderBy(d => d)
+            .ToListAsync(cancellationToken);
+
+        if (!datesWithData.Any())
+        {
+            // No data at all, entire range is missing
+            missingRanges.Add(new DateRange 
+            { 
+                FromDate = fromDate, 
+                ToDate = toDate 
+            });
+            return missingRanges;
+        }
+
+        // Check for gaps at the beginning
+        if (datesWithData.First().Date > fromDate.Date)
+        {
+            missingRanges.Add(new DateRange
+            {
+                FromDate = fromDate,
+                ToDate = datesWithData.First().AddDays(-1)
+            });
+        }
+
+        // Check for gaps in the middle
+        for (int i = 0; i < datesWithData.Count - 1; i++)
+        {
+            var currentDate = datesWithData[i];
+            var nextDate = datesWithData[i + 1];
+            var daysDiff = (nextDate - currentDate).Days;
+
+            if (daysDiff > 1)
+            {
+                missingRanges.Add(new DateRange
+                {
+                    FromDate = currentDate.AddDays(1),
+                    ToDate = nextDate.AddDays(-1)
+                });
+            }
+        }
+
+        // Check for gaps at the end
+        if (datesWithData.Last().Date < toDate.Date)
+        {
+            missingRanges.Add(new DateRange
+            {
+                FromDate = datesWithData.Last().AddDays(1),
+                ToDate = toDate
+            });
+        }
+
+        return missingRanges;
+    }
+
     private async Task<IReadOnlyList<MarketCandle>> GetOneMinuteCandlesAsync(
         int instrumentId,
         DateTime fromDate,

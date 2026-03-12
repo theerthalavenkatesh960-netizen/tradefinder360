@@ -19,4 +19,17 @@ public interface IMarketCandleRepository : ICommonRepository<MarketCandle>
     Task<int> BulkUpsertAsync(
         IEnumerable<MarketCandle> candles,
         CancellationToken cancellationToken = default);
+
+    // New method to get date ranges with missing data
+    Task<List<DateRange>> GetMissingDataRangesAsync(
+        int instrumentId,
+        DateTime fromDate,
+        DateTime toDate,
+        CancellationToken cancellationToken = default);
+}
+
+public class DateRange
+{
+    public DateTime FromDate { get; set; }
+    public DateTime ToDate { get; set; }
 }
