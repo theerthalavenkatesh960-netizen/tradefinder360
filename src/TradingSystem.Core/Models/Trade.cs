@@ -22,8 +22,8 @@ public class Trade
     public TradeDirection Direction { get; set; }
     public TradeState State { get; set; }
 
-    public decimal SpotEntryPrice { get; set; }
-    public decimal? SpotExitPrice { get; set; }
+    public decimal EntryPrice { get; set; }  // was SpotEntryPrice
+    public decimal? ExitPrice { get; set; }  // was SpotExitPrice
 
     public string OptionSymbol { get; set; } = string.Empty;
     public decimal OptionStrike { get; set; }

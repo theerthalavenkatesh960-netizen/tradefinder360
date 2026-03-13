@@ -26,4 +26,19 @@ public class TradeRecord
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
     public TradingInstrument? Instrument { get; set; }
+
+    // Store indicators as JSON
+    public string? EntryIndicatorsJson { get; set; }
+    public string? ExitIndicatorsJson { get; set; }
+
+    [NotMapped]
+    public Dictionary<string, decimal>? EntryIndicators
+    {
+        get => string.IsNullOrEmpty(EntryIndicatorsJson)
+            ? null
+            : JsonSerializer.Deserialize<Dictionary<string, decimal>>(EntryIndicatorsJson);
+        set => EntryIndicatorsJson = value == null
+            ? null
+            : JsonSerializer.Serialize(value);
+    }
 }
