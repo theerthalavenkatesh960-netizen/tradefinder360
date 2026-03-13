@@ -58,9 +58,15 @@ builder.Services.AddScoped<IUserProfileService, UserProfileService>();
 builder.Services.AddScoped<IMarketSentimentService, MarketSentimentService>();
 builder.Services.AddScoped<TradingSystem.Upstox.Services.IUpstoxTokenProvider, UpstoxTokenProvider>();
 
-// AI Services
+// AI Services - Basic ML
 builder.Services.AddSingleton<TradePredictionService>();
 builder.Services.AddScoped<AIRecommendationService>();
+
+// AI Services - Advanced Alpha Model
+builder.Services.AddScoped<MetaFactorService>();
+builder.Services.AddScoped<MarketRegimeService>();
+builder.Services.AddScoped<AIAlphaModelService>();
+builder.Services.AddScoped<RegimeBasedPortfolioOptimizer>();
 
 var scannerConfig = new ScannerConfig();
 builder.Configuration.GetSection("Scanner").Bind(scannerConfig);
