@@ -2,6 +2,14 @@
 
 A comprehensive, production-ready **intraday options trading algorithm** built in **.NET Core 8.0**. This system implements a robust trend-pullback strategy for NIFTY options with complete modularity, risk management, and observability.
 
+## TradeFinder360 🚀
+
+> **AI-Powered Algorithmic Trading System with Self-Learning Capabilities**
+
+TradeFinder360 is an enterprise-grade algorithmic trading platform that combines traditional technical analysis with cutting-edge machine learning to generate high-probability trade signals. The system features continuous learning, adaptive market regime detection, and automated model retraining.
+
+---
+
 ## Architecture Overview
 
 This trading system follows a **multi-layered, modular architecture** designed for professional trading applications:
@@ -186,11 +194,18 @@ TradingSystem/
   - Risk checks
   - Trade P&L
 
+### 9. AI-Powered Features (TradeFinder360)
+- **AI Alpha Model**: Generates high-probability trade signals using machine learning.
+- **Market Regime Detection**: Identifies various market states for better decision-making.
+- **Continuous Learning**: The system adapts and improves over time based on trade outcomes.
+- **Portfolio Optimization**: Dynamic allocation based on market conditions and risk.
+
 ## Setup Instructions
 
 ### Prerequisites
 - **.NET 8.0 SDK**
 - **Supabase account** (free tier works)
+- **Upstox trading account** (for live trading)
 
 ### 1. Clone and Build
 
@@ -227,12 +242,37 @@ Edit `src/TradingSystem.Engine/appsettings.json`:
 }
 ```
 
-### 4. Run the System
+### 4. Configure Upstox API
+
+Edit `src/TradingSystem.Api/appsettings.json`:
+
+```json
+{
+  "Upstox": {
+    "ApiKey": "your-api-key",
+    "ApiSecret": "your-api-secret",
+    "RedirectUri": "http://localhost:5000/callback"
+  }
+}
+```
+
+### 5. Run Database Migrations
+
+```bash
+cd src/TradingSystem.Data
+dotnet ef database update
+```
+
+### 6. Run the System
 
 ```bash
 cd src/TradingSystem.Engine
 dotnet run
 ```
+
+### 7. Access Swagger UI
+
+Navigate to: `http://localhost:5000`
 
 ## Configuration Guide
 
@@ -401,8 +441,18 @@ For issues, enhancements, or integration questions, refer to the modular archite
 
 ---
 
-**Built with:** .NET Core 8.0 | Serilog | Supabase | PostgreSQL
+## TradeFinder360 Features
 
-**Strategy Type:** Trend Pullback | ATR-based Risk Management
+### AI-Powered Features
+- **AI Alpha Model**: Generates high-probability trade signals using machine learning.
+- **Market Regime Detection**: Identifies various market states for better decision-making.
+- **Continuous Learning**: The system adapts and improves over time based on trade outcomes.
+- **Portfolio Optimization**: Dynamic allocation based on market conditions and risk.
+
+---
+
+**Built with:** .NET Core 8.0 | Serilog | Supabase | PostgreSQL | ML.NET
+
+**Strategy Type:** Trend Pullback | ATR-based Risk Management | AI-Powered Trading
 
 **Target Market:** NIFTY Options (easily adaptable to other markets)
