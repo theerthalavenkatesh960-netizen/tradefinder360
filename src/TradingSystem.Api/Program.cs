@@ -6,6 +6,7 @@ using TradingSystem.Data.Services;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
+using TradingSystem.Scanner.Services;
 using TradingSystem.Upstox;
 using TradingSystem.Upstox.Models;
 
@@ -90,6 +91,9 @@ builder.Services.AddScoped<SetupScoringService>();
 builder.Services.AddScoped<MarketScannerService>();
 builder.Services.AddScoped<TradeRecommendationService>();
 builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
+builder.Services.AddScoped<StrategyService>();
+builder.Services.AddScoped<IStrategySignalRepository, StrategySignalRepository>();
+builder.Services.AddScoped<IStrategyPerformanceRepository, StrategyPerformanceRepository>();
 
 var app = builder.Build();
 
