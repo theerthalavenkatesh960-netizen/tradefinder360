@@ -43,11 +43,22 @@ builder.Services.AddDbContext<TradingDbContext>(options =>
         });
 });
 
+// Core Repositories
 builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<>));
 builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
 builder.Services.AddScoped<IInstrumentPriceRepository, InstrumentPriceRepository>();
 builder.Services.AddScoped<ISectorRepository, SectorRepository>();
+builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
+builder.Services.AddScoped<IStrategySignalRepository, StrategySignalRepository>();
+builder.Services.AddScoped<IStrategyPerformanceRepository, StrategyPerformanceRepository>();
+builder.Services.AddScoped<IMarketSentimentRepository, MarketSentimentRepository>();
 
+// AI Repositories
+builder.Services.AddScoped<IFeatureStoreRepository, FeatureStoreRepository>();
+builder.Services.AddScoped<ITradeOutcomeRepository, TradeOutcomeRepository>();
+builder.Services.AddScoped<IAIModelVersionRepository, AIModelVersionRepository>();
+
+// Core Services
 builder.Services.AddScoped<IInstrumentService, InstrumentService>();
 builder.Services.AddScoped<ICandleService, CandleService>();
 builder.Services.AddScoped<IIndicatorService, IndicatorService>();
@@ -68,6 +79,28 @@ builder.Services.AddScoped<MarketRegimeService>();
 builder.Services.AddScoped<AIAlphaModelService>();
 builder.Services.AddScoped<RegimeBasedPortfolioOptimizer>();
 
+// AI Services - Self-Learning System
+builder.Services.AddScoped<TradeOutcomeService>();
+builder.Services.AddScoped<ModelTrainingPipeline>();
+builder.Services.AddScoped<ModelPerformanceMonitor>();
+builder.Services.AddScoped<ReinforcementLearningService>();
+
+// Scanner Services
+builder.Services.AddScoped<SetupScoringService>();
+builder.Services.AddScoped<MarketScannerService>();
+builder.Services.AddScoped<TradeRecommendationService>();
+builder.Services.AddScoped<StrategyService>();
+builder.Services.AddScoped<BacktestingService>();
+builder.Services.AddScoped<PortfolioOptimizationService>();
+
+// Event Bus
+builder.Services.AddSingleton<IEventBus, InMemoryEventBus>();
+
+// Feature Engineering & Storage
+builder.Services.AddScoped<FeatureEngineeringService>();
+builder.Services.AddScoped<TrainingDatasetService>();
+
+// Configuration
 var scannerConfig = new ScannerConfig();
 builder.Configuration.GetSection("Scanner").Bind(scannerConfig);
 builder.Services.AddSingleton(scannerConfig);
@@ -100,25 +133,6 @@ builder.Services.AddScoped<UpstoxClient>(sp =>
 
     return client;
 });
-
-builder.Services.AddScoped<SetupScoringService>();
-builder.Services.AddScoped<MarketScannerService>();
-builder.Services.AddScoped<TradeRecommendationService>();
-builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
-builder.Services.AddScoped<StrategyService>();
-builder.Services.AddScoped<BacktestingService>();
-builder.Services.AddScoped<PortfolioOptimizationService>();
-builder.Services.AddScoped<IStrategySignalRepository, StrategySignalRepository>();
-builder.Services.AddScoped<IStrategyPerformanceRepository, StrategyPerformanceRepository>();
-builder.Services.AddScoped<IMarketSentimentRepository, MarketSentimentRepository>();
-
-// Event Bus
-builder.Services.AddSingleton<IEventBus, InMemoryEventBus>();
-
-// Feature Engineering & Storage
-builder.Services.AddScoped<IFeatureStoreRepository, FeatureStoreRepository>();
-builder.Services.AddScoped<FeatureEngineeringService>();
-builder.Services.AddScoped<TrainingDatasetService>();
 
 var app = builder.Build();
 
