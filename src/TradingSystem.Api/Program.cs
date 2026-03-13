@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using TradingSystem.AI.Services;
 using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
 using TradingSystem.Data.Repositories.Interfaces;
@@ -17,7 +18,8 @@ builder.Services.AddControllers()
     {
         options.JsonSerializerOptions.Converters.Add(
             new System.Text.Json.Serialization.JsonStringEnumConverter());
-    });;
+    });
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -54,6 +56,10 @@ builder.Services.AddScoped<IRecommendationService, RecommendationService>();
 builder.Services.AddScoped<IUserProfileService, UserProfileService>();
 builder.Services.AddScoped<IMarketSentimentService, MarketSentimentService>();
 builder.Services.AddScoped<TradingSystem.Upstox.Services.IUpstoxTokenProvider, UpstoxTokenProvider>();
+
+// AI Services
+builder.Services.AddSingleton<TradePredictionService>();
+builder.Services.AddScoped<AIRecommendationService>();
 
 var scannerConfig = new ScannerConfig();
 builder.Configuration.GetSection("Scanner").Bind(scannerConfig);
