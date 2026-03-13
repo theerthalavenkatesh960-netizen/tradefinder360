@@ -4,6 +4,7 @@ using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
+using TradingSystem.Data.Repositories.Interfaces;
 
 namespace TradingSystem.Api.Controllers;
 
@@ -15,17 +16,20 @@ public class InstrumentController : ControllerBase
     private readonly IIndicatorService _indicatorService;
     private readonly MarketScannerService _scanner;
     private readonly TradeRecommendationService _recommender;
+    private readonly IInstrumentPriceRepository _priceRepository;
 
     public InstrumentController(
         IInstrumentService instrumentService,
         IIndicatorService indicatorService,
         MarketScannerService scanner,
-        TradeRecommendationService recommender)
+        TradeRecommendationService recommender,
+        IInstrumentPriceRepository priceRepository)
     {
         _instrumentService = instrumentService;
         _indicatorService = indicatorService;
         _scanner = scanner;
         _recommender = recommender;
+        _priceRepository = priceRepository;
     }
 
     [HttpGet("{symbol}/analysis")]
@@ -194,6 +198,123 @@ public class InstrumentController : ControllerBase
         });
     }
     
+
+    // helper used by multiple endpoints to construct DTO from a trading instrument
+    private async Task<InstrumentDto> BuildInstrumentDtoAsync(TradingSystem.Core.Models.TradingInstrument instrument, string priceTimeframe, int scanTimeframe)
+    {
+        var dto = new InstrumentDto
+        {
+            Id = instrument.Id,
+            Name = instrument.Name,
+            Symbol = instrument.Symbol,
+            Exchange = instrument.Exchange
+        };
+
+        // latest price
+        var latestPrice = await _priceRepository.GetLatestPriceAsync(instrument.Id, priceTimeframe);
+        if (latestPrice != null)
+        {
+            dto.Price = latestPrice.Close;
+            dto.Volume = latestPrice.Volume;
+            dto.Change = latestPrice.Close - latestPrice.Open;
+            dto.ChangePercent = latestPrice.Open != 0
+                ? Math.Round((dto.Change.Value / latestPrice.Open) * 100, 2)
+                : 0;
+        }
+
+        // scan for trend/bias
+        var scanResult = await _scanner.ScanInstrumentAsync(instrument, scanTimeframe);
+        if (scanResult != null)
+        {
+            dto.Trend = scanResult.Bias.ToString().ToLower();
+        }
+
+        // recommendation info
+        var recommendation = await _recommender.GetLatestForInstrumentAsync(instrument.Id);
+        if (recommendation != null)
+        {
+            dto.EntryPrice = recommendation.EntryPrice;
+            dto.ExitPrice = recommendation.Target;
+            dto.StopLoss = recommendation.StopLoss;
+            dto.Confidence = recommendation.Confidence;
+            if (recommendation.EntryPrice > 0)
+            {
+                dto.ExpectedProfit = Math.Round(((recommendation.Target - recommendation.EntryPrice) / recommendation.EntryPrice) * 100, 2);
+            }
+        }
+
+        return dto;
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<List<InstrumentDto>>> GetAllInstruments(
+        [FromQuery] string priceTimeframe = "1D",
+        [FromQuery] int scanTimeframe = 15)
+    {
+        var instruments = await _instrumentService.GetActiveAsync();
+        if (!instruments.Any())
+            return Ok(new List<InstrumentDto>());
+
+        // optionally fetch prices in bulk to avoid n+1
+        var ids = instruments.Select(i => i.Id);
+        var priceMap = await _priceRepository.GetLatestPricesForInstrumentsAsync(ids, priceTimeframe);
+        var dtoTasks = instruments.Select(async inst =>
+        {
+            var dto = new InstrumentDto
+            {
+                Id = inst.Id,
+                Name = inst.Name,
+                Symbol = inst.Symbol,
+                Exchange = inst.Exchange
+            };
+
+            if (priceMap.TryGetValue(inst.Id, out var price))
+            {
+                dto.Price = price.Close;
+                dto.Volume = price.Volume;
+                dto.Change = price.Close - price.Open;
+                dto.ChangePercent = price.Open != 0
+                    ? Math.Round(((price.Close - price.Open) / price.Open) * 100, 2)
+                    : 0;
+            }
+
+            var scanResult = await _scanner.ScanInstrumentAsync(inst, scanTimeframe);
+            if (scanResult != null)
+                dto.Trend = scanResult.Bias.ToString().ToLower();
+
+            var recommendation = await _recommender.GetLatestForInstrumentAsync(inst.Id);
+            if (recommendation != null)
+            {
+                dto.EntryPrice = recommendation.EntryPrice;
+                dto.ExitPrice = recommendation.Target;
+                dto.StopLoss = recommendation.StopLoss;
+                dto.Confidence = recommendation.Confidence;
+                if (recommendation.EntryPrice > 0)
+                {
+                    dto.ExpectedProfit = Math.Round(((recommendation.Target - recommendation.EntryPrice) / recommendation.EntryPrice) * 100, 2);
+                }
+            }
+
+            return dto;
+        });
+
+        var dtos = await Task.WhenAll(dtoTasks);
+        return Ok(dtos);
+    }
+
+    [HttpGet("{symbol}")]
+    public async Task<ActionResult<InstrumentDto>> GetInstrument(
+        string symbol,
+        [FromQuery] string priceTimeframe = "1D",
+        [FromQuery] int scanTimeframe = 15)
+    {
+        var instrument = await _instrumentService.GetBySymbolAsync(symbol);
+        if (instrument == null)
+            return NotFound($"Instrument '{symbol}' not found.");
+
+        var dto = await BuildInstrumentDtoAsync(instrument, priceTimeframe, scanTimeframe);
+        return Ok(dto);
+    }
 
     [HttpPost("sectors")]
     public async Task<ActionResult<List<Sector>>> GetSectors()

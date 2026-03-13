@@ -171,7 +171,8 @@ public class CsvSeedService
                 .Where(x => x != null)
                 .GroupBy(x => x!.InstrumentKey, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First()!)
-                .ToList().Take(2).ToList();
+                .Where(x => x.Exchange == "NSE")
+                .ToList().ToList();
 
             _logger.LogInformation("Parsed {Count} unique instruments from CSV", csvInstruments.Count);
 

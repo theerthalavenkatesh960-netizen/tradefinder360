@@ -11,19 +11,22 @@ namespace TradingSystem.WorkerService.Jobs;
 public class IndicatorSnapshotsUpdateJob : IJob
 {
     private readonly IInstrumentRepository _instrumentRepository;
-    private readonly IMarketCandleRepository _candleRepository;
+    //private readonly IMarketCandleRepository _candleRepository;
     private readonly IIndicatorService _indicatorService;
     private readonly ILogger<IndicatorSnapshotsUpdateJob> _logger;
+    private readonly ICandleService _candleService;
 
     public IndicatorSnapshotsUpdateJob(
         IInstrumentRepository instrumentRepository,
         IMarketCandleRepository candleRepository,
+        ICandleService candleService,
         IIndicatorService indicatorService,
         ILogger<IndicatorSnapshotsUpdateJob> logger)
     {
         _instrumentRepository = instrumentRepository;
-        _candleRepository = candleRepository;
+        //_candleRepository = candleRepository;
         _indicatorService = indicatorService;
+        _candleService = candleService;
         _logger = logger;
     }
 
@@ -61,25 +64,22 @@ public class IndicatorSnapshotsUpdateJob : IJob
                         timeframeMinutes);
 
                     var fromDate = latestSnapshot?.Timestamp.DateTime.AddMinutes(timeframeMinutes) 
-                        ?? DateTime.UtcNow.AddDays(-7);
+                        ?? DateTime.UtcNow.AddMonths(-3);
                     var toDate = DateTime.UtcNow;
 
                     // Fetch candles for this instrument
-                    var marketCandles = await _candleRepository.GetByInstrumentIdAsync(
+                    var candles = await _candleService.GetCandlesAsync(
                         instrument.Id,
                         timeframeMinutes,
                         fromDate,
-                        toDate,
-                        context.CancellationToken);
+                        toDate
+                        );
 
-                    if (!marketCandles.Any())
+                    if (!candles.Any())
                     {
                         _logger.LogDebug("No new candles found for {InstrumentKey}", instrument.InstrumentKey);
                         continue;
                     }
-
-                    // Convert to Candle objects
-                    var candles = marketCandles.Select(mc => mc.ToCandle()).OrderBy(c => c.Timestamp).ToList();
 
                     // Need minimum candles for indicator calculation
                     if (candles.Count < 50)

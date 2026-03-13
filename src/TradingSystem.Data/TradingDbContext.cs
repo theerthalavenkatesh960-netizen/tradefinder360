@@ -15,6 +15,7 @@ public class TradingDbContext : DbContext
     public DbSet<ScanSnapshot> ScanSnapshots { get; set; } = null!;
     public DbSet<Recommendation> Recommendations { get; set; } = null!;
     public DbSet<UserProfile> UserProfiles { get; set; } = null!;
+    public DbSet<MarketSentiment> MarketSentiments { get; set; } = null!;
 
     public TradingDbContext(DbContextOptions<TradingDbContext> options) 
         : base(options)
@@ -294,6 +295,38 @@ public class TradingDbContext : DbContext
 
             entity.HasIndex(e => e.UserId).IsUnique().HasDatabaseName("idx_user_profiles_user_id");
             entity.HasIndex(e => e.UpdatedOn).HasDatabaseName("idx_user_profiles_updated_on");
+        });
+
+        // MarketSentiments
+        modelBuilder.Entity<MarketSentiment>(entity =>
+        {
+            entity.ToTable("market_sentiments");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.Timestamp).HasColumnName("timestamp").IsRequired();
+            entity.Property(e => e.Sentiment).HasColumnName("sentiment").IsRequired()
+                .HasConversion<int>(); // Store enum as int
+            entity.Property(e => e.SentimentScore).HasColumnName("sentiment_score").IsRequired()
+                .HasPrecision(18, 2);
+            entity.Property(e => e.VolatilityIndex).HasColumnName("volatility_index").IsRequired()
+                .HasPrecision(18, 2);
+            entity.Property(e => e.MarketBreadth).HasColumnName("market_breadth").IsRequired()
+                .HasPrecision(18, 4);
+            entity.Property(e => e.IndexPerformance).HasColumnName("index_performance").IsRequired()
+                .HasColumnType("nvarchar(max)");
+            entity.Property(e => e.SectorPerformance).HasColumnName("sector_performance").IsRequired()
+                .HasColumnType("nvarchar(max)");
+            entity.Property(e => e.KeyFactors).HasColumnName("key_factors")
+                .HasColumnType("nvarchar(max)")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+                );
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+
+            entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_market_sentiments_timestamp");
+            entity.HasIndex(e => e.Sentiment).HasDatabaseName("idx_market_sentiments_sentiment");
+            entity.HasIndex(e => e.CreatedAt).HasDatabaseName("idx_market_sentiments_created_at");
         });
     }
 }
