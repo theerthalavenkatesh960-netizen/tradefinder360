@@ -1,3 +1,6 @@
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json;
+
 namespace TradingSystem.Core.Models;
 
 public class TradeRecord

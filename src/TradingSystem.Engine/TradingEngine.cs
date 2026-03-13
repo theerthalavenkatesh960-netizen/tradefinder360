@@ -190,7 +190,7 @@ public class TradingEngine
                 EntryTime = DateTime.Now,
                 Direction = entrySignal.Direction,
                 State = TradeState.IN_TRADE,
-                SpotEntryPrice = entrySignal.EntryPrice,
+                EntryPrice = entrySignal.EntryPrice,
                 OptionSymbol = option.Symbol,
                 OptionStrike = option.Strike,
                 OptionEntryPrice = option.LastPrice,

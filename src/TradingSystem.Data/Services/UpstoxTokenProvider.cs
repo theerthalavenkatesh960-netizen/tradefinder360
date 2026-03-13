@@ -24,7 +24,8 @@ public class UpstoxTokenProvider : IUpstoxTokenProvider
             return profile;
         }
         catch (Exception ex)
-        {                           
+        {              
+            Console.WriteLine($"Error fetching access token: {ex.Message}");             
             return null;
         }
     }

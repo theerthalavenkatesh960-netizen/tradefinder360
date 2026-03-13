@@ -84,7 +84,7 @@ public class UpstoxClient
             }
             catch (HttpRequestException ex) when (retry < _config.MaxRetries - 1)
             {
-
+                Console.WriteLine($"HTTP error fetching candles (attempt {retry + 1}): {ex.Message}");
                 await Task.Delay(_config.RetryDelayMs * (retry + 1));
             }
         }
@@ -256,6 +256,7 @@ public class UpstoxClient
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"Error parsing candle data: {ex.Message}");
                 continue;
             }
         }

@@ -173,7 +173,7 @@ public class TradeOutcomeService
             tags.Add("LOW_ACCURACY");
 
         // Performance tags
-        if (outcome.IsSuccessful == true && outcome.ActualReturn.Value > (decimal)outcome.PredictedReturn * 1.5m)
+        if (outcome.IsSuccessful == true && (outcome.ActualReturn ?? 0m) > (decimal)outcome.PredictedReturn * 1.5m)
             tags.Add("OUTPERFORMED");
         else if (outcome.IsSuccessful == false && outcome.PredictedReturn > 5)
             tags.Add("FALSE_POSITIVE");
