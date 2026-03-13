@@ -105,6 +105,14 @@ builder.Services.AddScoped<IStrategySignalRepository, StrategySignalRepository>(
 builder.Services.AddScoped<IStrategyPerformanceRepository, StrategyPerformanceRepository>();
 builder.Services.AddScoped<IMarketSentimentRepository, MarketSentimentRepository>();
 
+// Event Bus
+builder.Services.AddSingleton<IEventBus, InMemoryEventBus>();
+
+// Feature Engineering & Storage
+builder.Services.AddScoped<IFeatureStoreRepository, FeatureStoreRepository>();
+builder.Services.AddScoped<FeatureEngineeringService>();
+builder.Services.AddScoped<TrainingDatasetService>();
+
 var app = builder.Build();
 
 app.UseExceptionHandler("/error");
