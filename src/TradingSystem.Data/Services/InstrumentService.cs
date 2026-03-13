@@ -16,6 +16,8 @@ public class InstrumentService : IInstrumentService
         _sectorRepository = sectorRepository;
     }
 
+    public async Task<TradingInstrument?> GetByIdAsync(int id)
+        => await _repository.GetByIdAsync(id);
     public async Task<TradingInstrument?> GetByKeyAsync(string instrumentKey)
         => await _repository.GetByInstrumentKeyAsync(instrumentKey);
     

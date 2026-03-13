@@ -48,7 +48,7 @@ public class SectorPerformance
     public string SectorName { get; set; } = string.Empty;
     public decimal ChangePercent { get; set; }
     public int StocksAdvancing { get; set; }
-    public int Stocksdeclining { get; set; }
+    public int StocksDeclining { get; set; }
     public decimal RelativeStrength { get; set; }
 }
 

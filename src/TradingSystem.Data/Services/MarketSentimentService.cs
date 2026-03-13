@@ -270,7 +270,7 @@ public class MarketSentimentService : IMarketSentimentService
                             SectorName = sector.Name,
                             ChangePercent = avgChange,
                             StocksAdvancing = advancing,
-                            Stocksdeclining = declining,
+                            StocksDeclining = declining,
                             RelativeStrength = relativeStrength
                         });
 

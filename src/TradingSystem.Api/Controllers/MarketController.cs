@@ -63,7 +63,7 @@ public class MarketController : ControllerBase
                     Name = s.SectorName,
                     ChangePercent = s.ChangePercent,
                     StocksAdvancing = s.StocksAdvancing,
-                    StocksDeclining = s.StocksDecling,
+                    StocksDeclining = s.StocksDeclining,
                     RelativeStrength = s.RelativeStrength,
                     Performance = GetPerformanceCategory(s.ChangePercent)
                 }).ToList(),
@@ -123,7 +123,7 @@ public class MarketController : ControllerBase
                     Name = s.SectorName,
                     ChangePercent = s.ChangePercent,
                     StocksAdvancing = s.StocksAdvancing,
-                    StocksDeclining = s.StocksDecling,
+                    StocksDeclining = s.StocksDeclining,
                     RelativeStrength = s.RelativeStrength,
                     Performance = GetPerformanceCategory(s.ChangePercent)
                 }).ToList(),

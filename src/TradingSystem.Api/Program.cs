@@ -92,6 +92,7 @@ builder.Services.AddScoped<MarketScannerService>();
 builder.Services.AddScoped<TradeRecommendationService>();
 builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
 builder.Services.AddScoped<StrategyService>();
+builder.Services.AddScoped<BacktestingService>();
 builder.Services.AddScoped<IStrategySignalRepository, StrategySignalRepository>();
 builder.Services.AddScoped<IStrategyPerformanceRepository, StrategyPerformanceRepository>();
 
