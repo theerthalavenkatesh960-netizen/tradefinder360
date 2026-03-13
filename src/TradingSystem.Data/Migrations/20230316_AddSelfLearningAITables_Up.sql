@@ -1,5 +1,6 @@
 -- =============================================
--- Migration: Add Self-Learning AI System Tables (Improved)
+-- Migration: Add Self-Learning AI System Tables
+-- Date: 2023-03-16
 -- =============================================
 
 -- ==========================================================
@@ -46,7 +47,7 @@ CREATE TABLE IF NOT EXISTS trade_outcomes (
     strategy VARCHAR(50),
     sector VARCHAR(100),
 
-    status VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -60,7 +61,7 @@ CREATE TABLE IF NOT EXISTS trade_outcomes (
         CHECK (direction IN ('BUY','SELL')),
 
     CONSTRAINT CK_trade_outcomes_status
-        CHECK (status IN ('OPEN','CLOSED','FAILED')),
+        CHECK (status IN ('OPEN','CLOSED','STOPPED_OUT','TARGET_HIT')),
 
     CONSTRAINT CK_trade_outcomes_probability
         CHECK (predicted_success_probability >= 0 AND predicted_success_probability <= 1),
@@ -85,7 +86,6 @@ ON trade_outcomes(status);
 CREATE INDEX IF NOT EXISTS idx_trade_outcomes_regime_success
 ON trade_outcomes(market_regime_at_entry, is_successful);
 
--- ML querying
 CREATE INDEX IF NOT EXISTS idx_trade_outcomes_symbol_time
 ON trade_outcomes(symbol, entry_time DESC);
 
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS ai_model_versions (
 
     total_pnl NUMERIC(18,4) DEFAULT 0,
 
-    status VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'TRAINING',
     is_active BOOLEAN DEFAULT FALSE,
 
     deprecation_reason TEXT,
@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS ai_model_versions (
     CONSTRAINT UQ_ai_model_versions UNIQUE (version, model_type),
 
     CONSTRAINT CK_ai_model_versions_status
-        CHECK (status IN ('TRAINING','VALIDATED','PRODUCTION','DEPRECATED'))
+        CHECK (status IN ('TRAINING','TESTING','PRODUCTION','DEPRECATED'))
 );
 
 -- Indexes

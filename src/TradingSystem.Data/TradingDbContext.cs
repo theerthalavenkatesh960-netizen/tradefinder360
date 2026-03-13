@@ -182,7 +182,7 @@ public class TradingDbContext : DbContext
         {
             entity.ToTable("trades");
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
             entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
             entity.Property(e => e.TradeType).HasColumnName("trade_type").IsRequired().HasMaxLength(20);
             entity.Property(e => e.EntryTime).HasColumnName("entry_time").IsRequired();

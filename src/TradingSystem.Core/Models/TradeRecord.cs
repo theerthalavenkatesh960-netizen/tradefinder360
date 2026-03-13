@@ -2,7 +2,7 @@ namespace TradingSystem.Core.Models;
 
 public class TradeRecord
 {
-    public Guid Id { get; set; }
+    public long Id { get; set; }
     public int InstrumentId { get; set; }
     public string TradeType { get; set; } = string.Empty;
     public DateTime EntryTime { get; set; }
