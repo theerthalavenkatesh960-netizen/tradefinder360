@@ -1,4 +1,4 @@
-namespace TradingSystem.AI.Models;
+namespace TradingSystem.Core.Models;
 
 /// <summary>
 /// Training dataset record with features and labels

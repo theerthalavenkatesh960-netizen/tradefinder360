@@ -1,4 +1,4 @@
-﻿using TradingSystem.AI.Models;
+﻿using TradingSystem.Core.Models;
 
 namespace TradingSystem.Data.Repositories.Interfaces;
 

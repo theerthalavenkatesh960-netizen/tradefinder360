@@ -1,7 +1,7 @@
 ﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using TradingSystem.AI.Models;
+using TradingSystem.Core.Models;
 using TradingSystem.Data.Repositories.Interfaces;
 
 namespace TradingSystem.Data.Repositories;
