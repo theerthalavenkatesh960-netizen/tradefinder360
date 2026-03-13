@@ -6,7 +6,7 @@
 public class MarketDataEvent : IEvent
 {
     public DateTimeOffset Timestamp { get; init; }
-    public string EventId { get; init; } = Guid.NewGuid().ToString();
+    public long EventId { get; init; }
     public int InstrumentId { get; init; }
     public string Symbol { get; init; } = string.Empty;
     public decimal Price { get; init; }

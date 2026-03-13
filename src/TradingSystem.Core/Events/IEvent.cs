@@ -6,5 +6,5 @@
 public interface IEvent
 {
     DateTimeOffset Timestamp { get; }
-    string EventId { get; }
+    long EventId { get; }
 }

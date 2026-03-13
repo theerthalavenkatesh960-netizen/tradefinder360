@@ -42,7 +42,6 @@ public class UserProfileService : IUserProfileService
         {
             var user = new UserProfile
             {
-                Id = Guid.NewGuid(),
                 UserId = userId,
                 UpstoxAccessToken = tokenResponse.AccessToken,
                 UpstoxRefreshToken = tokenResponse.RefreshToken,

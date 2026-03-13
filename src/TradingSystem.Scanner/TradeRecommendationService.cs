@@ -202,7 +202,6 @@ public class TradeRecommendationService
 
         return new Recommendation
         {
-            Id = Guid.NewGuid(),
             InstrumentId = instrument.Id,
             Timestamp = DateTimeOffset.UtcNow,
             Direction = direction,

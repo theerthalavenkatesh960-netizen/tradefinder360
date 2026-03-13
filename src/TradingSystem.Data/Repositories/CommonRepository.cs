@@ -25,11 +25,6 @@ public class CommonRepository<T> : ICommonRepository<T> where T : class
         return await _dbSet.FindAsync(new object[] { id }, cancellationToken);
     }
 
-    public virtual async Task<T?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
-    {
-        return await _dbSet.FindAsync(new object[] { id }, cancellationToken);
-    }
-
     public virtual async Task<T?> FirstOrDefaultAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
     {
         return await _dbSet.FirstOrDefaultAsync(predicate, cancellationToken);

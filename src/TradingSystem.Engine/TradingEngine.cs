@@ -187,7 +187,6 @@ public class TradingEngine
         {
             var trade = new Trade
             {
-                Id = Guid.NewGuid(),
                 EntryTime = DateTime.Now,
                 Direction = entrySignal.Direction,
                 State = TradeState.IN_TRADE,
