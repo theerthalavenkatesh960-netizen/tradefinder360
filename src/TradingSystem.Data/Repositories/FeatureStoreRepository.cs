@@ -3,18 +3,24 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Repositories.Interfaces;
+using TradingSystem.Data.Services.Interfaces;
 
 namespace TradingSystem.Data.Repositories;
 
 public class FeatureStoreRepository : IFeatureStoreRepository
 {
     private readonly TradingDbContext _context;
+    private readonly ICandleService _candleService;
     private readonly ILogger<FeatureStoreRepository> _logger;
     private const string FEATURE_VERSION = "1.0";
 
-    public FeatureStoreRepository(TradingDbContext context, ILogger<FeatureStoreRepository> logger)
+    public FeatureStoreRepository(
+        TradingDbContext context,
+        ICandleService candleService,
+        ILogger<FeatureStoreRepository> logger)
     {
         _context = context;
+        _candleService = candleService;
         _logger = logger;
     }
 
@@ -179,24 +185,42 @@ public class FeatureStoreRepository : IFeatureStoreRepository
         DateTimeOffset endDate,
         CancellationToken cancellationToken)
     {
-        // Assuming you have a candles table
-        var candles = await _context.Set<TradingSystem.Core.Models.Candle>()
-            .Where(c => c.InstrumentId == instrumentId
-                     && c.Timestamp >= startDate
-                     && c.Timestamp <= endDate)
-            .OrderBy(c => c.Timestamp)
-            .Select(c => new { c.Timestamp, c.Close })
-            .ToListAsync(cancellationToken);
+        // Use ICandleService to fetch candles (15-minute timeframe for daily data)
+        var fromDateTime = startDate.DateTime;
+        var toDateTime = endDate.DateTime;
+        
+        // Calculate days back to fetch
+        var daysBack = (int)Math.Ceiling((toDateTime - fromDateTime).TotalDays) + 1;
+        
+        // Fetch candles using the service
+        var candles = await _candleService.GetCandlesAsync(
+            instrumentId,
+            375, // Daily candles (375 minutes = 1 trading day)
+            fromDateTime,
+            toDateTime);
 
-        return candles.Select(c => (c.Timestamp, c.Close)).ToList();
+        if (!candles.Any())
+        {
+            _logger.LogWarning("No candle data found for instrument {InstrumentId} between {Start} and {End}",
+                instrumentId, startDate, endDate);
+        }
+
+        return candles
+            .OrderBy(c => c.Timestamp)
+            .Select(c => (c.Timestamp, c.Close))
+            .ToList();
     }
 
     private decimal? GetPriceAtTimestamp(List<(DateTimeOffset Timestamp, decimal Price)> prices, DateTimeOffset timestamp)
     {
-        return prices
+        if (!prices.Any())
+            return null;
+
+        var closest = prices
             .OrderBy(p => Math.Abs((p.Timestamp - timestamp).Ticks))
-            .FirstOrDefault()
-            .Price;
+            .FirstOrDefault();
+
+        return closest.Price == 0 ? null : closest.Price;
     }
 
     private float CalculateReturn(List<(DateTimeOffset Timestamp, decimal Price)> prices, DateTimeOffset startTime, int days)

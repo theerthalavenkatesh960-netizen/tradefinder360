@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using TradingSystem.AI.Models;
 using TradingSystem.Core.Events;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Repositories.Interfaces;
@@ -181,15 +180,27 @@ public class FeatureEngineeringService
         if (indicators != null)
         {
             vector.ATR_14 = (float)indicators.ATR;
-            vector.Bollinger_Width = (float)indicators.BollingerWidth;
+            
+            // Calculate Bollinger Width from BollingerUpper and BollingerLower
+            var bollingerWidth = indicators.BollingerUpper - indicators.BollingerLower;
+            vector.Bollinger_Width = (float)bollingerWidth;
+            
             vector.ATR_Percent = (float)(indicators.ATR / candles.Last().Close * 100);
 
             var currentPrice = (float)candles.Last().Close;
             var bollLower = (float)indicators.BollingerLower;
             var bollUpper = (float)indicators.BollingerUpper;
+            
+            // Calculate Bollinger Band %B (position within bands)
             vector.Bollinger_Position = bollUpper > bollLower 
                 ? (currentPrice - bollLower) / (bollUpper - bollLower) 
                 : 0.5f;
+            
+            // Calculate Bollinger BandWidth Ratio (normalized)
+            var bollMiddle = (float)indicators.BollingerMiddle;
+            vector.Bollinger_BandWidth_Ratio = bollMiddle > 0 
+                ? (float)bollingerWidth / bollMiddle 
+                : 0f;
         }
 
         vector.Historical_Volatility_10D = CalculateHistoricalVolatility(candles, 10);
@@ -241,6 +252,9 @@ public class FeatureEngineeringService
         }
 
         vector.Overbought_Oversold_Score = CalculateOverboughtOversoldScore(vector.RSI_14, vector.Bollinger_Position);
+        
+        // Calculate Bollinger Squeeze (low volatility condition)
+        vector.Bollinger_Squeeze = vector.Bollinger_BandWidth_Ratio < 0.05f ? 1f : 0f;
     }
 
     // ========== MARKET & MACRO FACTORS ==========

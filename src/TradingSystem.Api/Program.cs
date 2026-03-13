@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TradingSystem.AI.Services;
+using TradingSystem.Core.Events;
 using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
 using TradingSystem.Data.Repositories.Interfaces;
