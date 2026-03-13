@@ -52,6 +52,7 @@ builder.Services.AddScoped<ITradeService, TradeService>();
 builder.Services.AddScoped<IScanService, ScanService>();
 builder.Services.AddScoped<IRecommendationService, RecommendationService>();
 builder.Services.AddScoped<IUserProfileService, UserProfileService>();
+builder.Services.AddScoped<IMarketSentimentService, MarketSentimentService>();
 builder.Services.AddScoped<TradingSystem.Upstox.Services.IUpstoxTokenProvider, UpstoxTokenProvider>();
 
 var scannerConfig = new ScannerConfig();
@@ -93,8 +94,10 @@ builder.Services.AddScoped<TradeRecommendationService>();
 builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
 builder.Services.AddScoped<StrategyService>();
 builder.Services.AddScoped<BacktestingService>();
+builder.Services.AddScoped<PortfolioOptimizationService>();
 builder.Services.AddScoped<IStrategySignalRepository, StrategySignalRepository>();
 builder.Services.AddScoped<IStrategyPerformanceRepository, StrategyPerformanceRepository>();
+builder.Services.AddScoped<IMarketSentimentRepository, MarketSentimentRepository>();
 
 var app = builder.Build();
 
