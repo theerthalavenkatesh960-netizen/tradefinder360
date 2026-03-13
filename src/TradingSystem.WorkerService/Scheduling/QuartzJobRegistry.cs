@@ -16,7 +16,7 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(DailyPriceUpdateJob),
-                    "0 */2 * 1 * ?",        // Every 2 minutes
+                    "0 30 16 ? * MON-FRI",        // Every 2 minutes
                     TimeZoneInfo.Utc
                 ),
 
@@ -28,13 +28,19 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(IndicatorSnapshotsUpdateJob),
-                    "0 */2 * * * ?",       // Every 10 minutes (after candles are loaded)
+                    "0 */10 * 1 * ?",       // Every 10 minutes (after candles are loaded)
                     TimeZoneInfo.Utc
                 ),
 
                 new JobSchedule(
                     typeof(PartitionMaintenanceJob),
                     "0 0 2 28 * ?",         // 2:00 AM on the 28th of every month
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                new JobSchedule(
+                    typeof(MarketSentimentUpdateJob),
+                    "0 */15 9-15 ? * MON-FRI", // Every 15 min, 9 AM-3 PM, Mon-Fri
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 )
             };

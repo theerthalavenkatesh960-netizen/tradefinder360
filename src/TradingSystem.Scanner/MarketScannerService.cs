@@ -53,6 +53,15 @@ public class MarketScannerService
 
     public async Task<ScanResult?> ScanInstrumentAsync(TradingInstrument instrument, int timeframeMinutes = 15)
     {
+        // Check if a recent scan already exists for this instrument
+        var lastScan = await _scanService.GetLatestSnapshotAsync(instrument.Id);
+        
+        // If a scan exists and it's from the same trading day, return the cached result
+        if (lastScan != null && IsSameTradeDay(lastScan.Timestamp))
+        {
+            return MapSnapshotToResult(lastScan);
+        }
+
         var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes);
 
         if (candles.Count < 50)
@@ -74,6 +83,86 @@ public class MarketScannerService
         var result = _scorer.Score(instrument, indicators, candles);
         await PersistScanResultAsync(result);
         return result;
+    }
+
+    /// <summary>
+    /// Checks if the given timestamp is from the same trading day as today.
+    /// Assumes trading occurs Mon-Fri; if today is Monday, considers Friday as same trading day.
+    /// </summary>
+    private static bool IsSameTradeDay(DateTime lastScanTime)
+    {
+        var now = DateTime.UtcNow.Date;
+        var lastScanDate = lastScanTime.Date;
+
+        // If it's the same calendar date, definitely same trading day
+        if (now == lastScanDate)
+            return true;
+
+        // If today is before last scan date, it's a different trading day
+        if (now < lastScanDate)
+            return false;
+
+        // Calculate the difference in days
+        var daysDiff = (now - lastScanDate).TotalDays;
+
+        // If less than 1 day apart and within same trading week, check the actual trading days
+        if (daysDiff < 1)
+            return true;
+
+        // If it's a weekend and last scan was Friday, still same trading session (market hasn't opened)
+        if (IsWeekendMarketClosed(now, lastScanDate))
+            return true;
+
+        // Different trading day
+        return false;
+    }
+
+    /// <summary>
+    /// Determines if the market is still closed between two dates (e.g., weekend or holiday gap).
+    /// </summary>
+    private static bool IsWeekendMarketClosed(DateTime now, DateTime lastScanDate)
+    {
+        // If now is Monday/Tuesday/Wednesday/Thursday/Friday and last scan was earlier in the week
+        var nowDayOfWeek = now.DayOfWeek;
+        var lastDayOfWeek = lastScanDate.DayOfWeek;
+
+        // If last scan was on Friday and today is Monday, it's a new trading day
+        if (lastDayOfWeek == DayOfWeek.Friday && nowDayOfWeek == DayOfWeek.Monday)
+            return false;
+
+        // If both are within Mon-Fri, check if crossed weekend
+        if (lastDayOfWeek <= DayOfWeek.Friday && nowDayOfWeek > lastDayOfWeek)
+            return false; // Moved to a later trading day
+
+        return true;
+    }
+
+    /// <summary>
+    /// Maps a ScanSnapshot database record back to a ScanResult for caching purposes.
+    /// </summary>
+    private static ScanResult MapSnapshotToResult(ScanSnapshot snapshot)
+    {
+        return new ScanResult
+        {
+            InstrumentId = snapshot.InstrumentId,
+            Symbol = string.Empty, // Will be populated by caller if needed
+            Exchange = string.Empty,
+            MarketState = Enum.TryParse<ScanMarketState>(snapshot.MarketState, out var ms) ? ms : ScanMarketState.SIDEWAYS,
+            SetupScore = snapshot.SetupScore,
+            Bias = Enum.TryParse<ScanBias>(snapshot.Bias, out var bias) ? bias : ScanBias.NONE,
+            LastClose = snapshot.LastClose,
+            ATR = snapshot.ATR,
+            ScannedAt = snapshot.Timestamp,
+            ScoreBreakdown = new ScoreBreakdown
+            {
+                AdxScore = snapshot.AdxScore,
+                RsiScore = snapshot.RsiScore,
+                EmaVwapScore = snapshot.EmaVwapScore,
+                VolumeScore = snapshot.VolumeScore,
+                BollingerScore = snapshot.BollingerScore,
+                StructureScore = snapshot.StructureScore
+            }
+        };
     }
 
     public async Task<List<ScanResult>> GetTopSetups(int minScore = 70, int limit = 10)

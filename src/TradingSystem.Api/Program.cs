@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using TradingSystem.AI.Services;
 using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
 using TradingSystem.Data.Repositories.Interfaces;
@@ -6,6 +7,7 @@ using TradingSystem.Data.Services;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
+using TradingSystem.Scanner.Services;
 using TradingSystem.Upstox;
 using TradingSystem.Upstox.Models;
 
@@ -16,7 +18,8 @@ builder.Services.AddControllers()
     {
         options.JsonSerializerOptions.Converters.Add(
             new System.Text.Json.Serialization.JsonStringEnumConverter());
-    });;
+    });
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -51,7 +54,12 @@ builder.Services.AddScoped<ITradeService, TradeService>();
 builder.Services.AddScoped<IScanService, ScanService>();
 builder.Services.AddScoped<IRecommendationService, RecommendationService>();
 builder.Services.AddScoped<IUserProfileService, UserProfileService>();
+builder.Services.AddScoped<IMarketSentimentService, MarketSentimentService>();
 builder.Services.AddScoped<TradingSystem.Upstox.Services.IUpstoxTokenProvider, UpstoxTokenProvider>();
+
+// AI Services
+builder.Services.AddSingleton<TradePredictionService>();
+builder.Services.AddScoped<AIRecommendationService>();
 
 var scannerConfig = new ScannerConfig();
 builder.Configuration.GetSection("Scanner").Bind(scannerConfig);
@@ -90,6 +98,12 @@ builder.Services.AddScoped<SetupScoringService>();
 builder.Services.AddScoped<MarketScannerService>();
 builder.Services.AddScoped<TradeRecommendationService>();
 builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
+builder.Services.AddScoped<StrategyService>();
+builder.Services.AddScoped<BacktestingService>();
+builder.Services.AddScoped<PortfolioOptimizationService>();
+builder.Services.AddScoped<IStrategySignalRepository, StrategySignalRepository>();
+builder.Services.AddScoped<IStrategyPerformanceRepository, StrategyPerformanceRepository>();
+builder.Services.AddScoped<IMarketSentimentRepository, MarketSentimentRepository>();
 
 var app = builder.Build();
 
