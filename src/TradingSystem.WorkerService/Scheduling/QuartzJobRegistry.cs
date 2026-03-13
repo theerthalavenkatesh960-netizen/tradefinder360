@@ -36,6 +36,12 @@ namespace TradingSystem.WorkerService.Scheduling
                     typeof(PartitionMaintenanceJob),
                     "0 0 2 28 * ?",         // 2:00 AM on the 28th of every month
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                new JobSchedule(
+                    typeof(MarketSentimentUpdateJob),
+                    "0 */15 9-15 ? * MON-FRI", // Every 15 min, 9 AM-3 PM, Mon-Fri
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 )
             };
         }

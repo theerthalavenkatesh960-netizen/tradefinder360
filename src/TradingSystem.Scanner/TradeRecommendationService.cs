@@ -11,6 +11,7 @@ public class TradeRecommendationService
     private readonly ICandleService _candleService;
     private readonly IIndicatorService _indicatorService;
     private readonly IRecommendationService _recommendationService;
+    private readonly IMarketSentimentService _marketSentimentService;
     private readonly SetupScoringService _scorer;
 
     public TradeRecommendationService(
@@ -18,12 +19,14 @@ public class TradeRecommendationService
         ICandleService candleService,
         IIndicatorService indicatorService,
         IRecommendationService recommendationService,
+        IMarketSentimentService marketSentimentService,
         SetupScoringService scorer)
     {
         _instrumentService = instrumentService;
         _candleService = candleService;
         _indicatorService = indicatorService;
         _recommendationService = recommendationService;
+        _marketSentimentService = marketSentimentService;
         _scorer = scorer;
     }
 
@@ -44,7 +47,7 @@ public class TradeRecommendationService
         if (scanResult.SetupScore < 50 || scanResult.Bias == ScanBias.NONE)
             return null;
 
-        var recommendation = BuildRecommendation(instrument, indicators, scanResult, candles);
+        var recommendation = await BuildRecommendationWithSentiment(instrument, indicators, scanResult, candles);
         try 
         {
             await PersistAsync(recommendation);
@@ -98,7 +101,7 @@ public class TradeRecommendationService
                     continue;
 
                 // Build recommendation
-                var recommendation = BuildRecommendation(instrument, indicators, scanResult, candles);
+                var recommendation = await BuildRecommendationWithSentiment(instrument, indicators, scanResult, candles);
 
                 // Apply user filters
                 if (!MeetsUserCriteria(recommendation, targetReturnPercentage, riskTolerance, minRiskRewardRatio))
@@ -216,6 +219,47 @@ public class TradeRecommendationService
             CreatedAt = DateTimeOffset.UtcNow,
             ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(60)
         };
+    }
+
+    private async Task<Recommendation> BuildRecommendationWithSentiment(
+        TradingInstrument instrument,
+        IndicatorValues indicators,
+        ScanResult scanResult,
+        List<Candle> candles)
+    {
+        var recommendation = BuildRecommendation(instrument, indicators, scanResult, candles);
+        
+        // Adjust confidence based on market sentiment
+        recommendation.Confidence = await AdjustConfidenceForMarketSentiment(recommendation.Confidence);
+        
+        // Add market sentiment to explanation
+        try
+        {
+            var marketContext = await _marketSentimentService.GetCurrentMarketContextAsync();
+            recommendation.ReasoningPoints.Add(
+                $"Market Sentiment: {marketContext.Sentiment} (adjusted confidence)");
+        }
+        catch
+        {
+            // Ignore if market sentiment unavailable
+        }
+        
+        return recommendation;
+    }
+
+    private async Task<int> AdjustConfidenceForMarketSentiment(int baseConfidence)
+    {
+        try
+        {
+            var marketContext = await _marketSentimentService.GetCurrentMarketContextAsync();
+            return (int)_marketSentimentService.AdjustConfidenceForMarketSentiment(
+                baseConfidence, 
+                marketContext.Sentiment);
+        }
+        catch
+        {
+            return baseConfidence; // Return original if sentiment unavailable
+        }
     }
 
     private List<string> BuildReasoningPoints(ScanResult scan, IndicatorValues ind, bool bullish)
