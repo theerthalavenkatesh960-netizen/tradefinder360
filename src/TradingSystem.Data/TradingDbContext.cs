@@ -16,6 +16,7 @@ public class TradingDbContext : DbContext
     public DbSet<Recommendation> Recommendations { get; set; } = null!;
     public DbSet<UserProfile> UserProfiles { get; set; } = null!;
     public DbSet<MarketSentiment> MarketSentiments { get; set; } = null!;
+    public DbSet<FeatureStore> FeatureStore { get; set; } = null!;
 
     public TradingDbContext(DbContextOptions<TradingDbContext> options) 
         : base(options)
@@ -327,6 +328,36 @@ public class TradingDbContext : DbContext
             entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_market_sentiments_timestamp");
             entity.HasIndex(e => e.Sentiment).HasDatabaseName("idx_market_sentiments_sentiment");
             entity.HasIndex(e => e.CreatedAt).HasDatabaseName("idx_market_sentiments_created_at");
+        });
+
+        // FeatureStore - ML Feature Storage
+        modelBuilder.Entity<FeatureStore>(entity =>
+        {
+            entity.ToTable("feature_store");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            entity.Property(e => e.Symbol).HasColumnName("symbol").IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Timestamp).HasColumnName("timestamp").IsRequired();
+            entity.Property(e => e.FeaturesJson).HasColumnName("features_json").IsRequired()
+                .HasColumnType("jsonb"); // PostgreSQL JSONB for efficient querying
+            entity.Property(e => e.FeatureCount).HasColumnName("feature_count").IsRequired();
+            entity.Property(e => e.FeatureVersion).HasColumnName("feature_version").IsRequired()
+                .HasMaxLength(20);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+
+            // Indexes for fast lookups
+            entity.HasIndex(e => new { e.InstrumentId, e.Timestamp })
+                .HasDatabaseName("idx_feature_store_instrument_time");
+            entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_feature_store_timestamp");
+            entity.HasIndex(e => e.Symbol).HasDatabaseName("idx_feature_store_symbol");
+            entity.HasIndex(e => e.FeatureVersion).HasDatabaseName("idx_feature_store_version");
+
+            // Foreign key relationship
+            entity.HasOne(e => e.Instrument)
+                .WithMany()
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

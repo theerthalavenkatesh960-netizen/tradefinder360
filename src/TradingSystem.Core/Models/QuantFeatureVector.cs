@@ -1,4 +1,4 @@
-namespace TradingSystem.Core.Models;
+namespace TradingSystem.Core.Models;    
 
 /// <summary>
 /// Comprehensive feature vector with 120+ quantitative factors
