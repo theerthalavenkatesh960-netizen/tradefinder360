@@ -121,7 +121,7 @@ public class UpstoxClient
 
                 var price = new InstrumentPrice
                 {
-                    Timestamp = quoteData.Timestamp == default ? DateTimeOffset.UtcNow : quoteData.Timestamp.ToUniversalTime(),
+                    Timestamp = !string.IsNullOrEmpty(quoteData.Last_Trade_Time) ? DateTimeOffset.FromUnixTimeMilliseconds(long.Parse(quoteData.Last_Trade_Time)).ToUniversalTime() : DateTimeOffset.UtcNow,
                     Open = quoteData.Ohlc.Open,
                     High = quoteData.Ohlc.High,
                     Low = quoteData.Ohlc.Low,

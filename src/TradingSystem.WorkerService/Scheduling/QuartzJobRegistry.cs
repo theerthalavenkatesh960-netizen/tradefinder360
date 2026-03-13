@@ -16,7 +16,7 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(DailyPriceUpdateJob),
-                    "0 30 16 ? * MON-FRI",        // Every 2 minutes
+                    "0 */2 * * * ?",        // Every 2 minutes
                     TimeZoneInfo.Utc
                 ),
 
