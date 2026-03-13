@@ -119,9 +119,35 @@ public class UpstoxClient
                 if (string.IsNullOrEmpty(instrumentToken))
                     continue;
 
+                // Parse Unix timestamp properly
+                DateTimeOffset timestamp;
+                if (!string.IsNullOrEmpty(quoteData.Last_Trade_Time) &&
+                    long.TryParse(quoteData.Last_Trade_Time, out var unixMilliseconds))
+                {
+                    try
+                    {
+                        // Convert Unix milliseconds to DateTimeOffset in UTC
+                        timestamp = DateTimeOffset.FromUnixTimeMilliseconds(unixMilliseconds);
+
+                        // Ensure it's in UTC
+                        timestamp = timestamp.ToUniversalTime();
+                    }
+                    catch (ArgumentOutOfRangeException ex)
+                    {
+                        Console.WriteLine("Invalid Unix timestamp for instrument {InstrumentToken}: {Timestamp}. Using current UTC time.",ex);
+                        timestamp = DateTimeOffset.UtcNow;
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("Missing or invalid Last_Trade_Time for instrument {InstrumentToken}: '{Timestamp}'. Using current UTC time.",
+                        instrumentToken, quoteData.Last_Trade_Time ?? "null");
+                    timestamp = DateTimeOffset.UtcNow;
+                }
+
                 var price = new InstrumentPrice
                 {
-                    Timestamp = !string.IsNullOrEmpty(quoteData.Last_Trade_Time) ? DateTimeOffset.FromUnixTimeMilliseconds(long.Parse(quoteData.Last_Trade_Time)).ToUniversalTime() : DateTimeOffset.UtcNow,
+                    Timestamp = timestamp,
                     Open = quoteData.Ohlc.Open,
                     High = quoteData.Ohlc.High,
                     Low = quoteData.Ohlc.Low,
@@ -135,8 +161,9 @@ public class UpstoxClient
 
             return quotes;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger?.LogError(ex, "Error fetching quotes for instrument keys: {Keys}", commaSeparatedKeys);
             return new Dictionary<string, InstrumentPrice>();
         }
     }
@@ -240,7 +267,7 @@ public class UpstoxClient
 
             try
             {
-                var timestamp = candle[0].ToString(); 
+                var timestamp = candle[0].ToString();
                 var parsedCandle = new Candle
                 {
                     Timestamp = ((JsonElement)candle[0]).GetDateTimeOffset().UtcDateTime,

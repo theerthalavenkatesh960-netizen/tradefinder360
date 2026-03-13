@@ -123,15 +123,27 @@ public class TradingDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
             entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
-            entity.Property(e => e.Timestamp).HasColumnName("timestamp").IsRequired();
+
+            // Ensure TIMESTAMPTZ type in PostgreSQL
+            entity.Property(e => e.Timestamp)
+                .HasColumnName("timestamp")
+                .HasColumnType("timestamptz")
+                .IsRequired();
+
             entity.Property(e => e.Open).HasColumnName("open").IsRequired().HasPrecision(18, 4);
             entity.Property(e => e.High).HasColumnName("high").IsRequired().HasPrecision(18, 4);
             entity.Property(e => e.Low).HasColumnName("low").IsRequired().HasPrecision(18, 4);
             entity.Property(e => e.Close).HasColumnName("close").IsRequired().HasPrecision(18, 4);
             entity.Property(e => e.Volume).HasColumnName("volume").IsRequired();
             entity.Property(e => e.Timeframe).HasColumnName("timeframe").IsRequired();
-            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
-            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
+
+            entity.Property(e => e.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+
+            entity.Property(e => e.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
 
             entity.HasIndex(e => new { e.InstrumentId, e.Timeframe, e.Timestamp }).IsUnique().HasDatabaseName("idx_instrument_prices_unique");
             entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_instrument_prices_timestamp");
