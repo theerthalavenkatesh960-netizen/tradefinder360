@@ -32,6 +32,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.Api", "src\Tr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.WorkerService", "src\TradingSystem.WorkerService\TradingSystem.WorkerService.csproj", "{360ACA9D-EB67-45FD-B527-C1C36AE29E2D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TradingSystem.AI", "TradingSystem.AI\TradingSystem.AI.csproj", "{8C01F97E-F384-44C0-8F92-E684EE61C975}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -98,6 +100,10 @@ Global
 		{360ACA9D-EB67-45FD-B527-C1C36AE29E2D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{360ACA9D-EB67-45FD-B527-C1C36AE29E2D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{360ACA9D-EB67-45FD-B527-C1C36AE29E2D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8C01F97E-F384-44C0-8F92-E684EE61C975}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8C01F97E-F384-44C0-8F92-E684EE61C975}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8C01F97E-F384-44C0-8F92-E684EE61C975}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8C01F97E-F384-44C0-8F92-E684EE61C975}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
