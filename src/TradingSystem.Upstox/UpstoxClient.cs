@@ -163,7 +163,7 @@ public class UpstoxClient
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Error fetching quotes for instrument keys: {Keys}", commaSeparatedKeys);
+           Console.WriteLine("Error fetching quotes for instrument keys: {Keys}", commaSeparatedKeys, ex);
             return new Dictionary<string, InstrumentPrice>();
         }
     }
