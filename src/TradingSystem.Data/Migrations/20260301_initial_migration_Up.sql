@@ -410,22 +410,30 @@ CREATE INDEX IF NOT EXISTS idx_scan_snapshots_instrument
 ------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS recommendations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
     instrument_id INTEGER NOT NULL,
     timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
     direction VARCHAR(10) NOT NULL,
     entry_price NUMERIC(18,4) NOT NULL,
     stop_loss NUMERIC(18,4) NOT NULL,
     target NUMERIC(18,4) NOT NULL,
+
     risk_reward_ratio NUMERIC(8,2) DEFAULT 0,
     confidence INTEGER DEFAULT 0,
+
     option_type VARCHAR(10),
     option_strike NUMERIC(18,4),
+
     explanation_text TEXT DEFAULT '',
     reasoning_points JSONB DEFAULT '[]',
+
     is_active BOOLEAN DEFAULT true,
+
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMPTZ,
+
     CONSTRAINT fk_recommendations_instrument
         FOREIGN KEY (instrument_id)
         REFERENCES instruments(id)
@@ -433,29 +441,34 @@ CREATE TABLE IF NOT EXISTS recommendations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_recommendations_instrument
-  ON recommendations(instrument_id, timestamp DESC);
+ON recommendations(instrument_id, timestamp DESC);
 
 CREATE INDEX IF NOT EXISTS idx_recommendations_active
-  ON recommendations(is_active, timestamp DESC);
+ON recommendations(is_active, timestamp DESC);
 
 CREATE INDEX IF NOT EXISTS idx_recommendations_confidence
-  ON recommendations(confidence DESC, timestamp DESC);
+ON recommendations(confidence DESC, timestamp DESC);
 
 ------------------------------------------------------------
 -- 9. USER_PROFILES
 ------------------------------------------------------------
-
 CREATE TABLE IF NOT EXISTS user_profiles (
-    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    id BIGINT GENERATED ALWAYS AS IDENTITY NOT NULL,
+
     user_id VARCHAR(100) NOT NULL,
     upstox_access_token TEXT NULL,
     upstox_refresh_token TEXT NULL,
     token_issued_at TIMESTAMPTZ NULL,
+
     created_on TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_on TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+
     CONSTRAINT user_profiles_pkey PRIMARY KEY (id),
     CONSTRAINT user_profiles_user_id_key UNIQUE (user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_on ON user_profiles(updated_on DESC);
-CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_on
+ON user_profiles(updated_on DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id
+ON user_profiles(user_id);

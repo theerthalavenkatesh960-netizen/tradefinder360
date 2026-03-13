@@ -252,7 +252,7 @@ public class TradingDbContext : DbContext
         {
             entity.ToTable("recommendations");
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
             entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
             entity.Property(e => e.Timestamp).HasColumnName("timestamp");
             entity.Property(e => e.Direction).HasColumnName("direction").IsRequired().HasMaxLength(10);
@@ -289,7 +289,7 @@ public class TradingDbContext : DbContext
         {
             entity.ToTable("user_profiles");
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
             entity.Property(e => e.UserId).HasColumnName("user_id").IsRequired().HasMaxLength(100);
             entity.Property(e => e.UpstoxAccessToken).HasColumnName("upstox_access_token");
             entity.Property(e => e.UpstoxRefreshToken).HasColumnName("upstox_refresh_token");

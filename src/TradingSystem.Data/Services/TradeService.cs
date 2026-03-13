@@ -67,6 +67,6 @@ public class TradeService : ITradeService
             .ToListAsync();
     }
 
-    public async Task<TradeRecord?> GetByIdAsync(Guid id)
+    public async Task<TradeRecord?> GetByIdAsync(long id)
         => await _db.Trades.FindAsync(id);
 }

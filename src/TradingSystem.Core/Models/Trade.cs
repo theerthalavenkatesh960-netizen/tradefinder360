@@ -16,7 +16,7 @@ public enum TradeState
 
 public class Trade
 {
-    public Guid Id { get; set; }
+    public long Id { get; set; }
     public DateTime EntryTime { get; set; }
     public DateTime? ExitTime { get; set; }
     public TradeDirection Direction { get; set; }
