@@ -22,15 +22,15 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(MarketCandlesUpdateJob),
-                    "0 */15 * 1 * ?",        // Every 4 minutes
+                    "0 */15 * * * ?",        // Every 4 minutes
                     TimeZoneInfo.Utc
                 ),
 
-                new JobSchedule(
-                    typeof(IntradayCandleUpdateJob),
-                    "0 * 9-15 ? * MON-FRI", // Every minute during market hours (9 AM-3 PM IST, Mon-Fri)
-                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
-                ),
+                //new JobSchedule(
+                //    typeof(IntradayCandleUpdateJob),
+                //    "0 * 9-15 ? * MON-FRI", // Every minute during market hours (9 AM-3 PM IST, Mon-Fri)
+                //    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                //),
 
                 new JobSchedule(
                     typeof(IndicatorSnapshotsUpdateJob),

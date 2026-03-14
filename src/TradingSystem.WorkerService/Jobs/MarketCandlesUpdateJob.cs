@@ -1,47 +1,52 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Quartz;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Repositories.Interfaces;
-using TradingSystem.Upstox.Services;
+using TradingSystem.Upstox;
 
 namespace TradingSystem.WorkerService.Jobs;
 
 /// <summary>
-/// Job to fetch and store market candles for multiple timeframes (1m, 15m, 1d).
+/// Scheduled job to fetch and store market candles for multiple timeframes using Upstox API v3.
 /// Supports tiered partition architecture with automatic routing.
+/// 
+/// Timeframes:
+/// - 1d (1440m): 5 years retention, single API call
+/// - 15m: 1 year retention, 30-day batches
+/// - 1m: 3 months retention, 30-day batches
 /// </summary>
 [DisallowConcurrentExecution]
 public class MarketCandlesUpdateJob : IJob
 {
     private readonly IInstrumentRepository _instrumentRepository;
     private readonly IMarketCandleRepository _candleRepository;
-    private readonly IUpstoxPriceService _upstoxPriceService;
+    private readonly UpstoxClient _upstoxClient;
     private readonly ILogger<MarketCandlesUpdateJob> _logger;
 
-    // Timeframe configurations (interval name, timeframe minutes)
-    private static readonly Dictionary<string, int> TimeframeConfigs = new()
+    // Timeframe configurations using Upstox API v3 format
+    private static readonly List<TimeframeConfig> TimeframeConfigs = new()
     {
-        { "1minute", 1 },
-        { "15minute", 15 },
-        { "1day", 1440 }
+        new("days", 1, 1440, 5, 1825),      // Daily: 5 years, single API call
+        new("minutes", 15, 15, 1, 30),      // 15min: 1 year, 30-day batches
+        new("minutes", 1, 1, 0.25, 30)      // 1min: 3 months, 30-day batches
     };
 
     public MarketCandlesUpdateJob(
         IInstrumentRepository instrumentRepository,
         IMarketCandleRepository candleRepository,
-        IUpstoxPriceService upstoxPriceService,
+        UpstoxClient upstoxClient,
         ILogger<MarketCandlesUpdateJob> logger)
     {
         _instrumentRepository = instrumentRepository;
         _candleRepository = candleRepository;
-        _upstoxPriceService = upstoxPriceService;
+        _upstoxClient = upstoxClient;
         _logger = logger;
     }
 
     public async Task Execute(IJobExecutionContext context)
     {
-        _logger.LogInformation("=== Starting TIERED Market Candles Update Job ===");
-        _logger.LogInformation("Timeframes: 1m, 15m, 1d");
+        _logger.LogInformation("=== Market Candles Update Job Started (API v3) ===");
+        _logger.LogInformation("Timeframes: 1d (5y), 15m (1y), 1m (3mo)");
 
         try
         {
@@ -54,32 +59,25 @@ public class MarketCandlesUpdateJob : IJob
                 return;
             }
 
-            var instrumentKeys = activeInstruments.Select(i => i.InstrumentKey).ToList();
-            var instrumentMap = activeInstruments.ToDictionary(i => i.InstrumentKey, i => i.Id);
-            
-            var toDate = DateTime.UtcNow.Date;
-            
-            // Process each timeframe
-            foreach (var (interval, timeframeMinutes) in TimeframeConfigs)
+            // Process instruments in parallel with controlled concurrency
+            var options = new ParallelOptions
             {
-                var fromDate = CalculateFromDate(timeframeMinutes, toDate);
-                
-                _logger.LogInformation(
-                    "Processing {Timeframe}min candles ({Interval}) from {FromDate} to {ToDate}",
-                    timeframeMinutes,
-                    interval,
-                    fromDate,
-                    toDate);
+                MaxDegreeOfParallelism = 15,
+                CancellationToken = context.CancellationToken
+            };
 
-                await ProcessTimeframeAsync(
-                    instrumentKeys,
-                    instrumentMap,
-                    interval,
-                    timeframeMinutes,
-                    fromDate,
-                    toDate,
-                    context.CancellationToken);
-            }
+            var totalProcessed = 0;
+
+            await Parallel.ForEachAsync(activeInstruments, options, async (instrument, ct) =>
+            {
+                await ProcessInstrumentAsync(instrument, ct);
+                Interlocked.Increment(ref totalProcessed);
+
+                if (totalProcessed % 100 == 0)
+                {
+                    _logger.LogInformation("Progress: {Processed}/{Total} instruments", totalProcessed, activeInstruments.Count);
+                }
+            });
 
             _logger.LogInformation("=== Market Candles Update Job Completed Successfully ===");
         }
@@ -90,101 +88,103 @@ public class MarketCandlesUpdateJob : IJob
         }
     }
 
-    /// <summary>
-    /// Calculate the appropriate from_date based on retention policy.
-    /// </summary>
-    private DateTime CalculateFromDate(int timeframeMinutes, DateTime toDate)
+    private async Task ProcessInstrumentAsync(TradingInstrument instrument, CancellationToken cancellationToken)
     {
-        return timeframeMinutes switch
+        foreach (var config in TimeframeConfigs)
         {
-            1 => toDate.AddDays(-90),      // 1m: 3 months
-            15 => toDate.AddDays(-270),    // 15m: 9 months
-            1440 => toDate.AddDays(-1460), // 1d: 4 years
-            _ => toDate.AddDays(-30)       // Default: 30 days
-        };
+            if (cancellationToken.IsCancellationRequested)
+                break;
+
+            await ProcessTimeframeAsync(instrument, config, cancellationToken);
+        }
     }
 
-    /// <summary>
-    /// Process a specific timeframe for all instruments.
-    /// </summary>
     private async Task ProcessTimeframeAsync(
-        List<string> instrumentKeys,
-        Dictionary<string, int> instrumentMap,
-        string interval,
-        int timeframeMinutes,
-        DateTime fromDate,
-        DateTime toDate,
+        TradingInstrument instrument,
+        TimeframeConfig config,
         CancellationToken cancellationToken)
     {
-        const int batchSize = 50;
+        var toDate = DateTime.UtcNow.Date;
+        var fromDate = toDate.AddDays(-(int)(config.RetentionYears * 365));
 
-        _logger.LogInformation(
-            "Fetching {Timeframe}min candles with batch size {BatchSize}",
-            timeframeMinutes,
-            batchSize);
+        // Generate date ranges based on API limits
+        var ranges = UpstoxClient.GenerateDateRanges(fromDate, toDate, config.BatchDays);
 
-        var bulkCandles = await _upstoxPriceService.FetchBulkHistoricalPricesAsync(
-            instrumentKeys,
-            interval,
+        _logger.LogDebug(
+            "{Symbol} - {Timeframe}min: Fetching {RangeCount} batch(es) from {From:yyyy-MM-dd} to {To:yyyy-MM-dd}",
+            instrument.Symbol,
+            config.TimeframeMinutes,
+            ranges.Count,
             fromDate,
-            toDate,
-            batchSize,
-            cancellationToken);
+            toDate);
 
-        var totalSaved = 0;
+        var totalCandles = 0;
 
-        foreach (var (instrumentKey, candles) in bulkCandles)
+        foreach (var (rangeFrom, rangeTo) in ranges)
         {
-            if (!instrumentMap.TryGetValue(instrumentKey, out var instrumentId))
-            {
-                _logger.LogWarning("Instrument not found for key: {InstrumentKey}", instrumentKey);
-                continue;
-            }
-
-            if (!candles.Any())
-            {
-                _logger.LogDebug("No candles found for instrument {InstrumentKey}", instrumentKey);
-                continue;
-            }
-
-            // Convert to MarketCandle with correct timeframe
-            var marketCandles = candles.Select(c => new MarketCandle
-            {
-                InstrumentId = instrumentId,
-                TimeframeMinutes = timeframeMinutes, // Explicit timeframe for partition routing
-                Timestamp = c.Timestamp.ToUniversalTime(),
-                Open = c.Open,
-                High = c.High,
-                Low = c.Low,
-                Close = c.Close,
-                Volume = c.Volume,
-                CreatedAt = DateTimeOffset.UtcNow
-            }).ToList();
+            if (cancellationToken.IsCancellationRequested)
+                break;
 
             try
             {
-                var saved = await _candleRepository.BulkUpsertAsync(marketCandles, cancellationToken);
-                totalSaved += saved;
+                var candles = await _upstoxClient.GetHistoricalCandlesV3Async(
+                    instrument.InstrumentKey,
+                    config.Unit,
+                    config.Interval,
+                    rangeFrom,
+                    rangeTo);
 
-                _logger.LogDebug(
-                    "Saved {Count} {Timeframe}min candles for instrument {InstrumentKey}",
-                    saved,
-                    timeframeMinutes,
-                    instrumentKey);
+                if (candles.Any())
+                {
+                    var marketCandles = candles.Select(c => new MarketCandle
+                    {
+                        InstrumentId = instrument.Id,
+                        TimeframeMinutes = config.TimeframeMinutes,
+                        Timestamp = c.Timestamp,
+                        Open = c.Open,
+                        High = c.High,
+                        Low = c.Low,
+                        Close = c.Close,
+                        Volume = c.Volume,
+                        CreatedAt = DateTimeOffset.UtcNow
+                    }).ToList();
+
+                    await _candleRepository.BulkUpsertAsync(marketCandles, cancellationToken);
+                    totalCandles += candles.Count;
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(
                     ex,
-                    "Error saving {Timeframe}min candles for instrument {InstrumentKey}",
-                    timeframeMinutes,
-                    instrumentKey);
+                    "Error fetching {Timeframe}min candles for {Symbol} ({From:yyyy-MM-dd} → {To:yyyy-MM-dd})",
+                    config.TimeframeMinutes,
+                    instrument.Symbol,
+                    rangeFrom,
+                    rangeTo);
+            }
+
+            // Small delay between batches
+            if (ranges.Count > 1)
+            {
+                await Task.Delay(150, cancellationToken);
             }
         }
 
-        _logger.LogInformation(
-            "Completed {Timeframe}min candles processing. Total saved: {TotalSaved}",
-            timeframeMinutes,
-            totalSaved);
+        if (totalCandles > 0)
+        {
+            _logger.LogDebug(
+                "{Symbol} - {Timeframe}min: {Total} candles saved",
+                instrument.Symbol,
+                config.TimeframeMinutes,
+                totalCandles);
+        }
     }
+
+    private record TimeframeConfig(
+        string Unit,
+        int Interval,
+        int TimeframeMinutes,
+        double RetentionYears,
+        int BatchDays);
 }
