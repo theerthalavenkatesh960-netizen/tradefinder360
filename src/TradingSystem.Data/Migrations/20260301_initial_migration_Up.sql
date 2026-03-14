@@ -133,6 +133,16 @@ ON CONFLICT (instrument_key) DO NOTHING;
 -- MARKET CANDLES ROOT TABLE
 ------------------------------------------------------------
 
+
+-- ============================================================
+-- MARKET CANDLES PARTITIONED STORAGE
+-- ============================================================
+
+
+-- ============================================================
+-- MAIN TABLE
+-- ============================================================
+
 CREATE TABLE IF NOT EXISTS market_candles (
     id BIGSERIAL,
     instrument_id INTEGER NOT NULL,
@@ -159,38 +169,47 @@ CREATE TABLE IF NOT EXISTS market_candles (
 
 ) PARTITION BY LIST (timeframe_minutes);
 
-------------------------------------------------------------
--- LEVEL 1 PARTITIONS (TIMEFRAME)
-------------------------------------------------------------
+
+
+-- ============================================================
+-- TIMEFRAME PARTITIONS
+-- ============================================================
 
 CREATE TABLE IF NOT EXISTS market_candles_1m
 PARTITION OF market_candles
 FOR VALUES IN (1)
 PARTITION BY RANGE (timestamp);
 
+
 CREATE TABLE IF NOT EXISTS market_candles_15m
 PARTITION OF market_candles
 FOR VALUES IN (15)
 PARTITION BY RANGE (timestamp);
+
 
 CREATE TABLE IF NOT EXISTS market_candles_1d
 PARTITION OF market_candles
 FOR VALUES IN (1440)
 PARTITION BY RANGE (timestamp);
 
-------------------------------------------------------------
+
+
+-- ============================================================
 -- GLOBAL INDEXES
-------------------------------------------------------------
+-- ============================================================
 
 CREATE INDEX IF NOT EXISTS idx_market_candles_chart_query
 ON market_candles(instrument_id, timeframe_minutes, timestamp DESC);
 
+
 CREATE INDEX IF NOT EXISTS idx_market_candles_instrument
 ON market_candles(instrument_id);
 
-------------------------------------------------------------
+
+
+-- ============================================================
 -- PARTITION CREATION FUNCTION
-------------------------------------------------------------
+-- ============================================================
 
 CREATE OR REPLACE FUNCTION create_market_candle_month_partition(
     tf INTEGER,
@@ -201,7 +220,6 @@ RETURNS TEXT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-
     start_date DATE;
     end_date DATE;
 
@@ -209,7 +227,6 @@ DECLARE
     partition_table TEXT;
 
     tf_suffix TEXT;
-
 BEGIN
 
     start_date := make_date(partition_year, partition_month, 1);
@@ -254,21 +271,16 @@ BEGIN
         end_date
     );
 
-    EXECUTE format(
-        'CREATE INDEX %I
-         ON %I (instrument_id, timestamp DESC)',
-        'idx_' || partition_table || '_lookup',
-        partition_table
-    );
-
     RETURN 'Created partition: ' || partition_table;
 
 END;
 $$;
 
-------------------------------------------------------------
--- CREATE FUTURE PARTITIONS
-------------------------------------------------------------
+
+
+-- ============================================================
+-- FUTURE PARTITION CREATOR
+-- ============================================================
 
 CREATE OR REPLACE FUNCTION create_future_market_candle_partitions(
     months_ahead INTEGER DEFAULT 3
@@ -277,7 +289,6 @@ RETURNS TABLE(result TEXT)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-
     base_date DATE;
     target_year INT;
     target_month INT;
@@ -286,7 +297,6 @@ DECLARE
     tf INT;
 
     timeframes INT[] := ARRAY[1,15,1440];
-
 BEGIN
 
     base_date := date_trunc('month', CURRENT_DATE);
@@ -299,8 +309,7 @@ BEGIN
         target_month :=
             EXTRACT(MONTH FROM base_date + (i || ' months')::interval);
 
-        FOREACH tf IN ARRAY timeframes
-        LOOP
+        FOREACH tf IN ARRAY timeframes LOOP
 
             RETURN QUERY
             SELECT create_market_candle_month_partition(
@@ -316,22 +325,74 @@ BEGIN
 END;
 $$;
 
-------------------------------------------------------------
+
+
+-- ============================================================
+-- PAST PARTITION CREATOR
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION create_past_market_candle_partitions(
+    years_back INTEGER DEFAULT 5
+)
+RETURNS TABLE(result TEXT)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    base_date DATE;
+    target_year INT;
+    target_month INT;
+
+    i INT;
+    tf INT;
+
+    months_total INT;
+
+    timeframes INT[] := ARRAY[1,15,1440];
+BEGIN
+
+    months_total := years_back * 12;
+    base_date := date_trunc('month', CURRENT_DATE);
+
+    FOR i IN 1..months_total LOOP
+
+        target_year :=
+            EXTRACT(YEAR FROM base_date - (i || ' months')::interval);
+
+        target_month :=
+            EXTRACT(MONTH FROM base_date - (i || ' months')::interval);
+
+        FOREACH tf IN ARRAY timeframes LOOP
+
+            RETURN QUERY
+            SELECT create_market_candle_month_partition(
+                tf,
+                target_year,
+                target_month
+            );
+
+        END LOOP;
+
+    END LOOP;
+
+END;
+$$;
+
+
+
+-- ============================================================
 -- RETENTION CLEANUP
-------------------------------------------------------------
+-- ============================================================
 
 CREATE OR REPLACE FUNCTION cleanup_market_candle_retention()
 RETURNS TEXT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-
     cutoff_1m DATE;
     cutoff_15m DATE;
 
     r RECORD;
     partition_date DATE;
-
 BEGIN
 
     cutoff_1m := date_trunc('month', CURRENT_DATE - INTERVAL '3 months');
@@ -344,13 +405,10 @@ BEGIN
     LOOP
 
         partition_date :=
-            to_date(
-                substring(r.relname FROM '(\d{4}_\d{2})'),
-                'YYYY_MM'
-            );
+            to_date(substring(r.relname FROM '(\d{4}_\d{2})'),'YYYY_MM');
 
         IF partition_date < cutoff_1m THEN
-            EXECUTE format('DROP TABLE %I', r.relname);
+            EXECUTE format('DROP TABLE IF EXISTS %I', r.relname);
         END IF;
 
     END LOOP;
@@ -362,13 +420,10 @@ BEGIN
     LOOP
 
         partition_date :=
-            to_date(
-                substring(r.relname FROM '(\d{4}_\d{2})'),
-                'YYYY_MM'
-            );
+            to_date(substring(r.relname FROM '(\d{4}_\d{2})'),'YYYY_MM');
 
         IF partition_date < cutoff_15m THEN
-            EXECUTE format('DROP TABLE %I', r.relname);
+            EXECUTE format('DROP TABLE IF EXISTS %I', r.relname);
         END IF;
 
     END LOOP;
@@ -378,12 +433,14 @@ BEGIN
 END;
 $$;
 
-------------------------------------------------------------
--- INITIAL PARTITION CREATION
-------------------------------------------------------------
 
-SELECT * FROM create_future_market_candle_partitions(3);
-------------------------------------------------------------
+
+-- ============================================================
+-- INITIAL PARTITIONS
+-- ============================================================
+
+SELECT * FROM create_past_market_candle_partitions(5);
+SELECT * FROM create_future_market_candle_partitions(6);------------------------------------------------------------
 -- EXAMPLE QUERIES AND INGESTION
 ------------------------------------------------------------
 

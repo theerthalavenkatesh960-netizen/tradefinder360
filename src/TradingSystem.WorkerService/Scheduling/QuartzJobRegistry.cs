@@ -22,7 +22,7 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(MarketCandlesUpdateJob),
-                    "0 */15 * * * ?",        // Every 4 minutes
+                    "0 */5 * * * ?",        // Every 4 minutes
                     TimeZoneInfo.Utc
                 ),
 
@@ -40,13 +40,13 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(PartitionMaintenanceJob),
-                    "0 0 2 1 * ?",         // 2:00 AM on the 28th of every month
+                    "0 15 13 * * ?",         // 2:00 AM on the 28th of every month
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 ),
 
                 new JobSchedule(
                     typeof(PartitionRetentionJob),
-                    "0 0 2 1 * ?",         // 2:00 AM on the 28th of every month
+                    "0 0 13 1 * ?",         // 2:00 AM on the 28th of every month
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 ),
 
