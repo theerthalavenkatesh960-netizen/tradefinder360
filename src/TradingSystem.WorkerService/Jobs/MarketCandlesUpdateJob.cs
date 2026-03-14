@@ -4,16 +4,14 @@ using TradingSystem.Core.Models;
 using TradingSystem.Data.Repositories.Interfaces;
 using TradingSystem.Upstox;
 
-namespace TradingSystem.WorkerService.Jobs;
-
 /// <summary>
 /// Scheduled job to fetch and store market candles for multiple timeframes using Upstox API v3.
-/// Supports tiered partition architecture with automatic routing.
+/// Efficiently checks database for missing data before making API calls.
 /// 
 /// Timeframes:
-/// - 1d (1440m): 5 years retention, single API call
-/// - 15m: 1 year retention, 30-day batches
-/// - 1m: 3 months retention, 30-day batches
+/// - 1d (1440m): 5 years retention
+/// - 15m: 1 year retention
+/// - 1m: 3 months retention
 /// </summary>
 [DisallowConcurrentExecution]
 public class MarketCandlesUpdateJob : IJob
@@ -67,19 +65,34 @@ public class MarketCandlesUpdateJob : IJob
             };
 
             var totalProcessed = 0;
+            var totalApiCalls = 0;
+            var totalCandlesSaved = 0;
 
             await Parallel.ForEachAsync(activeInstruments, options, async (instrument, ct) =>
             {
-                await ProcessInstrumentAsync(instrument, ct);
+                var (calls, candles) = await ProcessInstrumentAsync(instrument, ct);
+                
                 Interlocked.Increment(ref totalProcessed);
-
+                Interlocked.Add(ref totalApiCalls, calls);
+                Interlocked.Add(ref totalCandlesSaved, candles);
+                
                 if (totalProcessed % 100 == 0)
                 {
-                    _logger.LogInformation("Progress: {Processed}/{Total} instruments", totalProcessed, activeInstruments.Count);
+                    _logger.LogInformation(
+                        "Progress: {Processed}/{Total} instruments | API calls: {ApiCalls} | Candles saved: {Candles}",
+                        totalProcessed,
+                        activeInstruments.Count,
+                        totalApiCalls,
+                        totalCandlesSaved);
                 }
             });
 
-            _logger.LogInformation("=== Market Candles Update Job Completed Successfully ===");
+            _logger.LogInformation(
+                "=== Market Candles Update Job Completed ===\n" +
+                "Instruments: {Instruments} | API Calls: {ApiCalls} | Candles Saved: {Candles}",
+                totalProcessed,
+                totalApiCalls,
+                totalCandlesSaved);
         }
         catch (Exception ex)
         {
@@ -88,18 +101,27 @@ public class MarketCandlesUpdateJob : IJob
         }
     }
 
-    private async Task ProcessInstrumentAsync(TradingInstrument instrument, CancellationToken cancellationToken)
+    private async Task<(int ApiCalls, int CandlesSaved)> ProcessInstrumentAsync(
+        TradingInstrument instrument,
+        CancellationToken cancellationToken)
     {
+        var totalApiCalls = 0;
+        var totalCandles = 0;
+
         foreach (var config in TimeframeConfigs)
         {
             if (cancellationToken.IsCancellationRequested)
                 break;
 
-            await ProcessTimeframeAsync(instrument, config, cancellationToken);
+            var (calls, candles) = await ProcessTimeframeAsync(instrument, config, cancellationToken);
+            totalApiCalls += calls;
+            totalCandles += candles;
         }
+
+        return (totalApiCalls, totalCandles);
     }
 
-    private async Task ProcessTimeframeAsync(
+    private async Task<(int ApiCalls, int CandlesSaved)> ProcessTimeframeAsync(
         TradingInstrument instrument,
         TimeframeConfig config,
         CancellationToken cancellationToken)
@@ -107,78 +129,136 @@ public class MarketCandlesUpdateJob : IJob
         var toDate = DateTime.UtcNow.Date;
         var fromDate = toDate.AddDays(-(int)(config.RetentionYears * 365));
 
-        // Generate date ranges based on API limits
-        var ranges = UpstoxClient.GenerateDateRanges(fromDate, toDate, config.BatchDays);
+        // Step 1: Check database for missing data ranges
+        var missingRanges = await _candleRepository.GetMissingDataRangesAsync(
+            instrument.Id,
+            fromDate,
+            toDate,
+            config.TimeframeMinutes,
+            cancellationToken);
 
-        _logger.LogDebug(
-            "{Symbol} - {Timeframe}min: Fetching {RangeCount} batch(es) from {From:yyyy-MM-dd} to {To:yyyy-MM-dd}",
+        if (!missingRanges.Any())
+        {
+            _logger.LogDebug(
+                "{Symbol} - {Timeframe}min: All data present, skipping API calls",
+                instrument.Symbol,
+                config.TimeframeMinutes);
+            return (0, 0);
+        }
+
+        _logger.LogInformation(
+            "{Symbol} - {Timeframe}min: {MissingCount} missing range(s) detected",
             instrument.Symbol,
             config.TimeframeMinutes,
-            ranges.Count,
-            fromDate,
-            toDate);
+            missingRanges.Count);
 
-        var totalCandles = 0;
+        var totalApiCalls = 0;
+        var totalCandlesSaved = 0;
 
-        foreach (var (rangeFrom, rangeTo) in ranges)
+        // Step 2: Fetch only missing data ranges
+        foreach (var missingRange in missingRanges)
         {
             if (cancellationToken.IsCancellationRequested)
                 break;
 
-            try
-            {
-                var candles = await _upstoxClient.GetHistoricalCandlesV3Async(
-                    instrument.InstrumentKey,
-                    config.Unit,
-                    config.Interval,
-                    rangeFrom,
-                    rangeTo);
+            // Step 3: Split large missing ranges into API-compatible batches
+            var batches = UpstoxClient.GenerateDateRanges(
+                missingRange.FromDate,
+                missingRange.ToDate,
+                config.BatchDays);
 
-                if (candles.Any())
-                {
-                    var marketCandles = candles.Select(c => new MarketCandle
-                    {
-                        InstrumentId = instrument.Id,
-                        TimeframeMinutes = config.TimeframeMinutes,
-                        Timestamp = c.Timestamp,
-                        Open = c.Open,
-                        High = c.High,
-                        Low = c.Low,
-                        Close = c.Close,
-                        Volume = c.Volume,
-                        CreatedAt = DateTimeOffset.UtcNow
-                    }).ToList();
-
-                    await _candleRepository.BulkUpsertAsync(marketCandles, cancellationToken);
-                    totalCandles += candles.Count;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Error fetching {Timeframe}min candles for {Symbol} ({From:yyyy-MM-dd} → {To:yyyy-MM-dd})",
-                    config.TimeframeMinutes,
-                    instrument.Symbol,
-                    rangeFrom,
-                    rangeTo);
-            }
-
-            // Small delay between batches
-            if (ranges.Count > 1)
-            {
-                await Task.Delay(150, cancellationToken);
-            }
-        }
-
-        if (totalCandles > 0)
-        {
             _logger.LogDebug(
-                "{Symbol} - {Timeframe}min: {Total} candles saved",
+                "{Symbol} - {Timeframe}min: Fetching missing range {From:yyyy-MM-dd} → {To:yyyy-MM-dd} ({BatchCount} batch(es))",
                 instrument.Symbol,
                 config.TimeframeMinutes,
-                totalCandles);
+                missingRange.FromDate,
+                missingRange.ToDate,
+                batches.Count);
+
+            foreach (var (batchFrom, batchTo) in batches)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                try
+                {
+                    // Step 4: Make API call only for missing batch
+                    var candles = await _upstoxClient.GetHistoricalCandlesV3Async(
+                        instrument.InstrumentKey,
+                        config.Unit,
+                        config.Interval,
+                        batchFrom,
+                        batchTo);
+
+                    totalApiCalls++;
+
+                    if (candles.Any())
+                    {
+                        var marketCandles = candles.Select(c => new MarketCandle
+                        {
+                            InstrumentId = instrument.Id,
+                            TimeframeMinutes = config.TimeframeMinutes,
+                            Timestamp = c.Timestamp,
+                            Open = c.Open,
+                            High = c.High,
+                            Low = c.Low,
+                            Close = c.Close,
+                            Volume = c.Volume,
+                            CreatedAt = DateTimeOffset.UtcNow
+                        }).ToList();
+
+                        // Step 5: Bulk upsert with ON CONFLICT DO NOTHING
+                        await _candleRepository.BulkUpsertAsync(marketCandles, cancellationToken);
+                        totalCandlesSaved += candles.Count;
+
+                        _logger.LogDebug(
+                            "{Symbol} - {Timeframe}min: Saved {Count} candles ({From:yyyy-MM-dd} → {To:yyyy-MM-dd})",
+                            instrument.Symbol,
+                            config.TimeframeMinutes,
+                            candles.Count,
+                            batchFrom,
+                            batchTo);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "{Symbol} - {Timeframe}min: No data returned from API ({From:yyyy-MM-dd} → {To:yyyy-MM-dd})",
+                            instrument.Symbol,
+                            config.TimeframeMinutes,
+                            batchFrom,
+                            batchTo);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "{Symbol} - {Timeframe}min: Error fetching batch ({From:yyyy-MM-dd} → {To:yyyy-MM-dd})",
+                        instrument.Symbol,
+                        config.TimeframeMinutes,
+                        batchFrom,
+                        batchTo);
+                }
+
+                // Small delay between API calls to respect rate limits
+                if (batches.Count > 1)
+                {
+                    await Task.Delay(150, cancellationToken);
+                }
+            }
         }
+
+        if (totalCandlesSaved > 0)
+        {
+            _logger.LogInformation(
+                "{Symbol} - {Timeframe}min: {ApiCalls} API call(s), {Candles} candles saved",
+                instrument.Symbol,
+                config.TimeframeMinutes,
+                totalApiCalls,
+                totalCandlesSaved);
+        }
+
+        return (totalApiCalls, totalCandlesSaved);
     }
 
     private record TimeframeConfig(
