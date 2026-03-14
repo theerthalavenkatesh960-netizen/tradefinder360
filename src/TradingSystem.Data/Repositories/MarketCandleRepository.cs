@@ -7,7 +7,7 @@ namespace TradingSystem.Data.Repositories;
 public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCandleRepository
 {
     // Single source of truth for IST timezone.
-    // All timestamps in DB are stored as IST DateTimeOffset (+05:30).
+    // All timestamps in DB are stored as UTC DateTimeOffset (+00:00).
     // EF/Npgsql normalizes DateTimeOffset to UTC (+00:00) on read,
     // so we must always ConvertTime(..., Ist) before extracting .Date.
     private static readonly TimeZoneInfo Ist =
@@ -60,11 +60,16 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         DateTime toDate,
         CancellationToken cancellationToken)
     {
+        // FIX: fromDate and toDate are IST dates, but c.Timestamp is UTC DateTimeOffset.
+        // Convert IST dates to UTC DateTimeOffset for proper comparison.
+        var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
+        var toUtc = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
+
         return await _dbSet
             .Where(c => c.InstrumentId == instrumentId
                      && c.TimeframeMinutes == timeframeMinutes
-                     && c.Timestamp >= fromDate
-                     && c.Timestamp <= toDate)
+                     && c.Timestamp >= fromUtc
+                     && c.Timestamp <= toUtc)
             .OrderBy(c => c.Timestamp)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
@@ -77,11 +82,15 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         DateTime toDate,
         CancellationToken cancellationToken)
     {
+        // FIX: Convert IST date boundaries to UTC DateTimeOffset
+        var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
+        var toUtc = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
+
         var oneMinuteCandles = await _dbSet
             .Where(c => c.InstrumentId == instrumentId
                      && c.TimeframeMinutes  == 1
-                     && c.Timestamp >= fromDate
-                     && c.Timestamp <= toDate)
+                     && c.Timestamp >= fromUtc
+                     && c.Timestamp <= toUtc)
             .OrderBy(c => c.Timestamp)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
@@ -117,11 +126,11 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
                 {
                     InstrumentId     = instrumentId,
                     TimeframeMinutes = timeframeMinutes,
-                    // Store bucket start as IST DateTimeOffset (+05:30)
-                    // to be consistent with how base candles are stored
+                    // FIX: PostgreSQL requires offset +00:00.
+                    // Convert IST DateTimeOffset to UTC before storing.
                     Timestamp        = new DateTimeOffset(
                                            g.Key.BucketTime,
-                                           TimeSpan.FromHours(5.5)),
+                                           TimeSpan.FromHours(5.5)).ToUniversalTime(),
                     Open             = ordered.First().Open,
                     High             = g.Max(x => x.High),
                     Low              = g.Min(x => x.Low),
@@ -177,6 +186,10 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         // Derived timeframes are aggregated from 1m — check 1m base for gaps
         var checkTimeframe = DerivedTimeframes.Contains(timeframeMinutes) ? 1 : timeframeMinutes;
 
+        // FIX: Convert IST date boundaries to UTC DateTimeOffset
+        var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
+        var toUtc = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
+
         // FIX: c.Timestamp is DateTimeOffset. EF/Npgsql returns it normalized to UTC.
         // .Date on a UTC-normalized value gives the UTC date, not the IST date.
         //
@@ -190,8 +203,8 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         var rawTimestamps = await _dbSet
             .Where(c => c.InstrumentId == instrumentId
                      && c.TimeframeMinutes == checkTimeframe
-                     && c.Timestamp >= fromDate
-                     && c.Timestamp <= toDate)
+                     && c.Timestamp >= fromUtc
+                     && c.Timestamp <= toUtc)
             .AsNoTracking()
             .Select(c => c.Timestamp)
             .Distinct()

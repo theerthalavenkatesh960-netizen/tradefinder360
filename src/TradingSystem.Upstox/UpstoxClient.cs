@@ -1,4 +1,4 @@
-using System.Net.Http.Headers;
+﻿using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using TradingSystem.Core.Models;
@@ -372,9 +372,13 @@ public class UpstoxClient
 
             try
             {
+                // FIX: Upstox returns timestamps in IST (+05:30).
+                // .UtcDateTime strips the offset and treats it as UTC → wrong time.
+                // .ToUniversalTime() preserves the DateTimeOffset, converts to UTC correctly.
+                // Example: 2026-03-13 09:15:00 +0530 → 2026-03-13 03:45:00 +0000 ✅
                 var parsedCandle = new Candle
                 {
-                    Timestamp = ((JsonElement)candle[0]).GetDateTimeOffset().UtcDateTime,
+                    Timestamp = ((JsonElement)candle[0]).GetDateTimeOffset().ToUniversalTime(),
                     Open = ((JsonElement)candle[1]).GetDecimal(),
                     High = ((JsonElement)candle[2]).GetDecimal(),
                     Low = ((JsonElement)candle[3]).GetDecimal(),
