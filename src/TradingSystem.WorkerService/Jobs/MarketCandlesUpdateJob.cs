@@ -12,16 +12,23 @@ using System.Collections.Concurrent;
 [DisallowConcurrentExecution]
 public class MarketCandlesUpdateJob : IJob
 {
-    // CRITICAL: Reduce parallelism to prevent DB connection exhaustion
-    // 6K stocks × 3 timeframes = potential 18K tasks
-    // With 12 parallel: max 36 concurrent DB operations (12 instruments × 3 timeframes)
     private const int MaxInstrumentParallelism = 12;
-    private const int MaxApiRetries = 3;
-    private const int MinTradingDaysGap = 3;
+    private const int MaxApiRetries            = 3;
+    private const int MinTradingDaysGap        = 3;
     private static readonly TimeSpan RetryBaseDelay = TimeSpan.FromSeconds(1);
 
+    // Single source of truth for IST timezone — used everywhere in this job.
+    // All dates in DB are IST, Upstox API expects IST dates, so we never use
+    // DateTime.UtcNow or DateTime.Now directly anywhere in this job.
+    private static readonly TimeZoneInfo Ist =
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
+    // IST "today" — computed once per job execution via IstNow property
+    private static DateTime IstToday =>
+        TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist).Date;
+
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly UpstoxClient _upstoxClient;
+    private readonly UpstoxClient         _upstoxClient;
     private readonly ILogger<MarketCandlesUpdateJob> _logger;
 
     private static readonly IReadOnlyList<TimeframeConfig> TimeframeConfigs =
@@ -31,7 +38,6 @@ public class MarketCandlesUpdateJob : IJob
         new(Unit: "minutes", Interval: 1,  TimeframeMinutes: 1,    RetentionDays: 91,   BatchDays: 31),
     ];
 
-    // Centralized error tracking
     private readonly ConcurrentBag<JobError> _errors = new();
 
     public MarketCandlesUpdateJob(
@@ -41,7 +47,7 @@ public class MarketCandlesUpdateJob : IJob
     {
         _scopeFactory = scopeFactory;
         _upstoxClient = upstoxClient;
-        _logger = logger;
+        _logger       = logger;
     }
 
     public async Task Execute(IJobExecutionContext context)
@@ -67,44 +73,35 @@ public class MarketCandlesUpdateJob : IJob
         }
         finally
         {
-            // Always report errors collected during execution
             if (_errors.Count > 0)
             {
                 _logger.LogError(
                     "═══ JOB COMPLETED WITH {ErrorCount} ERROR(S) in {Elapsed:mm\\:ss} ═══",
                     _errors.Count, sw.Elapsed);
 
-                // Group errors by type for easier debugging
-                var errorGroups = _errors
-                    .GroupBy(e => e.ErrorType)
-                    .OrderByDescending(g => g.Count());
-
-                foreach (var group in errorGroups)
-                {
+                foreach (var group in _errors.GroupBy(e => e.ErrorType).OrderByDescending(g => g.Count()))
                     _logger.LogError("  {Count}× {Type}: {Samples}",
                         group.Count(),
                         group.Key,
                         string.Join(", ", group.Take(5).Select(e => e.Context)));
-                }
             }
             else
             {
-                _logger.LogInformation("═══ Job COMPLETED SUCCESSFULLY in {Elapsed:mm\\:ss} ═══", sw.Elapsed);
+                _logger.LogInformation(
+                    "═══ Job COMPLETED SUCCESSFULLY in {Elapsed:mm\\:ss} ═══", sw.Elapsed);
             }
         }
     }
 
     private async Task ExecuteInternal(CancellationToken ct)
     {
-        // Validate calendar data
         TradingCalendar.ValidateHolidayData(_logger);
 
-        // Load instruments using a dedicated scope
         List<TradingInstrument> instruments;
         await using (var scope = _scopeFactory.CreateAsyncScope())
         {
-            var instrumentRepository = scope.ServiceProvider.GetRequiredService<IInstrumentRepository>();
-            instruments = (await instrumentRepository.GetActiveInstrumentsAsync(ct)).ToList();
+            var repo = scope.ServiceProvider.GetRequiredService<IInstrumentRepository>();
+            instruments = (await repo.GetActiveInstrumentsAsync(ct)).ToList();
         }
 
         if (instruments.Count == 0)
@@ -113,14 +110,17 @@ public class MarketCandlesUpdateJob : IJob
             return;
         }
 
-        // Calculate date ranges - FIX: Use UTC midnight to avoid timezone issues
-        var toDate = DateTime.UtcNow.Date;
+        // FIX: Use IST today as the reference point for ALL date calculations.
+        // Yesterday in IST = safe ceiling (today's session may be incomplete).
+        // Never use DateTime.UtcNow.Date here — that can be 1 day behind IST
+        // between midnight IST (00:00) and UTC offset time (05:30 IST = 00:00 UTC).
+        var toDate    = IstToday.AddDays(-1);
         var fromDates = TimeframeConfigs.ToDictionary(
             c => c,
             c => toDate.AddDays(-c.RetentionDays));
 
         _logger.LogInformation(
-            "Instruments: {Count} | Date: {To:yyyy-MM-dd} | Parallelism: {P}",
+            "Instruments: {Count} | IST toDate: {To:yyyy-MM-dd} | Parallelism: {P}",
             instruments.Count, toDate, MaxInstrumentParallelism);
 
         foreach (var (cfg, from) in fromDates)
@@ -128,30 +128,27 @@ public class MarketCandlesUpdateJob : IJob
                 "  {TF,5}m: {From:yyyy-MM-dd} → {To:yyyy-MM-dd} ({Days}d)",
                 cfg.TimeframeMinutes, from, toDate, cfg.RetentionDays);
 
-        // Metrics
-        var metrics = new JobMetrics();
+        var metrics  = new JobMetrics();
         var progress = 0;
 
-        // CRITICAL FIX: Process instruments with controlled parallelism
-        // Each instrument gets its own DbContext scope to prevent sharing
         await Parallel.ForEachAsync(
             instruments,
-            new ParallelOptions 
-            { 
-                MaxDegreeOfParallelism = MaxInstrumentParallelism, 
-                CancellationToken = ct 
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = MaxInstrumentParallelism,
+                CancellationToken      = ct
             },
             async (instrument, innerCt) =>
             {
-                // Each instrument gets its own service scope = isolated DbContext
                 await using var scope = _scopeFactory.CreateAsyncScope();
-                var candleRepository = scope.ServiceProvider.GetRequiredService<IMarketCandleRepository>();
+                var candleRepo = scope.ServiceProvider
+                    .GetRequiredService<IMarketCandleRepository>();
 
                 try
                 {
                     var result = await ProcessInstrumentAsync(
-                        instrument, toDate, fromDates, candleRepository, innerCt);
-                    
+                        instrument, toDate, fromDates, candleRepo, innerCt);
+
                     metrics.Add(result);
 
                     var done = Interlocked.Increment(ref progress);
@@ -165,14 +162,12 @@ public class MarketCandlesUpdateJob : IJob
                 {
                     _errors.Add(new JobError
                     {
-                        ErrorType = ex.GetType().Name,
-                        Context = $"{instrument.Symbol} (all timeframes)",
-                        Message = ex.Message,
+                        ErrorType  = ex.GetType().Name,
+                        Context    = $"{instrument.Symbol} (all timeframes)",
+                        Message    = ex.Message,
                         StackTrace = ex.StackTrace ?? ""
                     });
-
-                    _logger.LogError(ex, "{Symbol} FAILED: {Msg}",
-                        instrument.Symbol, ex.Message);
+                    _logger.LogError(ex, "{Symbol} FAILED: {Msg}", instrument.Symbol, ex.Message);
                 }
             });
 
@@ -183,15 +178,13 @@ public class MarketCandlesUpdateJob : IJob
 
     private async Task<InstrumentResult> ProcessInstrumentAsync(
         TradingInstrument instrument,
-        DateTime toDate,
+        DateTime toDate,                                        // IST date, no time component
         IReadOnlyDictionary<TimeframeConfig, DateTime> fromDates,
         IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
         var result = new InstrumentResult { Symbol = instrument.Symbol };
 
-        // Process timeframes SEQUENTIALLY per instrument
-        // Prevents overwhelming DB with 3x concurrent writes per instrument
         foreach (var config in TimeframeConfigs)
         {
             try
@@ -199,19 +192,18 @@ public class MarketCandlesUpdateJob : IJob
                 var (calls, candles) = await ProcessTimeframeAsync(
                     instrument, config, fromDates[config], toDate, candleRepository, ct);
 
-                result.ApiCalls += calls;
+                result.ApiCalls     += calls;
                 result.CandlesSaved += candles;
             }
             catch (Exception ex)
             {
                 _errors.Add(new JobError
                 {
-                    ErrorType = ex.GetType().Name,
-                    Context = $"{instrument.Symbol} {config.TimeframeMinutes}m",
-                    Message = ex.Message,
+                    ErrorType  = ex.GetType().Name,
+                    Context    = $"{instrument.Symbol} {config.TimeframeMinutes}m",
+                    Message    = ex.Message,
                     StackTrace = ex.StackTrace ?? ""
                 });
-
                 _logger.LogError(ex, "{Symbol} {TF}m FAILED: {Msg}",
                     instrument.Symbol, config.TimeframeMinutes, ex.Message);
             }
@@ -220,7 +212,7 @@ public class MarketCandlesUpdateJob : IJob
         return result;
     }
 
-    private async Task<(int ApiCalls, int CandlesSaved)> ProcessTimeframeAsync(
+    private Task<(int ApiCalls, int CandlesSaved)> ProcessTimeframeAsync(
         TradingInstrument instrument,
         TimeframeConfig config,
         DateTime fromDate,
@@ -229,19 +221,26 @@ public class MarketCandlesUpdateJob : IJob
         CancellationToken ct)
     {
         return config.Unit == "days"
-            ? await ProcessDailyAsync(instrument, config, fromDate, toDate, candleRepository, ct)
-            : await ProcessIntradayAsync(instrument, config, fromDate, toDate, candleRepository, ct);
+            ? ProcessDailyAsync(instrument, config, fromDate, toDate, candleRepository, ct)
+            : ProcessIntradayAsync(instrument, config, fromDate, toDate, candleRepository, ct);
     }
 
+    // -------------------------------------------------------------------------
+    // DAILY — single API call from (latestDate+1) to toDate.
+    // latestDate comes back as an IST date from the repository.
+    // toDate is already an IST date set at job start.
+    // All comparisons are IST vs IST — no conversion needed.
+    // -------------------------------------------------------------------------
     private async Task<(int ApiCalls, int CandlesSaved)> ProcessDailyAsync(
         TradingInstrument instrument,
         TimeframeConfig config,
-        DateTime fromDate,
-        DateTime toDate,
+        DateTime fromDate,                  // IST date (toDate - RetentionDays)
+        DateTime toDate,                    // IST date (IstToday - 1)
         IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
-        // FIX: Get latest date and ensure UTC comparison
+        // FIX: repository returns IST date (see GetLatestCandleDateAsync below).
+        // Both latestDate and toDate are IST dates — comparison is safe.
         var latestDate = await candleRepository.GetLatestCandleDateAsync(
             instrument.Id, config.TimeframeMinutes, ct);
 
@@ -249,15 +248,11 @@ public class MarketCandlesUpdateJob : IJob
 
         if (latestDate.HasValue)
         {
-            // FIX: Already UTC from repository, just ensure date comparison
-            var latestUtc = latestDate.Value.Date;
-
-            if (latestUtc >= toDate.Date)
-            {
+            // latestDate.Value is already an IST date with no time component
+            if (latestDate.Value >= toDate)
                 return (0, 0);
-            }
 
-            fetchFrom = latestUtc.AddDays(1);
+            fetchFrom = latestDate.Value.AddDays(1);
         }
         else
         {
@@ -267,6 +262,9 @@ public class MarketCandlesUpdateJob : IJob
         if (fetchFrom > toDate)
             return (0, 0);
 
+        _logger.LogDebug("{Symbol} 1d — fetching {From:yyyy-MM-dd} → {To:yyyy-MM-dd}",
+            instrument.Symbol, fetchFrom, toDate);
+
         var candles = await FetchWithRetryAsync(instrument, config, fetchFrom, toDate, ct);
 
         if (candles is null || candles.Count == 0)
@@ -275,14 +273,23 @@ public class MarketCandlesUpdateJob : IJob
         var marketCandles = MapToMarketCandles(candles, instrument.Id, config.TimeframeMinutes);
         await candleRepository.BulkUpsertAsync(marketCandles, ct);
 
+        _logger.LogInformation("{Symbol} 1d — saved {Count} candles ({From:yyyy-MM-dd}→{To:yyyy-MM-dd})",
+            instrument.Symbol, marketCandles.Count, fetchFrom, toDate);
+
         return (1, marketCandles.Count);
     }
 
+    // -------------------------------------------------------------------------
+    // INTRADAY — gap-based, monthly batches.
+    // fromDate and toDate are IST dates.
+    // GetMissingDataRangesAsync returns IST-based date ranges from the DB.
+    // TradingCalendar works on DateOnly — no timezone involved.
+    // -------------------------------------------------------------------------
     private async Task<(int ApiCalls, int CandlesSaved)> ProcessIntradayAsync(
         TradingInstrument instrument,
         TimeframeConfig config,
-        DateTime fromDate,
-        DateTime toDate,
+        DateTime fromDate,                  // IST date
+        DateTime toDate,                    // IST date
         IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
@@ -292,14 +299,12 @@ public class MarketCandlesUpdateJob : IJob
         if (genuineRanges.Count == 0)
             return (0, 0);
 
-        int apiCalls = 0;
+        int apiCalls    = 0;
         int candlesSaved = 0;
 
         foreach (var (rangeFrom, rangeTo) in genuineRanges)
         {
-            var batches = GenerateMonthlyBatches(rangeFrom, rangeTo, config.BatchDays);
-
-            foreach (var (batchFrom, batchTo) in batches)
+            foreach (var (batchFrom, batchTo) in GenerateMonthlyBatches(rangeFrom, rangeTo, config.BatchDays))
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -315,14 +320,18 @@ public class MarketCandlesUpdateJob : IJob
             }
         }
 
+        if (candlesSaved > 0)
+            _logger.LogInformation("{Symbol} {TF}m — saved {Count} candles",
+                instrument.Symbol, config.TimeframeMinutes, candlesSaved);
+
         return (apiCalls, candlesSaved);
     }
 
     private async Task<List<(DateTime From, DateTime To)>> GetGenuineIntradayMissingRangesAsync(
         TradingInstrument instrument,
         TimeframeConfig config,
-        DateTime fromDate,
-        DateTime toDate,
+        DateTime fromDate,                  // IST date
+        DateTime toDate,                    // IST date
         IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
@@ -335,7 +344,12 @@ public class MarketCandlesUpdateJob : IJob
                 instrument.Id, config.TimeframeMinutes, ct);
 
             if (!hasAnyData)
+            {
+                _logger.LogDebug(
+                    "{Symbol} {TF}m — empty table, queuing full window {From:yyyy-MM-dd}→{To:yyyy-MM-dd}",
+                    instrument.Symbol, config.TimeframeMinutes, fromDate, toDate);
                 return [(fromDate, toDate)];
+            }
 
             return [];
         }
@@ -344,11 +358,13 @@ public class MarketCandlesUpdateJob : IJob
 
         foreach (var r in rawRanges)
         {
+            // Clamp — DB gap may extend past our safe toDate
             var clampedTo = r.ToDate > toDate ? toDate : r.ToDate;
 
             if (clampedTo < r.FromDate)
                 continue;
 
+            // TradingCalendar operates on dates only — no timezone concern here
             var tradingDays = TradingCalendar.CountTradingDays(r.FromDate, clampedTo);
 
             if (tradingDays < MinTradingDaysGap)
@@ -360,11 +376,16 @@ public class MarketCandlesUpdateJob : IJob
         return genuine;
     }
 
+    // -------------------------------------------------------------------------
+    // Splits a date range into maxDays-sized batches.
+    // All inputs and outputs are IST dates (no time component).
+    // -------------------------------------------------------------------------
     private static List<(DateTime From, DateTime To)> GenerateMonthlyBatches(
         DateTime from, DateTime to, int maxDays)
     {
         var batches = new List<(DateTime, DateTime)>();
-        var cursor = from;
+        var cursor  = from;
+
         while (cursor <= to)
         {
             var batchEnd = cursor.AddDays(maxDays - 1);
@@ -372,6 +393,7 @@ public class MarketCandlesUpdateJob : IJob
             batches.Add((cursor, batchEnd));
             cursor = batchEnd.AddDays(1);
         }
+
         return batches;
     }
 
@@ -380,23 +402,23 @@ public class MarketCandlesUpdateJob : IJob
     {
         return candles.Select(c => new MarketCandle
         {
-            InstrumentId = instrumentId,
+            InstrumentId     = instrumentId,
             TimeframeMinutes = timeframeMinutes,
-            Timestamp = c.Timestamp,
-            Open = c.Open,
-            High = c.High,
-            Low = c.Low,
-            Close = c.Close,
-            Volume = c.Volume,
-            CreatedAt = DateTimeOffset.UtcNow
+            Timestamp        = c.Timestamp,
+            Open             = c.Open,
+            High             = c.High,
+            Low              = c.Low,
+            Close            = c.Close,
+            Volume           = c.Volume,
+            CreatedAt        = DateTimeOffset.UtcNow
         }).ToList();
     }
 
     private async Task<List<Candle>?> FetchWithRetryAsync(
         TradingInstrument instrument,
         TimeframeConfig config,
-        DateTime from,
-        DateTime to,
+        DateTime from,                      // IST date
+        DateTime to,                        // IST date
         CancellationToken ct)
     {
         Exception? lastException = null;
@@ -421,55 +443,153 @@ public class MarketCandlesUpdateJob : IJob
 
                 if (attempt < MaxApiRetries)
                 {
-                    var delay = RetryBaseDelay * Math.Pow(2, attempt - 1);
+                    var delay = RetryBaseDelay * Math.Pow(2, attempt - 1); // 1s → 2s → 4s
+                    _logger.LogWarning(ex,
+                        "{Symbol} {TF}m attempt {A}/{Max} failed, retrying in {D}s",
+                        instrument.Symbol, config.TimeframeMinutes,
+                        attempt, MaxApiRetries, delay.TotalSeconds);
                     await Task.Delay(delay, ct);
                 }
             }
         }
 
-        // All retries exhausted
-        if (lastException != null)
-            throw new InvalidOperationException(
-                $"API failed after {MaxApiRetries} attempts: {from:yyyy-MM-dd}→{to:yyyy-MM-dd}",
-                lastException);
-
-        return null;
+        throw new InvalidOperationException(
+            $"API failed after {MaxApiRetries} attempts: {from:yyyy-MM-dd}→{to:yyyy-MM-dd}",
+            lastException);
     }
+
+    // -------------------------------------------------------------------------
+    // Records and helpers
+    // -------------------------------------------------------------------------
 
     private record TimeframeConfig(
         string Unit,
-        int Interval,
-        int TimeframeMinutes,
-        int RetentionDays,
-        int BatchDays);
+        int    Interval,
+        int    TimeframeMinutes,
+        int    RetentionDays,
+        int    BatchDays);
 
     private record JobError
     {
-        public required string ErrorType { get; init; }
-        public required string Context { get; init; }
-        public required string Message { get; init; }
+        public required string ErrorType  { get; init; }
+        public required string Context    { get; init; }
+        public required string Message    { get; init; }
         public required string StackTrace { get; init; }
     }
 
     private record InstrumentResult
     {
-        public required string Symbol { get; init; }
-        public int ApiCalls { get; set; }
-        public int CandlesSaved { get; set; }
+        public required string Symbol      { get; init; }
+        public int             ApiCalls    { get; set; }
+        public int             CandlesSaved { get; set; }
     }
 
-    private class JobMetrics
+    private sealed class JobMetrics
     {
         private int _apiCalls;
         private int _candlesSaved;
 
-        public int TotalApiCalls => _apiCalls;
+        public int TotalApiCalls     => _apiCalls;
         public int TotalCandlesSaved => _candlesSaved;
 
         public void Add(InstrumentResult result)
         {
-            Interlocked.Add(ref _apiCalls, result.ApiCalls);
+            Interlocked.Add(ref _apiCalls,     result.ApiCalls);
             Interlocked.Add(ref _candlesSaved, result.CandlesSaved);
         }
     }
 }
+
+
+
+
+// I have a C# .NET trading system that stores market candle data in PostgreSQL.
+
+// CORE RULE (apply everywhere, no exceptions):
+// - Store in DB: always UTC (DateTimeOffset with offset +00:00)
+// - Read from DB: always convert to IST before extracting .Date or comparing dates
+// - All date boundaries passed to DB queries: convert from IST to UTC first
+// - Never use DateTime.UtcNow.Date anywhere — use IST today instead
+
+// TIMEZONE CONSTANTS (add once per class that needs them):
+//   private static readonly TimeZoneInfo Ist =
+//       TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+  
+//   private static DateTime IstToday =>
+//       TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist).Date;
+
+// ---
+
+// PROBLEM 1 — Parsing API timestamps (Upstox returns +05:30 IST)
+//   WRONG:  .GetDateTimeOffset().UtcDateTime
+//           // strips offset → becomes DateTime with Kind=Utc → wrong date at midnight
+//   RIGHT:  .GetDateTimeOffset().ToUniversalTime()
+//           // keeps DateTimeOffset, converts cleanly to UTC for Postgres
+
+// ---
+
+// PROBLEM 2 — Reading DateTimeOffset from DB (EF/Npgsql normalizes to UTC on read)
+//   WRONG:  c.Timestamp.DateTime.Date
+//           // .DateTime on a UTC-normalized value gives UTC date, not IST date
+//           // e.g. 2026-03-13 00:00 IST stored as 2026-03-12 18:30 UTC
+//           // .DateTime = 2026-03-12 → wrong date
+//   RIGHT:  TimeZoneInfo.ConvertTime(c.Timestamp, Ist).Date
+//           // converts UTC back to IST first, then extracts date → 2026-03-13 ✅
+
+// ---
+
+// PROBLEM 3 — DB query boundaries (fromDate/toDate are IST dates, DB stores UTC)
+//   WRONG:  .Where(c => c.Timestamp >= fromDate && c.Timestamp <= toDate)
+//           // fromDate is IST DateTime, c.Timestamp is UTC DateTimeOffset
+//           // boundary mismatch — wrong rows at day edges
+//   RIGHT:  var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
+//           var toUtc   = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
+//           .Where(c => c.Timestamp >= fromUtc && c.Timestamp <= toUtc)
+//           // UTC vs UTC — correct ✅
+
+// ---
+
+// PROBLEM 4 — Writing constructed DateTimeOffset to DB
+//   WRONG:  Timestamp = new DateTimeOffset(bucketTime, TimeSpan.FromHours(5.5))
+//           // Postgres rejects non-UTC offsets — throws:
+//           // "Cannot write DateTimeOffset with Offset=05:30:00 to PostgreSQL type
+//           //  'timestamp with time zone', only offset 0 (UTC) is supported."
+//   RIGHT:  Timestamp = new DateTimeOffset(bucketTime, TimeSpan.FromHours(5.5)).ToUniversalTime()
+//           // convert to UTC before handing to EF ✅
+
+// ---
+
+// PROBLEM 5 — Getting today's date for any date calculation
+//   WRONG:  DateTime.UtcNow.Date
+//           // gives UTC date — between 00:00 IST and 05:30 IST this is yesterday
+//   RIGHT:  TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist).Date
+//           // always gives correct IST date ✅
+
+// ---
+
+// PROBLEM 6 — In-memory LINQ grouping or bucketing on timestamps
+//   WRONG:  c.Timestamp.UtcDateTime.Date  or  c.Timestamp.DateTime.Date
+//           // UTC date, not IST date → wrong bucket assignment for candles
+//           // at market open (09:15 IST = 03:45 UTC)
+//   RIGHT:  TimeZoneInfo.ConvertTime(c.Timestamp, Ist).Date
+//           // IST date ✅
+
+// ---
+
+// SEARCH AND FIX:
+// Scan the entire codebase and fix every occurrence of the above patterns.
+
+// Specifically look for:
+//   - .UtcDateTime  (on a DateTimeOffset — almost always wrong in this codebase)
+//   - .DateTime.Date  (on a DateTimeOffset — always wrong)
+//   - DateTime.UtcNow.Date  (replace with IstToday pattern)
+//   - DateTime.Now  (replace with IstToday pattern)
+//   - new DateTimeOffset(..., TimeSpan.FromHours(5.5))  without .ToUniversalTime()
+//   - .Where(c => c.Timestamp >= someDateTime)  where someDateTime is not a UTC DateTimeOffset
+//   - DateTimeOffset.UtcNow.Date  (use IstToday instead)
+
+// Do NOT change:
+//   - DateTimeOffset.UtcNow  (for CreatedAt audit fields — UTC is correct there)
+//   - .ToUniversalTime()  calls (these are correct)
+//   - TimeZoneInfo.ConvertTime(...)  calls (these are correct)
+//   - Anything in migrations or DB schema files
