@@ -16,7 +16,7 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(DailyPriceUpdateJob),
-                    "0 */2 * * * ?",        // Every 2 minutes
+                    "0 */2 * 1 * ?",        // Every 2 minutes
                     TimeZoneInfo.Utc
                 ),
 
@@ -24,6 +24,12 @@ namespace TradingSystem.WorkerService.Scheduling
                     typeof(MarketCandlesUpdateJob),
                     "0 */15 * 1 * ?",        // Every 4 minutes
                     TimeZoneInfo.Utc
+                ),
+
+                new JobSchedule(
+                    typeof(IntradayCandleUpdateJob),
+                    "0 * 9-15 ? * MON-FRI", // Every minute during market hours (9 AM-3 PM IST, Mon-Fri)
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 ),
 
                 new JobSchedule(
@@ -43,7 +49,13 @@ namespace TradingSystem.WorkerService.Scheduling
                     "0 0 2 1 * ?",         // 2:00 AM on the 28th of every month
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 ),
-                
+
+                // Historical Backfill Job - Run on-demand or uncomment for scheduled execution
+                // new JobSchedule(
+                //     typeof(HistoricalCandleBackfillJob),
+                //     "0 0 3 ? * SUN",      // 3:00 AM every Sunday (for incremental backfill)
+                //     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                // ),
 
                 new JobSchedule(
                     typeof(MarketSentimentUpdateJob),

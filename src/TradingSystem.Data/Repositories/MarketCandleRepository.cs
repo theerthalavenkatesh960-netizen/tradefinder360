@@ -12,10 +12,10 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
     private const int MarketOpenMinuteOfDay = (9 * 60) + 15; // 555 minutes from midnight
 
     // Base stored timeframes (physically stored in partitions)
-    private static readonly HashSet<int> BaseTimeframes = new() { 1, 15, 1440 };
+    private static readonly HashSet<int> BaseTimeframes = new() { 1, 15, 60, 1440 };
     
     // Derived timeframes (calculated from 1m base data)
-    private static readonly HashSet<int> DerivedTimeframes = new() { 5, 30, 60 };
+    private static readonly HashSet<int> DerivedTimeframes = new() { 5, 30 };
     
     // All supported timeframes
     private static readonly HashSet<int> AllSupportedTimeframes = 

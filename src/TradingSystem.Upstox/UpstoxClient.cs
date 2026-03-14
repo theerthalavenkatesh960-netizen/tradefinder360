@@ -58,6 +58,88 @@ public class UpstoxClient
         _rateLimiter.Release();
     }
 
+    /// <summary>
+    /// Fetch historical candles using Upstox API v3.
+    /// Supports minutes (1-300), hours (1-5), and days (1).
+    /// </summary>
+    public async Task<List<Candle>> GetHistoricalCandlesV3Async(
+        string instrumentKey,
+        string unit,
+        int interval,
+        DateTime fromDate,
+        DateTime toDate)
+    {
+        await WaitForRateLimit();
+
+        var encodedKey = Uri.EscapeDataString(instrumentKey);
+        var url = $"historical-candle/{encodedKey}/{unit}/{interval}/{toDate:yyyy-MM-dd}/{fromDate:yyyy-MM-dd}";
+
+        for (int retry = 0; retry < _config.MaxRetries; retry++)
+        {
+            try
+            {
+                var response = await _httpClient.GetAsync(url);
+                response.EnsureSuccessStatusCode();
+
+                var result = await response.Content.ReadFromJsonAsync<UpstoxCandleResponse>();
+
+                if (result?.Data?.Candles == null || result.Data.Candles.Count == 0)
+                    return new List<Candle>();
+
+                var timeframeMinutes = CalculateTimeframeMinutes(unit, interval);
+                return ParseCandles(result.Data.Candles, timeframeMinutes);
+            }
+            catch (HttpRequestException ex) when (retry < _config.MaxRetries - 1)
+            {
+                Console.WriteLine($"HTTP error fetching candles (attempt {retry + 1}): {ex.Message}");
+                await Task.Delay(_config.RetryDelayMs * (retry + 1));
+            }
+        }
+
+        return new List<Candle>();
+    }
+
+    /// <summary>
+    /// Fetch intraday candles (today only) using Upstox API v3.
+    /// Endpoint: /v3/historical-candle/intraday/{instrumentKey}/minutes/{interval}
+    /// </summary>
+    public async Task<List<Candle>> GetIntradayCandlesV3Async(
+        string instrumentKey,
+        int intervalMinutes = 1)
+    {
+        await WaitForRateLimit();
+
+        var encodedKey = Uri.EscapeDataString(instrumentKey);
+        var url = $"v3/historical-candle/intraday/{encodedKey}/minutes/{intervalMinutes}";
+
+        for (int retry = 0; retry < _config.MaxRetries; retry++)
+        {
+            try
+            {
+                var response = await _httpClient.GetAsync(url);
+                response.EnsureSuccessStatusCode();
+
+                var result = await response.Content.ReadFromJsonAsync<UpstoxCandleResponse>();
+
+                if (result?.Data?.Candles == null || result.Data.Candles.Count == 0)
+                    return new List<Candle>();
+
+                return ParseCandles(result.Data.Candles, intervalMinutes);
+            }
+            catch (HttpRequestException ex) when (retry < _config.MaxRetries - 1)
+            {
+                Console.WriteLine($"HTTP error fetching intraday candles (attempt {retry + 1}): {ex.Message}");
+                await Task.Delay(_config.RetryDelayMs * (retry + 1));
+            }
+        }
+
+        return new List<Candle>();
+    }
+
+    /// <summary>
+    /// LEGACY: Old API format - kept for backward compatibility.
+    /// </summary>
+    [Obsolete("Use GetHistoricalCandlesV3Async instead")]
     public async Task<List<Candle>> GetHistoricalCandlesAsync(
         string instrumentKey,
         string interval,
@@ -256,10 +338,33 @@ public class UpstoxClient
         return tokenResponse;
     }
 
-    private List<Candle> ParseCandles(List<List<object>> candleData, string interval)
+    /// <summary>
+    /// Generate date ranges split into batches for API calls with date limits.
+    /// </summary>
+    public static List<(DateTime From, DateTime To)> GenerateDateRanges(
+        DateTime startDate,
+        DateTime endDate,
+        int batchDays)
+    {
+        var ranges = new List<(DateTime, DateTime)>();
+        var currentStart = startDate;
+
+        while (currentStart < endDate)
+        {
+            var currentEnd = currentStart.AddDays(batchDays);
+            if (currentEnd > endDate)
+                currentEnd = endDate;
+
+            ranges.Add((currentStart, currentEnd));
+            currentStart = currentEnd.AddDays(1);
+        }
+
+        return ranges;
+    }
+
+    private List<Candle> ParseCandles(List<List<object>> candleData, int timeframeMinutes)
     {
         var candles = new List<Candle>();
-        int timeframeMinutes = ParseInterval(interval);
 
         foreach (var candle in candleData)
         {
@@ -267,7 +372,6 @@ public class UpstoxClient
 
             try
             {
-                var timestamp = candle[0].ToString();
                 var parsedCandle = new Candle
                 {
                     Timestamp = ((JsonElement)candle[0]).GetDateTimeOffset().UtcDateTime,
@@ -290,6 +394,16 @@ public class UpstoxClient
 
         return candles;
     }
+
+    /// <summary>
+    /// LEGACY: Parse candles using old interval string format.
+    /// </summary>
+    private List<Candle> ParseCandles(List<List<object>> candleData, string interval)
+    {
+        var timeframeMinutes = ParseInterval(interval);
+        return ParseCandles(candleData, timeframeMinutes);
+    }
+
     private int ParseInterval(string interval)
     {
         return interval switch
@@ -301,6 +415,17 @@ public class UpstoxClient
             "60minute" => 60,
             "1day" => 1440,
             _ => 15
+        };
+    }
+
+    private int CalculateTimeframeMinutes(string unit, int interval)
+    {
+        return unit.ToLowerInvariant() switch
+        {
+            "minutes" => interval,
+            "hours" => interval * 60,
+            "days" => interval * 1440,
+            _ => interval
         };
     }
 }
