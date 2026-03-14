@@ -10,7 +10,7 @@ DROP TABLE IF EXISTS instruments CASCADE;
 DROP TABLE IF EXISTS sectors CASCADE;
 
 -- Drop partition helper functions
-DROP FUNCTION IF EXISTS create_next_n_months_market_candles_partitions(INTEGER);
-DROP FUNCTION IF EXISTS create_market_candles_monthly_partition(INTEGER, INTEGER);
-
+DROP FUNCTION IF EXISTS create_market_candles_tiered_partitions(INTEGER, INTEGER);
+DROP FUNCTION IF EXISTS create_future_market_candle_partitions(INTEGER);
+DROP FUNCTION IF EXISTS cleanup_market_candle_retention();
 -- Now run your updated 001_initial_migration.sql script

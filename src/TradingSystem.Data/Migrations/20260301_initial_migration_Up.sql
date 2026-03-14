@@ -129,256 +129,260 @@ ON CONFLICT (instrument_key) DO NOTHING;
 ------------------------------------------------------------
 -- 3. MARKET_CANDLES (TIERED PARTITIONED) - USING instrument_id FK
 ------------------------------------------------------------
+------------------------------------------------------------
+-- MARKET CANDLES ROOT TABLE
+------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS market_candles (
     id BIGSERIAL,
     instrument_id INTEGER NOT NULL,
     timeframe_minutes INTEGER NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
+
     open NUMERIC(18,4) NOT NULL,
     high NUMERIC(18,4) NOT NULL,
     low NUMERIC(18,4) NOT NULL,
     close NUMERIC(18,4) NOT NULL,
+
     volume BIGINT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id, timestamp, timeframe_minutes),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id, timeframe_minutes, timestamp),
+
     CONSTRAINT fk_market_candles_instrument
         FOREIGN KEY (instrument_id)
         REFERENCES instruments(id)
         ON DELETE CASCADE,
-    CONSTRAINT chk_market_candles_timeframe 
-        CHECK (timeframe_minutes IN (1, 15, 1440))
-) PARTITION BY RANGE (timestamp);
 
--- Optimized composite index for UI queries (partition pruning + index-only scans)
+    CONSTRAINT chk_market_candles_timeframe
+        CHECK (timeframe_minutes IN (1,15,1440))
+
+) PARTITION BY LIST (timeframe_minutes);
+
+------------------------------------------------------------
+-- LEVEL 1 PARTITIONS (TIMEFRAME)
+------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS market_candles_1m
+PARTITION OF market_candles
+FOR VALUES IN (1)
+PARTITION BY RANGE (timestamp);
+
+CREATE TABLE IF NOT EXISTS market_candles_15m
+PARTITION OF market_candles
+FOR VALUES IN (15)
+PARTITION BY RANGE (timestamp);
+
+CREATE TABLE IF NOT EXISTS market_candles_1d
+PARTITION OF market_candles
+FOR VALUES IN (1440)
+PARTITION BY RANGE (timestamp);
+
+------------------------------------------------------------
+-- GLOBAL INDEXES
+------------------------------------------------------------
+
 CREATE INDEX IF NOT EXISTS idx_market_candles_chart_query
-  ON market_candles(instrument_id, timeframe_minutes, timestamp DESC);
+ON market_candles(instrument_id, timeframe_minutes, timestamp DESC);
 
--- Support for instrument lookups
 CREATE INDEX IF NOT EXISTS idx_market_candles_instrument
-  ON market_candles(instrument_id);
+ON market_candles(instrument_id);
 
 ------------------------------------------------------------
--- MARKET_CANDLES TIERED PARTITION HELPERS
+-- PARTITION CREATION FUNCTION
 ------------------------------------------------------------
 
--- Function to create resolution-based partitions for a specific month
-CREATE OR REPLACE FUNCTION create_market_candles_tiered_partitions(
+CREATE OR REPLACE FUNCTION create_market_candle_month_partition(
+    tf INTEGER,
     partition_year INTEGER,
     partition_month INTEGER
-) RETURNS TABLE(result TEXT) AS $$
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
 DECLARE
+
     start_date DATE;
     end_date DATE;
-    timeframes INTEGER[] := ARRAY[1, 15, 1440];
+
+    parent_table TEXT;
+    partition_table TEXT;
+
     tf_suffix TEXT;
-    partition_name TEXT;
-    tf INTEGER;
+
 BEGIN
+
     start_date := make_date(partition_year, partition_month, 1);
     end_date := start_date + INTERVAL '1 month';
 
-    FOREACH tf IN ARRAY timeframes
-    LOOP
-        -- Determine suffix based on timeframe
-        CASE tf
-            WHEN 1 THEN tf_suffix := '1m';
-            WHEN 15 THEN tf_suffix := '15m';
-            WHEN 1440 THEN tf_suffix := '1d';
-        END CASE;
+    CASE tf
+        WHEN 1 THEN
+            parent_table := 'market_candles_1m';
+            tf_suffix := '1m';
 
-        partition_name := 'market_candles_' 
-                          || tf_suffix 
-                          || '_' 
-                          || partition_year 
-                          || '_' 
-                          || LPAD(partition_month::TEXT, 2, '0');
+        WHEN 15 THEN
+            parent_table := 'market_candles_15m';
+            tf_suffix := '15m';
 
-        -- Check if partition already exists
-        IF EXISTS (
-            SELECT 1 
-            FROM pg_class c
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relname = partition_name
-            AND n.nspname = 'public'
-        ) THEN
-            result := 'Partition ' || partition_name || ' already exists';
-            RETURN NEXT;
-            CONTINUE;
-        END IF;
+        WHEN 1440 THEN
+            parent_table := 'market_candles_1d';
+            tf_suffix := '1d';
 
-        -- Create partition with CHECK constraint for timeframe
-        EXECUTE format(
-            'CREATE TABLE %I PARTITION OF market_candles
-             FOR VALUES FROM (%L) TO (%L)
-             PARTITION BY LIST (timeframe_minutes)',
-            partition_name,
-            start_date,
-            end_date
-        );
+        ELSE
+            RAISE EXCEPTION 'Invalid timeframe';
+    END CASE;
 
-        -- Create sub-partition for specific timeframe
-        EXECUTE format(
-            'CREATE TABLE %I PARTITION OF %I
-             FOR VALUES IN (%L)',
-            partition_name || '_tf',
-            partition_name,
-            tf
-        );
+    partition_table :=
+        'market_candles_' || tf_suffix || '_' ||
+        partition_year || '_' ||
+        lpad(partition_month::text,2,'0');
 
-        -- Create optimized index on the sub-partition
-        EXECUTE format(
-            'CREATE INDEX %I ON %I (instrument_id, timestamp DESC)',
-            'idx_' || partition_name || '_lookup',
-            partition_name || '_tf'
-        );
+    IF EXISTS (
+        SELECT 1
+        FROM pg_class
+        WHERE relname = partition_table
+    ) THEN
+        RETURN 'Partition exists: ' || partition_table;
+    END IF;
 
-        result := 'Created partition: ' 
-                  || partition_name 
-                  || ' (timeframe=' || tf || 'm) '
-                  || 'for date range [' 
-                  || start_date 
-                  || ', ' 
-                  || end_date 
-                  || ')';
-        RETURN NEXT;
-    END LOOP;
+    EXECUTE format(
+        'CREATE TABLE %I PARTITION OF %I
+         FOR VALUES FROM (%L) TO (%L)',
+        partition_table,
+        parent_table,
+        start_date,
+        end_date
+    );
 
-    RETURN;
+    EXECUTE format(
+        'CREATE INDEX %I
+         ON %I (instrument_id, timestamp DESC)',
+        'idx_' || partition_table || '_lookup',
+        partition_table
+    );
+
+    RETURN 'Created partition: ' || partition_table;
+
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
--- Create future partitions for all timeframes
+------------------------------------------------------------
+-- CREATE FUTURE PARTITIONS
+------------------------------------------------------------
+
 CREATE OR REPLACE FUNCTION create_future_market_candle_partitions(
     months_ahead INTEGER DEFAULT 3
 )
-RETURNS TABLE(result TEXT) AS $$
+RETURNS TABLE(result TEXT)
+LANGUAGE plpgsql
+AS $$
 DECLARE
-    current_month_start DATE;
-    target_year INTEGER;
-    target_month INTEGER;
-    i INTEGER;
+
+    base_date DATE;
+    target_year INT;
+    target_month INT;
+
+    i INT;
+    tf INT;
+
+    timeframes INT[] := ARRAY[1,15,1440];
+
 BEGIN
-    current_month_start := date_trunc('month', CURRENT_DATE)::DATE;
+
+    base_date := date_trunc('month', CURRENT_DATE);
 
     FOR i IN 0..months_ahead LOOP
-        target_year := EXTRACT(YEAR FROM current_month_start + (i || ' months')::INTERVAL)::INTEGER;
-        target_month := EXTRACT(MONTH FROM current_month_start + (i || ' months')::INTERVAL)::INTEGER;
 
-        RETURN QUERY
-        SELECT * FROM create_market_candles_tiered_partitions(target_year, target_month);
+        target_year :=
+            EXTRACT(YEAR FROM base_date + (i || ' months')::interval);
+
+        target_month :=
+            EXTRACT(MONTH FROM base_date + (i || ' months')::interval);
+
+        FOREACH tf IN ARRAY timeframes
+        LOOP
+
+            RETURN QUERY
+            SELECT create_market_candle_month_partition(
+                tf,
+                target_year,
+                target_month
+            );
+
+        END LOOP;
+
     END LOOP;
 
-    RETURN;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 ------------------------------------------------------------
--- RETENTION CLEANUP PROCEDURE
+-- RETENTION CLEANUP
 ------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION cleanup_market_candle_retention()
-RETURNS TABLE(
-    action TEXT,
-    partition_name TEXT,
-    timeframe_minutes INTEGER,
-    partition_start DATE,
-    status TEXT
-) AS $$
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
 DECLARE
-    retention_1m_cutoff DATE;
-    retention_15m_cutoff DATE;
-    partition_record RECORD;
-    drop_sql TEXT;
+
+    cutoff_1m DATE;
+    cutoff_15m DATE;
+
+    r RECORD;
+    partition_date DATE;
+
 BEGIN
-    -- Calculate retention cutoff dates
-    retention_1m_cutoff := date_trunc('month', CURRENT_DATE - INTERVAL '3 months')::DATE;
-    retention_15m_cutoff := date_trunc('month', CURRENT_DATE - INTERVAL '9 months')::DATE;
 
-    -- Find and drop expired 1-minute partitions
-    FOR partition_record IN
-        SELECT 
-            c.relname AS table_name,
-            pg_get_expr(c.relpartbound, c.oid) AS partition_bound
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-        AND c.relname LIKE 'market_candles_1m_%'
-        AND c.relispartition = true
+    cutoff_1m := date_trunc('month', CURRENT_DATE - INTERVAL '3 months');
+    cutoff_15m := date_trunc('month', CURRENT_DATE - INTERVAL '9 months');
+
+    FOR r IN
+        SELECT relname
+        FROM pg_class
+        WHERE relname LIKE 'market_candles_1m_%'
     LOOP
-        -- Extract year and month from partition name
-        DECLARE
-            partition_year INTEGER;
-            partition_month INTEGER;
-            partition_date DATE;
-        BEGIN
-            partition_year := substring(partition_record.table_name from 'market_candles_1m_(\d{4})_\d{2}')::INTEGER;
-            partition_month := substring(partition_record.table_name from 'market_candles_1m_\d{4}_(\d{2})')::INTEGER;
-            partition_date := make_date(partition_year, partition_month, 1);
 
-            IF partition_date < retention_1m_cutoff THEN
-                drop_sql := format('DROP TABLE IF EXISTS %I CASCADE', partition_record.table_name);
-                EXECUTE drop_sql;
-                
-                action := 'DROPPED';
-                partition_name := partition_record.table_name;
-                timeframe_minutes := 1;
-                partition_start := partition_date;
-                status := 'Expired (> 3 months)';
-                RETURN NEXT;
-            END IF;
-        END;
+        partition_date :=
+            to_date(
+                substring(r.relname FROM '(\d{4}_\d{2})'),
+                'YYYY_MM'
+            );
+
+        IF partition_date < cutoff_1m THEN
+            EXECUTE format('DROP TABLE %I', r.relname);
+        END IF;
+
     END LOOP;
 
-    -- Find and drop expired 15-minute partitions
-    FOR partition_record IN
-        SELECT 
-            c.relname AS table_name,
-            pg_get_expr(c.relpartbound, c.oid) AS partition_bound
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-        AND c.relname LIKE 'market_candles_15m_%'
-        AND c.relispartition = true
+    FOR r IN
+        SELECT relname
+        FROM pg_class
+        WHERE relname LIKE 'market_candles_15m_%'
     LOOP
-        DECLARE
-            partition_year INTEGER;
-            partition_month INTEGER;
-            partition_date DATE;
-        BEGIN
-            partition_year := substring(partition_record.table_name from 'market_candles_15m_(\d{4})_\d{2}')::INTEGER;
-            partition_month := substring(partition_record.table_name from 'market_candles_15m_\d{4}_(\d{2})')::INTEGER;
-            partition_date := make_date(partition_year, partition_month, 1);
 
-            IF partition_date < retention_15m_cutoff THEN
-                drop_sql := format('DROP TABLE IF EXISTS %I CASCADE', partition_record.table_name);
-                EXECUTE drop_sql;
-                
-                action := 'DROPPED';
-                partition_name := partition_record.table_name;
-                timeframe_minutes := 15;
-                partition_start := partition_date;
-                status := 'Expired (> 9 months)';
-                RETURN NEXT;
-            END IF;
-        END;
+        partition_date :=
+            to_date(
+                substring(r.relname FROM '(\d{4}_\d{2})'),
+                'YYYY_MM'
+            );
+
+        IF partition_date < cutoff_15m THEN
+            EXECUTE format('DROP TABLE %I', r.relname);
+        END IF;
+
     END LOOP;
 
-    -- Daily candles are NOT auto-deleted (4+ years retention)
-    action := 'RETAINED';
-    partition_name := 'market_candles_1d_*';
-    timeframe_minutes := 1440;
-    partition_start := NULL;
-    status := 'Daily candles retained indefinitely';
-    RETURN NEXT;
+    RETURN 'Cleanup completed';
 
-    RETURN;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
--- Initialize partitions for current and next 3 months
-SELECT create_future_market_candle_partitions(3);
+------------------------------------------------------------
+-- INITIAL PARTITION CREATION
+------------------------------------------------------------
 
+SELECT * FROM create_future_market_candle_partitions(3);
 ------------------------------------------------------------
 -- EXAMPLE QUERIES AND INGESTION
 ------------------------------------------------------------
