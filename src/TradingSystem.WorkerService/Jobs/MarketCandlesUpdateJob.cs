@@ -1,7 +1,10 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using TradingSystem.Core.Models;
 using TradingSystem.Core.Utilities;
+using TradingSystem.Data;
 using TradingSystem.Data.Repositories.Interfaces;
 using TradingSystem.Upstox;
 using System.Collections.Concurrent;
@@ -9,13 +12,15 @@ using System.Collections.Concurrent;
 [DisallowConcurrentExecution]
 public class MarketCandlesUpdateJob : IJob
 {
-    private const int MaxParallelism = 16;  // Increased for 6K stocks
+    // CRITICAL: Reduce parallelism to prevent DB connection exhaustion
+    // 6K stocks × 3 timeframes = potential 18K tasks
+    // With 12 parallel: max 36 concurrent DB operations (12 instruments × 3 timeframes)
+    private const int MaxInstrumentParallelism = 12;
     private const int MaxApiRetries = 3;
     private const int MinTradingDaysGap = 3;
     private static readonly TimeSpan RetryBaseDelay = TimeSpan.FromSeconds(1);
 
-    private readonly IInstrumentRepository _instrumentRepository;
-    private readonly IMarketCandleRepository _candleRepository;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly UpstoxClient _upstoxClient;
     private readonly ILogger<MarketCandlesUpdateJob> _logger;
 
@@ -30,13 +35,11 @@ public class MarketCandlesUpdateJob : IJob
     private readonly ConcurrentBag<JobError> _errors = new();
 
     public MarketCandlesUpdateJob(
-        IInstrumentRepository instrumentRepository,
-        IMarketCandleRepository candleRepository,
+        IServiceScopeFactory scopeFactory,
         UpstoxClient upstoxClient,
         ILogger<MarketCandlesUpdateJob> logger)
     {
-        _instrumentRepository = instrumentRepository;
-        _candleRepository = candleRepository;
+        _scopeFactory = scopeFactory;
         _upstoxClient = upstoxClient;
         _logger = logger;
     }
@@ -96,8 +99,14 @@ public class MarketCandlesUpdateJob : IJob
         // Validate calendar data
         TradingCalendar.ValidateHolidayData(_logger);
 
-        // Load instruments
-        var instruments = (await _instrumentRepository.GetActiveInstrumentsAsync(ct)).ToList();
+        // Load instruments using a dedicated scope
+        List<TradingInstrument> instruments;
+        await using (var scope = _scopeFactory.CreateAsyncScope())
+        {
+            var instrumentRepository = scope.ServiceProvider.GetRequiredService<IInstrumentRepository>();
+            instruments = (await instrumentRepository.GetActiveInstrumentsAsync(ct)).ToList();
+        }
+
         if (instruments.Count == 0)
         {
             _logger.LogWarning("No active instruments found");
@@ -105,14 +114,14 @@ public class MarketCandlesUpdateJob : IJob
         }
 
         // Calculate date ranges - FIX: Use UTC midnight to avoid timezone issues
-        var toDate = DateTime.UtcNow.Date;  // Today UTC midnight
+        var toDate = DateTime.UtcNow.Date;
         var fromDates = TimeframeConfigs.ToDictionary(
             c => c,
             c => toDate.AddDays(-c.RetentionDays));
 
         _logger.LogInformation(
             "Instruments: {Count} | Date: {To:yyyy-MM-dd} | Parallelism: {P}",
-            instruments.Count, toDate, MaxParallelism);
+            instruments.Count, toDate, MaxInstrumentParallelism);
 
         foreach (var (cfg, from) in fromDates)
             _logger.LogInformation(
@@ -123,19 +132,26 @@ public class MarketCandlesUpdateJob : IJob
         var metrics = new JobMetrics();
         var progress = 0;
 
-        // Process all instruments in parallel with all timeframes
-        var tasks = new List<Task>();
-        var semaphore = new SemaphoreSlim(MaxParallelism);
-
-        foreach (var instrument in instruments)
-        {
-            await semaphore.WaitAsync(ct);
-
-            tasks.Add(Task.Run(async () =>
+        // CRITICAL FIX: Process instruments with controlled parallelism
+        // Each instrument gets its own DbContext scope to prevent sharing
+        await Parallel.ForEachAsync(
+            instruments,
+            new ParallelOptions 
+            { 
+                MaxDegreeOfParallelism = MaxInstrumentParallelism, 
+                CancellationToken = ct 
+            },
+            async (instrument, innerCt) =>
             {
+                // Each instrument gets its own service scope = isolated DbContext
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                var candleRepository = scope.ServiceProvider.GetRequiredService<IMarketCandleRepository>();
+
                 try
                 {
-                    var result = await ProcessInstrumentAsync(instrument, toDate, fromDates, ct);
+                    var result = await ProcessInstrumentAsync(
+                        instrument, toDate, fromDates, candleRepository, innerCt);
+                    
                     metrics.Add(result);
 
                     var done = Interlocked.Increment(ref progress);
@@ -145,14 +161,20 @@ public class MarketCandlesUpdateJob : IJob
                             done, instruments.Count, _errors.Count,
                             metrics.TotalApiCalls, metrics.TotalCandlesSaved);
                 }
-                finally
+                catch (Exception ex)
                 {
-                    semaphore.Release();
-                }
-            }, ct));
-        }
+                    _errors.Add(new JobError
+                    {
+                        ErrorType = ex.GetType().Name,
+                        Context = $"{instrument.Symbol} (all timeframes)",
+                        Message = ex.Message,
+                        StackTrace = ex.StackTrace ?? ""
+                    });
 
-        await Task.WhenAll(tasks);
+                    _logger.LogError(ex, "{Symbol} FAILED: {Msg}",
+                        instrument.Symbol, ex.Message);
+                }
+            });
 
         _logger.LogInformation(
             "FINAL: Processed={P} | Errors={E} | API={A} | Candles={C}",
@@ -163,24 +185,22 @@ public class MarketCandlesUpdateJob : IJob
         TradingInstrument instrument,
         DateTime toDate,
         IReadOnlyDictionary<TimeframeConfig, DateTime> fromDates,
+        IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
         var result = new InstrumentResult { Symbol = instrument.Symbol };
 
-        // Process all timeframes in parallel per instrument
-        var timeframeTasks = TimeframeConfigs.Select(async config =>
+        // Process timeframes SEQUENTIALLY per instrument
+        // Prevents overwhelming DB with 3x concurrent writes per instrument
+        foreach (var config in TimeframeConfigs)
         {
             try
             {
                 var (calls, candles) = await ProcessTimeframeAsync(
-                    instrument, config, fromDates[config], toDate, ct);
+                    instrument, config, fromDates[config], toDate, candleRepository, ct);
 
-                return new TimeframeResult
-                {
-                    Success = true,
-                    ApiCalls = calls,
-                    CandlesSaved = candles
-                };
+                result.ApiCalls += calls;
+                result.CandlesSaved += candles;
             }
             catch (Exception ex)
             {
@@ -194,19 +214,6 @@ public class MarketCandlesUpdateJob : IJob
 
                 _logger.LogError(ex, "{Symbol} {TF}m FAILED: {Msg}",
                     instrument.Symbol, config.TimeframeMinutes, ex.Message);
-
-                return new TimeframeResult { Success = false };
-            }
-        }).ToList();
-
-        var timeframeResults = await Task.WhenAll(timeframeTasks);
-
-        foreach (var tfResult in timeframeResults)
-        {
-            if (tfResult.Success)
-            {
-                result.ApiCalls += tfResult.ApiCalls;
-                result.CandlesSaved += tfResult.CandlesSaved;
             }
         }
 
@@ -218,11 +225,12 @@ public class MarketCandlesUpdateJob : IJob
         TimeframeConfig config,
         DateTime fromDate,
         DateTime toDate,
+        IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
         return config.Unit == "days"
-            ? await ProcessDailyAsync(instrument, config, fromDate, toDate, ct)
-            : await ProcessIntradayAsync(instrument, config, fromDate, toDate, ct);
+            ? await ProcessDailyAsync(instrument, config, fromDate, toDate, candleRepository, ct)
+            : await ProcessIntradayAsync(instrument, config, fromDate, toDate, candleRepository, ct);
     }
 
     private async Task<(int ApiCalls, int CandlesSaved)> ProcessDailyAsync(
@@ -230,23 +238,22 @@ public class MarketCandlesUpdateJob : IJob
         TimeframeConfig config,
         DateTime fromDate,
         DateTime toDate,
+        IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
         // FIX: Get latest date and ensure UTC comparison
-        var latestDate = await _candleRepository.GetLatestCandleDateAsync(
+        var latestDate = await candleRepository.GetLatestCandleDateAsync(
             instrument.Id, config.TimeframeMinutes, ct);
 
         DateTime fetchFrom;
 
         if (latestDate.HasValue)
         {
-            // FIX: Ensure we're comparing dates in UTC
-            var latestUtc = DateTime.SpecifyKind(latestDate.Value, DateTimeKind.Utc).Date;
+            // FIX: Already UTC from repository, just ensure date comparison
+            var latestUtc = latestDate.Value.Date;
 
             if (latestUtc >= toDate.Date)
             {
-                _logger.LogDebug("{Symbol} 1d — up to date (latest={Date:yyyy-MM-dd})",
-                    instrument.Symbol, latestUtc);
                 return (0, 0);
             }
 
@@ -260,19 +267,13 @@ public class MarketCandlesUpdateJob : IJob
         if (fetchFrom > toDate)
             return (0, 0);
 
-        _logger.LogDebug("{Symbol} 1d — fetching {From:yyyy-MM-dd} → {To:yyyy-MM-dd}",
-            instrument.Symbol, fetchFrom, toDate);
-
         var candles = await FetchWithRetryAsync(instrument, config, fetchFrom, toDate, ct);
 
         if (candles is null || candles.Count == 0)
             return (1, 0);
 
         var marketCandles = MapToMarketCandles(candles, instrument.Id, config.TimeframeMinutes);
-        await _candleRepository.BulkUpsertAsync(marketCandles, ct);
-
-        _logger.LogInformation("{Symbol} 1d — saved {Count} candles",
-            instrument.Symbol, marketCandles.Count);
+        await candleRepository.BulkUpsertAsync(marketCandles, ct);
 
         return (1, marketCandles.Count);
     }
@@ -282,17 +283,14 @@ public class MarketCandlesUpdateJob : IJob
         TimeframeConfig config,
         DateTime fromDate,
         DateTime toDate,
+        IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
         var genuineRanges = await GetGenuineIntradayMissingRangesAsync(
-            instrument, config, fromDate, toDate, ct);
+            instrument, config, fromDate, toDate, candleRepository, ct);
 
         if (genuineRanges.Count == 0)
             return (0, 0);
-
-        _logger.LogDebug("{Symbol} {TF}m — {Count} gap(s): {Ranges}",
-            instrument.Symbol, config.TimeframeMinutes, genuineRanges.Count,
-            string.Join(", ", genuineRanges.Select(r => $"{r.From:MM/dd}→{r.To:MM/dd}")));
 
         int apiCalls = 0;
         int candlesSaved = 0;
@@ -312,14 +310,10 @@ public class MarketCandlesUpdateJob : IJob
 
                 apiCalls++;
                 var marketCandles = MapToMarketCandles(candles, instrument.Id, config.TimeframeMinutes);
-                await _candleRepository.BulkUpsertAsync(marketCandles, ct);
+                await candleRepository.BulkUpsertAsync(marketCandles, ct);
                 candlesSaved += marketCandles.Count;
             }
         }
-
-        if (candlesSaved > 0)
-            _logger.LogInformation("{Symbol} {TF}m — saved {Count} candles",
-                instrument.Symbol, config.TimeframeMinutes, candlesSaved);
 
         return (apiCalls, candlesSaved);
     }
@@ -329,14 +323,15 @@ public class MarketCandlesUpdateJob : IJob
         TimeframeConfig config,
         DateTime fromDate,
         DateTime toDate,
+        IMarketCandleRepository candleRepository,
         CancellationToken ct)
     {
-        var rawRanges = (await _candleRepository.GetMissingDataRangesAsync(
+        var rawRanges = (await candleRepository.GetMissingDataRangesAsync(
             instrument.Id, fromDate, toDate, config.TimeframeMinutes, ct)).ToList();
 
         if (rawRanges.Count == 0)
         {
-            var hasAnyData = await _candleRepository.HasAnyDataAsync(
+            var hasAnyData = await candleRepository.HasAnyDataAsync(
                 instrument.Id, config.TimeframeMinutes, ct);
 
             if (!hasAnyData)
@@ -427,9 +422,6 @@ public class MarketCandlesUpdateJob : IJob
                 if (attempt < MaxApiRetries)
                 {
                     var delay = RetryBaseDelay * Math.Pow(2, attempt - 1);
-                    _logger.LogDebug("{Symbol} {TF}m — retry {A}/{Max} after {D}s: {Msg}",
-                        instrument.Symbol, config.TimeframeMinutes,
-                        attempt, MaxApiRetries, delay.TotalSeconds, ex.Message);
                     await Task.Delay(delay, ct);
                 }
             }
@@ -457,13 +449,6 @@ public class MarketCandlesUpdateJob : IJob
         public required string Context { get; init; }
         public required string Message { get; init; }
         public required string StackTrace { get; init; }
-    }
-
-    private record TimeframeResult
-    {
-        public bool Success { get; init; }
-        public int ApiCalls { get; init; }
-        public int CandlesSaved { get; init; }
     }
 
     private record InstrumentResult

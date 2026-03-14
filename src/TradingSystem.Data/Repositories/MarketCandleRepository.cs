@@ -198,6 +198,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
                      && c.TimeframeMinutes == checkTimeframe
                      && c.Timestamp >= fromDate
                      && c.Timestamp <= toDate)
+            .AsNoTracking()
             .Select(c => c.Timestamp.Date)
             .Distinct()
             .OrderBy(d => d)
@@ -280,7 +281,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         }
 
         // For derived timeframes, get last 2 days of 1m data and aggregate
-        var today = DateTime.Today;
+        var today = DateTime.UtcNow.Date;
         var fromDate = today.AddDays(-2);
 
         var recentCandles = await GetByInstrumentIdAsync(
@@ -317,8 +318,9 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         var timestamps = candleList.Select(c => c.Timestamp).Distinct().ToList();
         var timeframes = candleList.Select(c => c.TimeframeMinutes).Distinct().ToList();
 
-        // Fetch existing candles for upsert logic (check all timeframes)
+        // CRITICAL FIX: Use AsNoTracking for read-only query to avoid tracking overhead
         var existingCandles = await _dbSet
+            .AsNoTracking()
             .Where(c => instrumentIds.Contains(c.InstrumentId)
                      && timeframes.Contains(c.TimeframeMinutes)
                      && timestamps.Contains(c.Timestamp))
@@ -328,7 +330,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
 
         var toAdd = new List<MarketCandle>();
         var toUpdate = new List<MarketCandle>();
-        var now = DateTime.UtcNow;
+        var now = DateTimeOffset.UtcNow;
 
         foreach (var candle in candleList)
         {
@@ -336,13 +338,24 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
 
             if (existingCandles.TryGetValue(key, out var existing))
             {
-                // Update existing candle (in case of corrections)
-                existing.Open = candle.Open;
-                existing.High = candle.High;
-                existing.Low = candle.Low;
-                existing.Close = candle.Close;
-                existing.Volume = candle.Volume;
-                toUpdate.Add(existing);
+                // Update existing candle (must attach to context first since we used AsNoTracking)
+                var tracked = _dbSet.Local.FirstOrDefault(e => 
+                    e.InstrumentId == existing.InstrumentId &&
+                    e.TimeframeMinutes == existing.TimeframeMinutes &&
+                    e.Timestamp == existing.Timestamp);
+
+                if (tracked == null)
+                {
+                    _context.Attach(existing);
+                    tracked = existing;
+                }
+
+                tracked.Open = candle.Open;
+                tracked.High = candle.High;
+                tracked.Low = candle.Low;
+                tracked.Close = candle.Close;
+                tracked.Volume = candle.Volume;
+                toUpdate.Add(tracked);
             }
             else
             {
@@ -368,21 +381,26 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
     public async Task<bool> HasAnyDataAsync(int instrumentId, int timeframeMinutes, CancellationToken cancellationToken = default)
     {
         return await _dbSet
+            .AsNoTracking()
             .AnyAsync(
                 c => c.InstrumentId == instrumentId
                 && c.TimeframeMinutes == timeframeMinutes,
                 cancellationToken);
     }
 
+    /// <summary>
+    /// FIX: Return UtcDateTime to preserve timezone consistency
+    /// </summary>
     public async Task<DateTime?> GetLatestCandleDateAsync(
         int instrumentId,
         int timeframeMinutes,
         CancellationToken cancellationToken = default)
     {
         var latest = await _dbSet
+            .AsNoTracking()
             .Where(c => c.InstrumentId    == instrumentId
                     && c.TimeframeMinutes == timeframeMinutes)
-            .MaxAsync(c => c.Timestamp.DateTime, cancellationToken);
+            .MaxAsync(c => (DateTime?)c.Timestamp.UtcDateTime, cancellationToken);
 
         return latest;
     }
