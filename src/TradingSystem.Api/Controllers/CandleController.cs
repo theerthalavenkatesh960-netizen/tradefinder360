@@ -42,9 +42,9 @@ public class CandleController : ControllerBase
             return BadRequest("Timeframe must be greater than 0");
         }
 
-        if (daysBack <= 0 || daysBack > 365)
+        if (daysBack <= 0 || daysBack > 1865)
         {
-            return BadRequest("Days back must be between 1 and 365");
+            return BadRequest("Days back must be between 1 and 1865");
         }
 
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
