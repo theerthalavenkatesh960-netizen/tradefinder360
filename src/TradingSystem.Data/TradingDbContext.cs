@@ -91,11 +91,14 @@ public class TradingDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // MarketCandles
+        // MarketCandles - TIERED PARTITIONED (1m, 15m, 1d)
         modelBuilder.Entity<MarketCandle>(entity =>
         {
             entity.ToTable("market_candles");
-            entity.HasKey(e => new { e.Id, e.Timestamp });
+            
+            // Updated composite primary key to include timeframe_minutes for sub-partitioning
+            entity.HasKey(e => new { e.Id, e.Timestamp, e.TimeframeMinutes });
+            
             entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
             entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
             entity.Property(e => e.TimeframeMinutes).HasColumnName("timeframe_minutes").IsRequired();
@@ -107,7 +110,10 @@ public class TradingDbContext : DbContext
             entity.Property(e => e.Volume).HasColumnName("volume").IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
 
-            entity.HasIndex(e => new { e.InstrumentId, e.TimeframeMinutes, e.Timestamp }).HasDatabaseName("idx_market_candles_lookup");
+            // Optimized index for chart queries (partition pruning enabled)
+            entity.HasIndex(e => new { e.InstrumentId, e.TimeframeMinutes, e.Timestamp })
+                .HasDatabaseName("idx_market_candles_chart_query");
+            
             entity.HasIndex(e => e.InstrumentId).HasDatabaseName("idx_market_candles_instrument");
 
             entity.HasOne(e => e.Instrument)
@@ -338,6 +344,10 @@ public class TradingDbContext : DbContext
                     v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
                     v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
                 );
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+
+            entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_market_sentiments_timestamp");
+            entity.HasIndex(e => e.Sentiment).HasDatabaseName("idx_market_sentiments_sentiment");
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
 
             entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_market_sentiments_timestamp");

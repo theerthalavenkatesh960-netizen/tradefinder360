@@ -25,6 +25,7 @@ public interface IMarketCandleRepository : ICommonRepository<MarketCandle>
         int instrumentId,
         DateTime fromDate,
         DateTime toDate,
+        int timeframeMinutes,
         CancellationToken cancellationToken = default);
 }
 

@@ -43,7 +43,8 @@ public class CandleService : ICandleService
         var missingRanges = await _candleRepository.GetMissingDataRangesAsync(
             instrumentId, 
             fromDate, 
-            toDate);
+            toDate,
+            timeframeMinutes);
 
         // Fetch missing data from Upstox API if needed
         if (missingRanges.Any())
