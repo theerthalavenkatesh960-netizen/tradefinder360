@@ -34,8 +34,8 @@ public class MarketCandlesUpdateJob : IJob
     private static readonly IReadOnlyList<TimeframeConfig> TimeframeConfigs =
     [
         new(Unit: "days",    Interval: 1,  TimeframeMinutes: 1440, RetentionDays: 1825, BatchDays: 1825),
-        new(Unit: "minutes", Interval: 15, TimeframeMinutes: 15,   RetentionDays: 274,  BatchDays: 31),
-        new(Unit: "minutes", Interval: 1,  TimeframeMinutes: 1,    RetentionDays: 91,   BatchDays: 31),
+        new(Unit: "minutes", Interval: 15, TimeframeMinutes: 15,   RetentionDays: 274,  BatchDays: 30),
+        new(Unit: "minutes", Interval: 1,  TimeframeMinutes: 1,    RetentionDays: 91,   BatchDays: 30),
     ];
 
     private readonly ConcurrentBag<JobError> _errors = new();
@@ -381,17 +381,28 @@ public class MarketCandlesUpdateJob : IJob
     // All inputs and outputs are IST dates (no time component).
     // -------------------------------------------------------------------------
     private static List<(DateTime From, DateTime To)> GenerateMonthlyBatches(
-        DateTime from, DateTime to, int maxDays)
+        DateTime from, DateTime to, int _unused)  // _unused kept for signature compat
     {
         var batches = new List<(DateTime, DateTime)>();
-        var cursor  = from;
 
-        while (cursor <= to)
+        // Start from the 1st of the month containing 'from'
+        var monthStart = new DateTime(from.Year, from.Month, 1);
+
+        while (monthStart <= to)
         {
-            var batchEnd = cursor.AddDays(maxDays - 1);
-            if (batchEnd > to) batchEnd = to;
-            batches.Add((cursor, batchEnd));
-            cursor = batchEnd.AddDays(1);
+            // Last day of this calendar month
+            var monthEnd = new DateTime(
+                monthStart.Year,
+                monthStart.Month,
+                DateTime.DaysInMonth(monthStart.Year, monthStart.Month));
+
+            // Clamp end to our range ceiling
+            var batchTo = monthEnd > to ? to : monthEnd;
+
+            batches.Add((monthStart, batchTo));
+
+            // Move to 1st of next month
+            monthStart = monthStart.AddMonths(1);
         }
 
         return batches;
