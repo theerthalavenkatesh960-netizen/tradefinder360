@@ -27,6 +27,17 @@ public interface IMarketCandleRepository : ICommonRepository<MarketCandle>
         DateTime toDate,
         int timeframeMinutes,
         CancellationToken cancellationToken = default);
+    
+    // Add to your interface and implement in your repository
+    Task<bool> HasAnyDataAsync(
+        int instrumentId,
+        int timeframeMinutes,
+        CancellationToken cancellationToken = default);
+
+    Task<DateTime?> GetLatestCandleDateAsync(
+        int instrumentId,
+        int timeframeMinutes,
+        CancellationToken cancellationToken = default);
 }
 
 public class DateRange : IEquatable<DateRange>

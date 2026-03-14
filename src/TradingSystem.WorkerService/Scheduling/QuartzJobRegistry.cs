@@ -22,7 +22,7 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(MarketCandlesUpdateJob),
-                    "0 */5 * * * ?",        // Every 4 minutes
+                    "0 */3 * * * ?",        // Every 4 minutes
                     TimeZoneInfo.Utc
                 ),
 

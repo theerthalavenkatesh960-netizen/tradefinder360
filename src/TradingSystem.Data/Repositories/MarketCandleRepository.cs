@@ -364,4 +364,26 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
 
         return await _context.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task<bool> HasAnyDataAsync(int instrumentId, int timeframeMinutes, CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .AnyAsync(
+                c => c.InstrumentId == instrumentId
+                && c.TimeframeMinutes == timeframeMinutes,
+                cancellationToken);
+    }
+
+    public async Task<DateTime?> GetLatestCandleDateAsync(
+        int instrumentId,
+        int timeframeMinutes,
+        CancellationToken cancellationToken = default)
+    {
+        var latest = await _dbSet
+            .Where(c => c.InstrumentId    == instrumentId
+                    && c.TimeframeMinutes == timeframeMinutes)
+            .MaxAsync(c => c.Timestamp.DateTime, cancellationToken);
+
+        return latest;
+    }
 }
