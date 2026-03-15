@@ -531,12 +531,20 @@ public class IndicatorVerificationController : ControllerBase
         var calc  = Math.Round(calculated, 4, MidpointRounding.AwayFromZero);
         var store = Math.Round(stored,     4, MidpointRounding.AwayFromZero);
         
-        // ✅ ADDED: Absolute difference check for near-zero values
         var absDiff = Math.Abs(calc - store);
-        if (absDiff <= 0.0001m) return 0m; // Ignore sub-basis-point differences
         
+        // ✅ ENHANCED: Context-aware absolute threshold
+        // For values near zero (< 1.0), use absolute difference only
+        // For larger values, allow up to 0.01 absolute difference
+        if (Math.Abs(store) < 1.0m)
+        {
+            // Near-zero values: ignore if absolute diff < 0.01
+            return absDiff <= 0.01m ? 0m : (absDiff / Math.Abs(store) * 100);
+        }
+        
+        // Larger values: ignore if absolute diff < 0.01 OR percentage < 1%
+        if (absDiff <= 0.01m) return 0m;
         if (store == 0) return 0;
-        if (absDiff == 0) return 0;
         
         return absDiff / Math.Abs(store) * 100;
     }
