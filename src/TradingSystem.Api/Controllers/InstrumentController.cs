@@ -1,10 +1,11 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
 using TradingSystem.Data.Repositories.Interfaces;
+using TradingSystem.Indicators;
 
 namespace TradingSystem.Api.Controllers;
 
@@ -46,12 +47,18 @@ public class InstrumentController : ControllerBase
 
         if (latestIndicator == null)
             return NotFound($"No indicator data found for '{symbol}'. Ensure data has been fetched.");
- 
+
         var scanResult = await _scanner.ScanInstrumentAsync(instrument, timeframe);
 
+        // ✅ FIXED: Run gate validation to explain WHY no recommendation exists
         var recommendation = await _recommender.GetLatestForInstrumentAsync(instrument.Id);
         EntryGuidanceDto? guidance = null;
-        if (recommendation != null)
+        string explanation;
+        List<string> reasoningPoints;
+        int confidence;
+
+        if (recommendation != null && recommendation.IsActive
+            && recommendation.ExpiresAt > DateTimeOffset.UtcNow)
         {
             guidance = new EntryGuidanceDto
             {
@@ -63,6 +70,28 @@ public class InstrumentController : ControllerBase
                 OptionType = recommendation.OptionType,
                 OptionStrike = recommendation.OptionStrike
             };
+            explanation = recommendation.ExplanationText;
+            reasoningPoints = recommendation.ReasoningPoints;
+            confidence = recommendation.Confidence;
+        }
+        else
+        {
+            // ✅ ADDED: Explain gate failure instead of generic message
+            var indicators = new IndicatorValues
+            {
+                ADX = latestIndicator.ADX,
+                VWAP = latestIndicator.VWAP,
+                EMAFast = latestIndicator.EMAFast,
+                EMASlow = latestIndicator.EMASlow,
+            };
+            var lastClose = scanResult?.LastClose ?? 0;
+            var direction = scanResult?.Bias == ScanBias.BULLISH ? "BUY" : "SELL";
+
+            explanation = scanResult != null
+                ? $"No active recommendation — {BuildGateExplanation(scanResult, indicators, lastClose, direction)}"
+                : "No recommendation generated for current market conditions.";
+            reasoningPoints = scanResult?.Reasons ?? [];
+            confidence = scanResult?.SetupScore ?? 0;
         }
 
         var dto = new AnalysisDto
@@ -106,13 +135,43 @@ public class InstrumentController : ControllerBase
                 }
             } : new TrendStateDto { State = "UNKNOWN" },
             EntryGuidance = guidance,
-            Confidence = recommendation?.Confidence ?? scanResult?.SetupScore ?? 0,
-            Explanation = recommendation?.ExplanationText ?? "No recommendation generated for current market conditions.",
-            ReasoningPoints = recommendation?.ReasoningPoints ?? scanResult?.Reasons ?? new(),
+            Confidence = confidence,
+            Explanation = explanation,
+            ReasoningPoints = reasoningPoints,
             AnalysedAt = DateTime.UtcNow
         };
 
         return Ok(dto);
+    }
+
+    /// <summary>
+    /// Summarizes which gate failed for the analysis explanation text.
+    /// </summary>
+    private static string BuildGateExplanation(
+        ScanResult scan, IndicatorValues indicators, decimal lastClose, string direction)
+    {
+        if (scan.SetupScore < 50 || scan.Bias == ScanBias.NONE)
+            return $"setup score {scan.SetupScore}/100 too low or no directional bias";
+
+        if (scan.SetupScore < 65)
+            return $"confidence {scan.SetupScore}/100 below minimum 65";
+
+        if (scan.MarketState != ScanMarketState.PULLBACK_READY)
+            return $"market state is {scan.MarketState}, not PULLBACK_READY";
+
+        if (indicators.ADX < 25)
+            return $"ADX {indicators.ADX:F1} below 25 — trend not confirmed";
+
+        if (indicators.ADX > 60)
+            return $"ADX {indicators.ADX:F1} above 60 — trend exhaustion";
+
+        if (direction == "BUY" && lastClose < indicators.VWAP && indicators.VWAP > 0)
+            return $"price below VWAP — no buy setup";
+
+        if (direction == "SELL" && lastClose > indicators.VWAP && indicators.VWAP > 0)
+            return $"price above VWAP — no sell setup";
+
+        return "market is closed or conditions not met";
     }
 
     [HttpGet("{symbol}/indicators")]
@@ -159,35 +218,42 @@ public class InstrumentController : ControllerBase
     {
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
         if (instrument == null)
-        {
             return NotFound($"Instrument '{symbol}' not found.");
-        }
 
         var key = instrument.InstrumentKey;
-        var recommendation = await _recommender.GenerateAsync(key, timeframe);
+        var result = await _recommender.GenerateAsync(key, timeframe);
 
-        if (recommendation == null)
-            return NoContent();
+        if (!result.IsGenerated)
+        {
+            return Ok(new RecommendationDto
+            {
+                Symbol = symbol,
+                Direction = "NONE",
+                Confidence = 0,
+                ExplanationText = result.BlockedReason ?? "No recommendation for current market conditions",
+                ReasoningPoints = new List<string> { result.BlockedReason ?? "Signal gates not met" },
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
 
-        //var instrument = await _instrumentService.GetByKeyAsync(key);
-
+        var rec = result.Recommendation!;
         return Ok(new RecommendationDto
         {
-            Id = recommendation.Id,
+            Id = rec.Id,
             InstrumentId = instrument.Id,
-            Symbol = instrument?.Symbol ?? key,
-            Direction = recommendation.Direction,
-            EntryPrice = recommendation.EntryPrice,
-            StopLoss = recommendation.StopLoss,
-            Target = recommendation.Target,
-            RiskRewardRatio = recommendation.RiskRewardRatio,
-            Confidence = recommendation.Confidence,
-            OptionType = recommendation.OptionType,
-            OptionStrike = recommendation.OptionStrike,
-            ExplanationText = recommendation.ExplanationText,
-            ReasoningPoints = recommendation.ReasoningPoints,
-            Timestamp = recommendation.Timestamp,
-            ExpiresAt = recommendation.ExpiresAt
+            Symbol = instrument.Symbol,
+            Direction = rec.Direction,
+            EntryPrice = rec.EntryPrice,
+            StopLoss = rec.StopLoss,
+            Target = rec.Target,
+            RiskRewardRatio = rec.RiskRewardRatio,
+            Confidence = rec.Confidence,
+            OptionType = rec.OptionType,
+            OptionStrike = rec.OptionStrike,
+            ExplanationText = rec.ExplanationText,
+            ReasoningPoints = rec.ReasoningPoints,
+            Timestamp = rec.Timestamp,
+            ExpiresAt = rec.ExpiresAt
         });
     }
     

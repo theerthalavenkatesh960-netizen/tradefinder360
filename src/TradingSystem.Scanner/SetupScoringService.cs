@@ -304,7 +304,8 @@ public class SetupScoringService
         if (indicators.ADX < 20)
             return ScanMarketState.SIDEWAYS;
 
-        var bandwidth = indicators.BollingerUpper > 0
+        // ✅ FIXED: Guard against BollingerMiddle = 0
+        var bandwidth = indicators.BollingerUpper > 0 && indicators.BollingerMiddle > 0
             ? (indicators.BollingerUpper - indicators.BollingerLower) / indicators.BollingerMiddle
             : 0;
 
@@ -315,7 +316,6 @@ public class SetupScoringService
 
         if (isPullbackRsi && indicators.ADX >= 25)
         {
-            // ✅ FIXED: VWAP check skipped when VWAP unavailable
             bool vwapConfirmed = indicators.VWAP <= 0
                 || (bias == ScanBias.BULLISH && lastClose > indicators.VWAP)
                 || (bias == ScanBias.BEARISH && lastClose < indicators.VWAP);

@@ -40,38 +40,40 @@ public class TradeRecommendationService
         _logger = logger;
     }
 
-    public async Task<Recommendation?> GenerateAsync(string instrumentKey, int timeframeMinutes = 15)
+    public async Task<RecommendationResult> GenerateAsync(string instrumentKey, int timeframeMinutes = 15)
     {
         var instrument = await _instrumentService.GetByKeyAsync(instrumentKey);
-        if (instrument == null || !instrument.IsActive) return null;
+        if (instrument == null || !instrument.IsActive)
+            return RecommendationResult.Blocked($"Instrument '{instrumentKey}' not found or inactive");
 
         var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes);
-        if (candles.Count < 50) return null;
+        if (candles.Count < 50)
+            return RecommendationResult.Blocked($"Insufficient candle data ({candles.Count}/50 required)");
 
         var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframeMinutes);
-        if (latestIndicator == null) return null;
+        if (latestIndicator == null)
+            return RecommendationResult.Blocked("No indicator snapshot available");
 
         var indicators = MapToIndicatorValues(latestIndicator);
         var scanResult = _scorer.Score(instrument, indicators, candles);
         var lastClose = candles.Last().Close;
         var direction = scanResult.Bias == ScanBias.BULLISH ? "BUY" : "SELL";
 
-        // ✅ ADDED: Validate all signal gates before generating recommendation
         var gateFailure = ValidateSignalGates(scanResult, indicators, lastClose, direction);
         if (gateFailure != null)
         {
             _logger.LogInformation(
                 "Signal blocked for {Symbol}: {Reason}",
                 instrumentKey, gateFailure);
-            return null;
+            return RecommendationResult.Blocked(gateFailure);
         }
 
         var recommendation = await BuildRecommendationWithSentiment(
             instrument, indicators, scanResult, candles);
 
-        // ✅ ADDED: Final RR check — reject if below 2.0
         if (recommendation.RiskRewardRatio < 2.0m)
-            return null;
+            return RecommendationResult.Blocked(
+                $"Risk-reward {recommendation.RiskRewardRatio:F1}:1 below minimum 2.0:1");
 
         try
         {
@@ -81,7 +83,8 @@ public class TradeRecommendationService
         {
             _logger.LogError(ex, "Error saving recommendation for {Key}", instrumentKey);
         }
-        return recommendation;
+
+        return RecommendationResult.Success(recommendation);
     }
 
     /// <summary>
