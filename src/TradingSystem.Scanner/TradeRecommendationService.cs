@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Indicators;
@@ -13,6 +14,13 @@ public class TradeRecommendationService
     private readonly IRecommendationService _recommendationService;
     private readonly IMarketSentimentService _marketSentimentService;
     private readonly SetupScoringService _scorer;
+    private readonly ILogger<TradeRecommendationService> _logger;
+
+    private static readonly TimeZoneInfo Ist =
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
+    private static readonly TimeOnly MarketOpen  = new(9,  15);
+    private static readonly TimeOnly MarketClose = new(15, 25); // 5 min before actual close
 
     public TradeRecommendationService(
         IInstrumentService instrumentService,
@@ -20,7 +28,8 @@ public class TradeRecommendationService
         IIndicatorService indicatorService,
         IRecommendationService recommendationService,
         IMarketSentimentService marketSentimentService,
-        SetupScoringService scorer)
+        SetupScoringService scorer,
+        ILogger<TradeRecommendationService> logger)
     {
         _instrumentService = instrumentService;
         _candleService = candleService;
@@ -28,6 +37,7 @@ public class TradeRecommendationService
         _recommendationService = recommendationService;
         _marketSentimentService = marketSentimentService;
         _scorer = scorer;
+        _logger = logger;
     }
 
     public async Task<Recommendation?> GenerateAsync(string instrumentKey, int timeframeMinutes = 15)
@@ -43,19 +53,33 @@ public class TradeRecommendationService
 
         var indicators = MapToIndicatorValues(latestIndicator);
         var scanResult = _scorer.Score(instrument, indicators, candles);
+        var lastClose = candles.Last().Close;
+        var direction = scanResult.Bias == ScanBias.BULLISH ? "BUY" : "SELL";
 
-        if (scanResult.SetupScore < 50 || scanResult.Bias == ScanBias.NONE)
+        // ✅ ADDED: Validate all signal gates before generating recommendation
+        var gateFailure = ValidateSignalGates(scanResult, indicators, lastClose, direction);
+        if (gateFailure != null)
+        {
+            _logger.LogInformation(
+                "Signal blocked for {Symbol}: {Reason}",
+                instrumentKey, gateFailure);
+            return null;
+        }
+
+        var recommendation = await BuildRecommendationWithSentiment(
+            instrument, indicators, scanResult, candles);
+
+        // ✅ ADDED: Final RR check — reject if below 2.0
+        if (recommendation.RiskRewardRatio < 2.0m)
             return null;
 
-        var recommendation = await BuildRecommendationWithSentiment(instrument, indicators, scanResult, candles);
-        try 
+        try
         {
             await PersistAsync(recommendation);
         }
         catch (Exception ex)
         {
-            // Log the error (not implemented here)
-            Console.WriteLine($"Error saving recommendation: {ex.Message}");
+            _logger.LogError(ex, "Error saving recommendation for {Key}", instrumentKey);
         }
         return recommendation;
     }
@@ -70,67 +94,124 @@ public class TradeRecommendationService
         int timeframeMinutes = 15)
     {
         var recommendations = new List<Recommendation>();
-        
-        // Get all active instruments
+
         var instruments = await _instrumentService.GetActiveAsync();
-        
         if (!instruments.Any())
             return recommendations;
 
-        // Scan each instrument
         foreach (var instrument in instruments)
         {
             try
             {
-                // Get candles for the instrument
                 var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes);
-                if (candles.Count < 50) 
+                if (candles.Count < 50)
                     continue;
 
-                // Get latest indicators
                 var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframeMinutes);
-                if (latestIndicator == null) 
+                if (latestIndicator == null)
                     continue;
 
                 var indicators = MapToIndicatorValues(latestIndicator);
                 var scanResult = _scorer.Score(instrument, indicators, candles);
+                var lastClose = candles.Last().Close;
+                var direction = scanResult.Bias == ScanBias.BULLISH ? "BUY" : "SELL";
 
-                // Filter based on setup score
-                if (scanResult.SetupScore < 50 || scanResult.Bias == ScanBias.NONE)
+                // ✅ ADDED: Validate all signal gates
+                var gateFailure = ValidateSignalGates(scanResult, indicators, lastClose, direction);
+                if (gateFailure != null)
                     continue;
 
-                // Build recommendation
-                var recommendation = await BuildRecommendationWithSentiment(instrument, indicators, scanResult, candles);
+                var recommendation = await BuildRecommendationWithSentiment(
+                    instrument, indicators, scanResult, candles);
 
-                // Apply user filters
+                // ✅ ADDED: Final RR check
+                if (recommendation.RiskRewardRatio < 2.0m)
+                    continue;
+
                 if (!MeetsUserCriteria(recommendation, targetReturnPercentage, riskTolerance, minRiskRewardRatio))
                     continue;
 
-                // Save to database
                 try
                 {
                     await PersistAsync(recommendation);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error saving recommendation for {instrument.Symbol}: {ex.Message}");
+                    _logger.LogError(ex, "Error saving recommendation for {Symbol}", instrument.Symbol);
                 }
 
                 recommendations.Add(recommendation);
             }
             catch (Exception ex)
             {
-                // Log and continue with next instrument
-                Console.WriteLine($"Error processing instrument {instrument.Symbol}: {ex.Message}");
+                _logger.LogError(ex, "Error processing instrument {Symbol}", instrument.Symbol);
             }
         }
 
-        // Sort by confidence and risk-reward ratio
         return recommendations
             .OrderByDescending(r => r.Confidence)
             .ThenByDescending(r => r.RiskRewardRatio)
             .ToList();
     }
+
+    // =========================================================================
+    // SIGNAL GATES
+    // =========================================================================
+
+    /// <summary>
+    /// ✅ ADDED: Centralized gate validation. Returns first failure reason, or null if all pass.
+    /// </summary>
+    private static string? ValidateSignalGates(
+        ScanResult scanResult,
+        IndicatorValues indicators,
+        decimal lastClose,
+        string direction)
+    {
+        if (scanResult.SetupScore < 50 || scanResult.Bias == ScanBias.NONE)
+            return $"Setup score {scanResult.SetupScore} or bias {scanResult.Bias} insufficient";
+
+        if (scanResult.SetupScore < 65)
+            return $"Confidence {scanResult.SetupScore} below minimum 65";
+
+        if (scanResult.MarketState != ScanMarketState.PULLBACK_READY)
+            return $"State {scanResult.MarketState} not actionable for entry";
+
+        if (indicators.ADX < 25)
+            return $"ADX {indicators.ADX:F1} below minimum 25 — trend not confirmed";
+
+        if (indicators.ADX > 60)
+            return $"ADX {indicators.ADX:F1} above 60 — trend exhaustion risk";
+
+        if (direction == "BUY" && lastClose < indicators.VWAP && indicators.VWAP > 0)
+            return $"Price {lastClose:F2} below VWAP {indicators.VWAP:F2} — no buy signal";
+
+        if (direction == "SELL" && lastClose > indicators.VWAP && indicators.VWAP > 0)
+            return $"Price {lastClose:F2} above VWAP {indicators.VWAP:F2} — no sell signal";
+
+        if (!IsMarketOpen())
+            return "Market is closed";
+
+        return null; // all gates passed
+    }
+
+    /// <summary>
+    /// ✅ ADDED: NSE market hours check (IST 9:15 – 15:25)
+    /// </summary>
+    private static bool IsMarketOpen()
+    {
+        var istNow  = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist);
+        var istTime = TimeOnly.FromDateTime(istNow);
+        var istDay  = istNow.DayOfWeek;
+
+        if (istDay == DayOfWeek.Saturday || istDay == DayOfWeek.Sunday)
+            return false;
+
+        return istTime >= MarketOpen && istTime <= MarketClose;
+    }
+
+    // =========================================================================
+    // RECOMMENDATION BUILDING
+    // =========================================================================
 
     private bool MeetsUserCriteria(
         Recommendation recommendation,
@@ -138,25 +219,20 @@ public class TradeRecommendationService
         decimal riskTolerance,
         decimal minRiskRewardRatio)
     {
-        // Check minimum risk-reward ratio
         if (recommendation.RiskRewardRatio < minRiskRewardRatio)
             return false;
 
-        // Calculate expected return percentage
         var expectedReturn = recommendation.Direction == "BUY"
             ? ((recommendation.Target - recommendation.EntryPrice) / recommendation.EntryPrice) * 100
             : ((recommendation.EntryPrice - recommendation.Target) / recommendation.EntryPrice) * 100;
 
-        // Check if expected return meets or exceeds target
         if (expectedReturn < targetReturnPercentage)
             return false;
 
-        // Calculate risk percentage
         var risk = recommendation.Direction == "BUY"
             ? ((recommendation.EntryPrice - recommendation.StopLoss) / recommendation.EntryPrice) * 100
             : ((recommendation.StopLoss - recommendation.EntryPrice) / recommendation.EntryPrice) * 100;
 
-        // Check if risk is within tolerance
         if (risk > riskTolerance)
             return false;
 
@@ -184,8 +260,21 @@ public class TradeRecommendationService
 
         var entry = lastClose;
         var stopLoss = isBullish ? entry - (atr * 1.5m) : entry + (atr * 1.5m);
-        var target = isBullish ? entry + (atr * 2.0m) : entry - (atr * 2.0m);
-        var rrr = Math.Abs(target - entry) / Math.Abs(entry - stopLoss);
+        var risk = Math.Abs(entry - stopLoss);
+
+        // Target calculation: minimum 2:1, prefer 2.5:1
+        // Fall back to 2:1 only if preferred target exceeds Bollinger band
+        var minimumTarget   = isBullish ? entry + (risk * 2.0m) : entry - (risk * 2.0m);
+        var preferredTarget = isBullish ? entry + (risk * 2.5m) : entry - (risk * 2.5m);
+
+        bool preferredExceedsBand = isBullish
+            ? (indicators.BollingerUpper > 0 && preferredTarget > indicators.BollingerUpper)
+            : (indicators.BollingerLower > 0 && preferredTarget < indicators.BollingerLower);
+
+        var target = preferredExceedsBand ? minimumTarget : preferredTarget;
+
+        // Final RR on unrounded values — must be >= 2.0 before we commit
+        var rrr = risk > 0 ? Math.Abs(target - entry) / risk : 0;
 
         var direction = isBullish ? "BUY" : "SELL";
         var optionType = instrument.IsDerivativesEnabled
@@ -196,8 +285,29 @@ public class TradeRecommendationService
             ? RoundToStrike(lastClose, instrument.TickSize)
             : (decimal?)null;
 
-        var reasons = BuildReasoningPoints(scan, indicators, isBullish);
-        var explanation = BuildExplanation(instrument, scan, indicators, direction, entry, stopLoss, target, rrr);
+        var reasons = BuildReasoningPoints(scan, indicators, isBullish, lastClose);
+        var stopBasis = $"ATR × 1.5 = {atr * 1.5m:F2}";
+        var targetBasis = preferredExceedsBand
+            ? $"ATR × 2.0 risk (capped by Bollinger)"
+            : $"ATR × 2.5 risk";
+
+        // ✅ FIXED: Signal-specific reasoning only — no analysis reasons copied
+        var signalReasons = new List<string>
+        {
+            $"Setup state: {scan.MarketState} with score {scan.SetupScore}/100",
+            $"Direction: {direction} — {(isBullish ? "bullish" : "bearish")} bias confirmed",
+            $"Entry at {entry:F2} with {rrr:F1}:1 risk-reward",
+            $"Stop loss at {stopLoss:F2} ({stopBasis})",
+            $"Target at {target:F2} ({targetBasis})"
+        };
+
+        // Merge indicator reasons + signal-specific reasons, deduped
+        reasons.AddRange(signalReasons);
+
+        var explanation = BuildExplanation(
+            instrument, scan, indicators, direction, entry, stopLoss, target, rrr);
+
+        var expiresAt = CalculateExpiry();
 
         return new Recommendation
         {
@@ -215,8 +325,39 @@ public class TradeRecommendationService
             ExplanationText = explanation,
             IsActive = true,
             CreatedAt = DateTimeOffset.UtcNow,
-            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(60)
+            ExpiresAt = expiresAt
         };
+    }
+
+    /// <summary>
+    /// ✅ FIXED: Expire at market close (15:30 IST) or in 1 hour, whichever is sooner.
+    /// </summary>
+    private static DateTimeOffset CalculateExpiry()
+    {
+        var istNow       = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist);
+        var marketClose  = istNow.Date.Add(new TimeSpan(15, 30, 0));
+        var oneHourLater = istNow.AddHours(1);
+
+        var expiryIst = oneHourLater < marketClose ? oneHourLater : marketClose;
+        return new DateTimeOffset(
+            DateTime.SpecifyKind(expiryIst, DateTimeKind.Unspecified),
+            TimeSpan.FromHours(5.5)).ToUniversalTime();
+    }
+
+    private async Task<int> AdjustConfidenceForMarketSentiment(int baseConfidence)
+    {
+        try
+        {
+            var marketContext = await _marketSentimentService.GetCurrentMarketContextAsync();
+            return (int)_marketSentimentService.AdjustConfidenceForMarketSentiment(
+                baseConfidence,
+                marketContext.Sentiment);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // Sentiment unavailable — degrade gracefully
+            return baseConfidence;
+        }
     }
 
     private async Task<Recommendation> BuildRecommendationWithSentiment(
@@ -226,72 +367,95 @@ public class TradeRecommendationService
         List<Candle> candles)
     {
         var recommendation = BuildRecommendation(instrument, indicators, scanResult, candles);
-        
-        // Adjust confidence based on market sentiment
-        recommendation.Confidence = await AdjustConfidenceForMarketSentiment(recommendation.Confidence);
-        
-        // Add market sentiment to explanation
+
+        recommendation.Confidence = await AdjustConfidenceForMarketSentiment(
+            recommendation.Confidence);
+
         try
         {
             var marketContext = await _marketSentimentService.GetCurrentMarketContextAsync();
             recommendation.ReasoningPoints.Add(
                 $"Market Sentiment: {marketContext.Sentiment} (adjusted confidence)");
         }
-        catch
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
-            // Ignore if market sentiment unavailable
+            // Sentiment unavailable — proceed without it
         }
-        
+
         return recommendation;
     }
 
-    private async Task<int> AdjustConfidenceForMarketSentiment(int baseConfidence)
-    {
-        try
-        {
-            var marketContext = await _marketSentimentService.GetCurrentMarketContextAsync();
-            return (int)_marketSentimentService.AdjustConfidenceForMarketSentiment(
-                baseConfidence, 
-                marketContext.Sentiment);
-        }
-        catch
-        {
-            return baseConfidence; // Return original if sentiment unavailable
-        }
-    }
-
-    private List<string> BuildReasoningPoints(ScanResult scan, IndicatorValues ind, bool bullish)
+    /// <summary>
+    /// ✅ FIXED: MACD reasoning checks histogram direction, not just line polarity.
+    /// ✅ FIXED: Deduplicates reasoning points by indicator topic.
+    /// </summary>
+    private List<string> BuildReasoningPoints(
+        ScanResult scan, IndicatorValues ind, bool bullish, decimal lastClose)
     {
         var points = new List<string>();
 
-        if (ind.ADX > 25)
+        // ADX
+        if (ind.ADX >= 25)
             points.Add($"ADX {ind.ADX:F1} confirms a strong trend environment");
-
-        if (bullish)
-        {
-            if (ind.EMAFast > ind.EMASlow)
-                points.Add($"EMA alignment is bullish (fast {ind.EMAFast:F1} > slow {ind.EMASlow:F1})");
-            if (ind.RSI >= 45 && ind.RSI <= 60)
-                points.Add($"RSI {ind.RSI:F1} is in pullback zone — healthy retracement for entry");
-            if (ind.MacdLine > 0)
-                points.Add("MACD is positive — upward momentum intact");
-            if (ind.VWAP > 0 && ind.EMAFast > ind.VWAP)
-                points.Add($"Price above VWAP {ind.VWAP:F1} — institutional bias is long");
-        }
+        else if (ind.ADX >= 20)
+            points.Add($"ADX {ind.ADX:F1} — trend forming but not yet confirmed");
         else
+            points.Add($"ADX {ind.ADX:F1} — weak trend, exercise caution");
+
+        // EMA
+        if (bullish && ind.EMAFast > ind.EMASlow)
+            points.Add($"EMA alignment is bullish (fast {ind.EMAFast:F1} > slow {ind.EMASlow:F1})");
+        else if (!bullish && ind.EMAFast < ind.EMASlow)
+            points.Add($"EMA alignment is bearish (fast {ind.EMAFast:F1} < slow {ind.EMASlow:F1})");
+
+        // RSI
+        if (bullish && ind.RSI >= 45 && ind.RSI <= 60)
+            points.Add($"RSI {ind.RSI:F1} is in pullback zone — healthy retracement for entry");
+        else if (!bullish && ind.RSI >= 40 && ind.RSI <= 55)
+            points.Add($"RSI {ind.RSI:F1} is in bearish pullback zone — healthy retracement for short entry");
+
+        // ✅ FIXED: MACD reasoning uses histogram direction
+        if (ind.MacdLine > 0 && ind.MacdHistogram > 0)
+            points.Add("MACD positive and rising — upward momentum building");
+        else if (ind.MacdLine > 0 && ind.MacdHistogram < 0)
+            points.Add("MACD positive but weakening — momentum fading, caution");
+        else if (ind.MacdLine < 0 && ind.MacdHistogram < 0)
+            points.Add("MACD negative and falling — downward momentum building");
+        else if (ind.MacdLine < 0 && ind.MacdHistogram > 0)
+            points.Add("MACD negative but recovering — potential reversal watch");
+
+        // VWAP
+        if (ind.VWAP > 0)
         {
-            if (ind.EMAFast < ind.EMASlow)
-                points.Add($"EMA alignment is bearish (fast {ind.EMAFast:F1} < slow {ind.EMASlow:F1})");
-            if (ind.RSI >= 40 && ind.RSI <= 55)
-                points.Add($"RSI {ind.RSI:F1} is in bearish pullback zone — healthy retracement for short entry");
-            if (ind.MacdLine < 0)
-                points.Add("MACD is negative — downward momentum intact");
-            if (ind.VWAP > 0 && ind.EMAFast < ind.VWAP)
+            if (lastClose > ind.VWAP)
+                points.Add($"Price above VWAP {ind.VWAP:F1} — institutional bias is long");
+            else
                 points.Add($"Price below VWAP {ind.VWAP:F1} — institutional bias is short");
         }
 
-        points.AddRange(scan.Reasons.Take(3));
-        return points;
+        // ✅ FIXED: Deduplicate by indicator topic — one point per indicator max
+        var deduped = points
+            .GroupBy(ExtractIndicatorTopic)
+            .Select(g => g.Last()) // keep last (most specific) per topic
+            .ToList();
+
+        return deduped;
+    }
+
+    /// <summary>
+    /// ✅ ADDED: Identify which indicator a reasoning string is about for deduplication.
+    /// </summary>
+    private static string ExtractIndicatorTopic(string reason)
+    {
+        if (reason.Contains("RSI"))       return "RSI";
+        if (reason.Contains("MACD"))      return "MACD";
+        if (reason.Contains("EMA"))       return "EMA";
+        if (reason.Contains("ADX"))       return "ADX";
+        if (reason.Contains("VWAP"))      return "VWAP";
+        if (reason.Contains("Bollinger")) return "Bollinger";
+        if (reason.Contains("Volume"))    return "Volume";
+        if (reason.Contains("Sentiment")) return "Sentiment";
+        return reason; // unique key = no dedup for unknown topics
     }
 
     private string BuildExplanation(
