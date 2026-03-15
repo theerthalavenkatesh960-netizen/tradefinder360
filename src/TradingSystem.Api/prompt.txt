@@ -1,70 +1,139 @@
-I have a C# IndicatorEngine that calculates technical indicators. I need you to review each indicator implementation class for mathematical correctness against the industry-standard formulas. Here are the specifications each class must follow:
-1. EMA (Exponential Moving Average)
-
-Seed: first value = simple average of first period closes
-From period+1 onwards: EMA = (Close × k) + (PrevEMA × (1 - k)) where k = 2 / (period + 1)
-Must return 0 or null until seed is complete (not partial averages)
-Called with: _emaFast.Calculate(candle.Close) and _emaSlow.Calculate(candle.Close)
-
-2. RSI (Relative Strength Index, period=14)
-
-First RSI: simple average of gains and losses over first 14 periods
-Subsequent: Wilder's smoothing — AvgGain = ((PrevAvgGain × 13) + CurrentGain) / 14
-RS = AvgGain / AvgLoss, RSI = 100 - (100 / (1 + RS))
-Edge case: if AvgLoss = 0 → RSI must be exactly 100, not infinity or divide-by-zero crash
-Called with: _rsi.Calculate(candle.Close)
-
-3. MACD (Fast=12, Slow=26, Signal=9)
-
-MacdLine = EMA(12) - EMA(26)
-SignalLine = EMA(9) of MacdLine — must not start until MacdLine itself is valid (i.e. after 26 candles)
-Histogram = MacdLine - SignalLine
-All three must be 0 until enough candles exist
-Called with: _macd.Calculate(candle.Close), values read via _macd.MacdLine, _macd.SignalLine, _macd.Histogram
-
-4. ADX + DI (period=14)
-
-TrueRange = max(High-Low, abs(High-PrevClose), abs(Low-PrevClose))
-+DM = High - PrevHigh if positive and greater than -DM, else 0
--DM = PrevLow - Low if positive and greater than +DM, else 0
-Use Wilder's smoothing (not EMA): Smoothed = PrevSmoothed - (PrevSmoothed/14) + CurrentValue
-+DI = (+DM14 / TR14) × 100, -DI = (-DM14 / TR14) × 100
-DX = abs(+DI - -DI) / (+DI + -DI) × 100
-ADX = Wilder's smoothing of DX over 14 periods
-ADX needs at least 28 candles (14 for DI + 14 for ADX smoothing) before it's valid
-Called with: _adx.Calculate(candle.High, candle.Low, candle.Close), values read via _adx.ADXValue, _adx.PlusDI, _adx.MinusDI
-
-5. ATR (Average True Range, period=14)
-
-First ATR: simple average of first 14 TrueRange values
-Subsequent: Wilder's smoothing — ATR = ((PrevATR × 13) + CurrentTR) / 14
-NOT regular EMA — must use Wilder's smoothing specifically
-Called with: _atr.Calculate(candle.High, candle.Low, candle.Close), returns value directly
-
-6. Bollinger Bands (period=20, stddev=2.0)
-
-MiddleBand = SMA(20) — must be simple moving average, NOT EMA
-σ = sqrt(sum of (Close - SMA)² / 20) — population standard deviation (divide by N, not N-1)
-UpperBand = Middle + (2 × σ), LowerBand = Middle - (2 × σ)
-BandWidth = (UpperBand - LowerBand) / MiddleBand — normalized width
-Must return 0 until 20 candles are available
-Called with: _bollingerBands.Calculate(candle.Close), values read via _bollingerBands.MiddleBand, _bollingerBands.UpperBand, _bollingerBands.LowerBand, _bollingerBands.BandWidth
-
-7. VWAP (Volume Weighted Average Price)
-
-Formula: VWAP = CumulativeSum(TypicalPrice × Volume) / CumulativeSum(Volume)
-TypicalPrice = (High + Low + Close) / 3 — already computed on the candle as candle.TypicalPrice
-Must reset at the start of each trading day (when date changes in IST — Asia/Kolkata timezone)
-Must handle zero volume candles without divide-by-zero
-Called with: _vwap.Calculate(candle.TypicalPrice, candle.Volume, candle.Timestamp), value read via _vwap.Value
-
+I have a C# indicator engine that calculates EMA, RSI, MACD, ADX, ATR, and Bollinger Bands. I am seeing small but non-zero discrepancies between freshly calculated values and stored values when I run the same data through the engine twice at different points in time. I want absolutely zero discrepancy — the same input must always produce the exact same output down to the last decimal place.
+The core problem:
+All my indicator values use decimal in the domain model and database (NUMERIC(18,4) in Postgres), but somewhere in the calculation pipeline there is likely a mix of double, float, and decimal arithmetic. Every time a value crosses a double/float boundary and back, floating point rounding introduces a tiny error that compounds over hundreds of candles.
 What I need you to do:
+1. Audit every indicator class for type consistency
+Check these classes: EmaCalculator, RsiCalculator, MacdCalculator, AdxCalculator, AtrCalculator, BollingerBandsCalculator, VwapCalculator.
+For each class find and fix:
 
-Show me the current implementation of each class listed above
-For each one, verify the formula matches the specification exactly
-Point out any bugs, wrong smoothing methods, missing edge cases, or incorrect seeding logic
-Fix anything that is wrong and show me the corrected implementation
-Pay special attention to: Wilder's smoothing vs EMA (they are different), population vs sample standard deviation in Bollinger, and VWAP daily reset using IST timezone not server local time
+Any field, variable, or intermediate calculation using double or float instead of decimal
+Any cast like (double)someDecimal or (decimal)someDouble mid-calculation
+Any use of Math.Sqrt, Math.Pow, Math.Abs, Math.Exp — these only accept double, so you must implement decimal versions:
 
+csharp// Decimal square root via Newton-Raphson — use this instead of Math.Sqrt
+private static decimal Sqrt(decimal value)
+{
+    if (value < 0) throw new ArgumentException("Cannot sqrt negative value");
+    if (value == 0) return 0;
+    
+    var x = (decimal)Math.Sqrt((double)value); // initial estimate only
+    var lastX = 0m;
+    
+    while (x != lastX)
+    {
+        lastX = x;
+        x = (x + value / x) / 2m;
+    }
+    return x;
+}
 
-That prompt covers every edge case and common mistake. The three things Copilot is most likely to find wrong based on typical implementations are ATR/ADX using EMA instead of Wilder's smoothing, Bollinger using sample stddev (N-1) instead of population (N), and VWAP not resetting at IST midnight. Those are the most common bugs in indicator libraries. Sonnet 4.6
+// Decimal abs — use instead of Math.Abs where input is decimal
+private static decimal Abs(decimal value) => value < 0 ? -value : value;
+2. Fix Wilder's smoothing to use exact decimal division
+Wilder's smoothing is used in RSI, ATR, and ADX. It must look exactly like this — no casting, no double arithmetic:
+csharp// CORRECT — pure decimal
+smoothed = ((smoothed * (period - 1)) + currentValue) / period;
+
+// WRONG — introduces double rounding
+smoothed = (decimal)((double)smoothed * (period - 1) + (double)currentValue) / period;
+3. Fix EMA multiplier to use exact decimal
+csharp// CORRECT
+private readonly decimal _multiplier;
+_multiplier = 2m / (period + 1m);  // pure decimal division, computed once
+
+// WRONG
+private readonly double _multiplier;
+_multiplier = 2.0 / (period + 1);  // double, loses precision on every candle
+4. Fix Bollinger standard deviation to use decimal sqrt
+csharp// CORRECT — population std dev, pure decimal
+var mean = _window.Sum() / _window.Count;
+var variance = _window.Sum(x => (x - mean) * (x - mean)) / _window.Count;
+var stdDev = Sqrt(variance);  // use the decimal Sqrt above
+
+// WRONG
+var stdDev = (decimal)Math.Sqrt((double)variance);  // double conversion loses precision
+5. Ensure all internal state fields are decimal
+Every rolling sum, every previous value, every smoothed value stored as a field must be decimal. Common mistakes:
+csharp// WRONG
+private double _prevEma;
+private float _avgGain;
+private double _smoothedTr;
+
+// CORRECT
+private decimal _prevEma;
+private decimal _avgGain;
+private decimal _smoothedTr;
+6. Fix MACD specifically — this is where the largest discrepancy appears
+MACD signal line is an EMA of the MACD line. The MACD line itself is the difference of two EMAs. Any double conversion in the EMA feeding into MACD compounds twice. Make sure:
+
+EMA12 and EMA26 are computed in pure decimal
+MacdLine = ema12 - ema26 is a pure decimal subtraction
+The signal line EMA is seeded and computed entirely in decimal
+The histogram is MacdLine - SignalLine in decimal
+
+7. Fix the database round-trip
+The stored value in Postgres is NUMERIC(18,4) — 4 decimal places. But the freshly calculated value has many more decimal places. When comparing stored vs fresh, the stored value has already been truncated to 4dp. This means even a perfect calculation will show a tiny difference.
+Fix this by rounding all calculated values to 4 decimal places before saving AND before comparing:
+csharp// In IndicatorSnapshotsUpdateJob, when building the snapshot:
+snapshots.Add(new IndicatorSnapshot
+{
+    EMAFast  = Math.Round(indicators.EMAFast,  4, MidpointRounding.AwayFromZero),
+    EMASlow  = Math.Round(indicators.EMASlow,  4, MidpointRounding.AwayFromZero),
+    RSI      = Math.Round(indicators.RSI,      4, MidpointRounding.AwayFromZero),
+    MacdLine = Math.Round(indicators.MacdLine, 4, MidpointRounding.AwayFromZero),
+    // ... same for all fields
+});
+
+// In the verification controller PctDiff, round both sides to 4dp before comparing:
+private static decimal PctDiff(decimal calculated, decimal stored)
+{
+    var calc   = Math.Round(calculated, 4, MidpointRounding.AwayFromZero);
+    var store  = Math.Round(stored,     4, MidpointRounding.AwayFromZero);
+    if (store == 0) return 0;
+    var absDiff = Math.Abs(calc - store);
+    if (absDiff == 0) return 0;
+    return absDiff / Math.Abs(store) * 100;
+}
+8. ADX values are wildly wrong — fix this first
+Looking at sample data, ADX values are showing as 600, 700, 776 — ADX is mathematically bounded between 0 and 100. Values above 100 mean the smoothing is wrong. The most common cause is:
+
+Using a regular EMA multiplier instead of Wilder's smoothing for the DX → ADX step
+Not dividing by TR correctly (dividing by _smoothedTr before it has been updated)
+Accumulating raw DX values instead of smoothing them
+
+The correct ADX algorithm step by step:
+csharp// Step 1: True Range
+var tr  = Max(high - low, Abs(high - prevClose), Abs(low - prevClose));
+
+// Step 2: Directional Movement
+var plusDm  = (high - prevHigh) > (prevLow - low) ? Max(high - prevHigh, 0) : 0;
+var minusDm = (prevLow - low) > (high - prevHigh) ? Max(prevLow - low,   0) : 0;
+
+// Step 3: Wilder smoothing (NOT regular EMA)
+_smoothedTr     = _smoothedTr     - (_smoothedTr     / period) + tr;
+_smoothedPlusDm = _smoothedPlusDm - (_smoothedPlusDm / period) + plusDm;
+_smoothedMinusDm= _smoothedMinusDm- (_smoothedMinusDm/ period) + minusDm;
+
+// Step 4: Directional Indicators — divide smoothed DM by smoothed TR
+_plusDi  = (_smoothedPlusDm  / _smoothedTr) * 100;
+_minusDi = (_smoothedMinusDm / _smoothedTr) * 100;
+
+// Step 5: DX
+var diSum  = _plusDi + _minusDi;
+var diDiff = Abs(_plusDi - _minusDi);
+var dx     = diSum == 0 ? 0 : (diDiff / diSum) * 100;
+
+// Step 6: ADX = Wilder smoothing of DX
+// Seed: first ADX = simple average of first 14 DX values
+// Then: Wilder smoothing
+_adx = ((_adx * (period - 1)) + dx) / period;
+
+// ADX must always be between 0 and 100 — if not, the smoothing is wrong
+What I expect after your fixes:
+
+All indicator calculations use decimal arithmetic end to end with zero double/float intermediate values
+ADX values are between 0 and 100
+When the same candle sequence is run through the engine twice, the output is bit-for-bit identical
+When stored values (rounded to 4dp) are compared against freshly calculated values (also rounded to 4dp), the difference is exactly zero
+
+Please show me the corrected implementation of every indicator class.

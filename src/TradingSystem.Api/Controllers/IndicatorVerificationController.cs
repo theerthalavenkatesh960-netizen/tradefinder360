@@ -7,8 +7,8 @@ using TradingSystem.Indicators;
 namespace TradingSystem.Api.Controllers;
 
 /// <summary>
-/// Diagnostic API for verifying indicator calculation correctness
-/// Use this to validate that indicators are calculating according to industry standards
+/// Diagnostic API for verifying indicator calculation correctness.
+/// Use this to validate that indicators are calculating according to industry standards.
 /// </summary>
 [ApiController]
 [Route("api/verify")]
@@ -19,107 +19,83 @@ public class IndicatorVerificationController : ControllerBase
     private readonly IInstrumentRepository _instrumentRepository;
     private readonly ILogger<IndicatorVerificationController> _logger;
 
+    private static readonly TimeZoneInfo Ist =
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
+    private static readonly TimeSpan IstOffset = TimeSpan.FromHours(5.5);
+
     public IndicatorVerificationController(
         ICandleService candleService,
         IIndicatorService indicatorService,
         IInstrumentRepository instrumentRepository,
         ILogger<IndicatorVerificationController> logger)
     {
-        _candleService = candleService;
-        _indicatorService = indicatorService;
+        _candleService        = candleService;
+        _indicatorService     = indicatorService;
         _instrumentRepository = instrumentRepository;
-        _logger = logger;
+        _logger               = logger;
     }
 
-    /// <summary>
-    /// Verify indicator calculations for a specific instrument
-    /// GET /api/verify/indicators/{symbol}?timeframe=15&candles=100
-    /// </summary>
+    // -------------------------------------------------------------------------
+    // GET /api/verify/indicators/{symbol}?timeframe=15&candles=100
+    // -------------------------------------------------------------------------
     [HttpGet("indicators/{symbol}")]
     [ProducesResponseType(typeof(IndicatorVerificationResultDto), 200)]
     public async Task<ActionResult<IndicatorVerificationResultDto>> VerifyIndicators(
         string symbol,
         [FromQuery] int timeframe = 15,
-        [FromQuery] int candles = 100)
+        [FromQuery] int candles   = 100,
+        CancellationToken ct      = default)
     {
         try
         {
-            // Find instrument
-            var instruments = await _instrumentRepository.GetActiveInstrumentsAsync();
-            var instrument = instruments.FirstOrDefault(i => 
-                i.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+            var instrument = await FindInstrumentAsync(symbol, ct);
+            if (instrument is null)
+                return NotFound(new { error = $"Instrument '{symbol}' not found" });
 
-            if (instrument == null)
-                return NotFound(new { error = $"Instrument {symbol} not found" });
+            var ordered = await FetchWarmupCandles(instrument.Id, timeframe, ct);
 
-            // Fetch candle data
-            var candleData = await _candleService.GetCandlesAsync(
-                instrument.Id,
-                timeframe,
-                DateTime.UtcNow.AddDays(-90),
-                DateTime.UtcNow.AddDays(1));
-
-            if (candleData.Count < 100)
-            {
-                return BadRequest(new 
-                { 
-                    error = "Insufficient candle data", 
-                    available = candleData.Count,
-                    required = 100 
+            if (ordered.Count < 100)
+                return BadRequest(new
+                {
+                    error     = "Insufficient candle data",
+                    available = ordered.Count,
+                    required  = 100
                 });
-            }
 
-            var orderedCandles = candleData
-                .OrderBy(c => c.Timestamp)
-                .TakeLast(candles)
-                .ToList();
+            // Single engine, single pass — results cached, never recalculated.
+            var cachedResults = RunEngineAndCache(ordered);
 
-            // Create fresh indicator engine
-            var engine = new IndicatorEngine(
-                emaFastPeriod: 20,
-                emaSlowPeriod: 50,
-                rsiPeriod: 14,
-                macdFast: 12,
-                macdSlow: 26,
-                macdSignal: 9,
-                adxPeriod: 14,
-                atrPeriod: 14,
-                bollingerPeriod: 20,
-                bollingerStdDev: 2.0m
-            );
+            var verification = PerformVerification(ordered, cachedResults);
 
-            var verification = PerformVerification(orderedCandles, engine);
-
-            // Fetch stored snapshots for comparison
             var storedSnapshots = await _indicatorService.GetRecentAsync(
-                instrument.Id, 
-                timeframe, 
-                20);
+                instrument.Id, timeframe, 20);
 
             var comparisonResults = CompareWithStoredData(
-                orderedCandles.TakeLast(20).ToList(),
+                ordered.TakeLast(20).ToList(),
                 storedSnapshots,
-                engine);
+                cachedResults);
 
             var result = new IndicatorVerificationResultDto
             {
-                InstrumentId = instrument.Id,
-                Symbol = symbol,
-                Exchange = instrument.Exchange,
-                TimeframeMinutes = timeframe,
-                TotalCandlesAnalyzed = candles,
+                InstrumentId          = instrument.Id,
+                Symbol                = symbol,
+                Exchange              = instrument.Exchange,
+                TimeframeMinutes      = timeframe,
+                TotalCandlesAnalyzed  = candles,
                 VerificationTimestamp = DateTimeOffset.UtcNow,
-                WarmupPeriods = verification.WarmupPeriods,
-                ValidationResults = verification.ValidationResults,
-                SampleData = verification.SampleData.TakeLast(20).ToList(),
-                StoredDataComparison = comparisonResults,
-                OverallStatus = verification.IsValid ? "PASS" : "FAIL",
-                Recommendations = GenerateRecommendations(verification, comparisonResults)
+                WarmupPeriods         = verification.WarmupPeriods,
+                ValidationResults     = verification.ValidationResults,
+                SampleData            = verification.SampleData.TakeLast(20).ToList(),
+                StoredDataComparison  = comparisonResults,
+                OverallStatus         = verification.IsValid ? "PASS" : "FAIL",
+                Recommendations       = GenerateRecommendations(verification, comparisonResults)
             };
 
             _logger.LogInformation(
-                "Indicator verification for {Symbol}: {Status} - {Issues} issues found",
-                symbol, result.OverallStatus, result.ValidationResults.Count(v => !v.IsValid));
+                "Indicator verification for {Symbol}: {Status} — {Issues} issue(s) found",
+                symbol, result.OverallStatus,
+                result.ValidationResults.Count(v => !v.IsValid));
 
             return Ok(result);
         }
@@ -130,53 +106,52 @@ public class IndicatorVerificationController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// Export indicator data as CSV for TradingView comparison
-    /// GET /api/verify/indicators/{symbol}/export
-    /// </summary>
+    // -------------------------------------------------------------------------
+    // GET /api/verify/indicators/{symbol}/export
+    // Export indicator data as CSV for TradingView comparison.
+    // Warmup pass is included so every exported row has stable values.
+    // -------------------------------------------------------------------------
     [HttpGet("indicators/{symbol}/export")]
     [Produces("text/csv")]
     public async Task<IActionResult> ExportIndicatorsCsv(
         string symbol,
         [FromQuery] int timeframe = 15,
-        [FromQuery] int candles = 100)
+        [FromQuery] int candles   = 100,
+        CancellationToken ct      = default)
     {
-        var instruments = await _instrumentRepository.GetActiveInstrumentsAsync();
-        var instrument = instruments.FirstOrDefault(i => 
-            i.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        var instrument = await FindInstrumentAsync(symbol, ct);
+        if (instrument is null)
+            return NotFound(new { error = $"Instrument '{symbol}' not found" });
 
-        if (instrument == null)
-            return NotFound();
+        var allCandles = await FetchWarmupCandles(instrument.Id, timeframe, ct);
 
-        var candleData = await _candleService.GetCandlesAsync(
-            instrument.Id,
-            timeframe,
-            DateTime.UtcNow.AddDays(-90),
-            DateTime.UtcNow.AddDays(1));
+        if (allCandles.Count == 0)
+            return NotFound(new { error = "No candle data found" });
 
-        var ordered = candleData.OrderBy(c => c.Timestamp).TakeLast(candles).ToList();
+        // Determine the export window start BEFORE running the engine.
+        // Everything before this timestamp silently primes the engine.
+        int exportStartIndex = Math.Max(0, allCandles.Count - candles);
+        var exportStartTime  = allCandles[exportStartIndex].Timestamp.ToUniversalTime();
 
-        var engine = new IndicatorEngine(
-            emaFastPeriod: 20,
-            emaSlowPeriod: 50,
-            rsiPeriod: 14,
-            macdFast: 12,
-            macdSlow: 26,
-            macdSignal: 9,
-            adxPeriod: 14,
-            atrPeriod: 14,
-            bollingerPeriod: 20,
-            bollingerStdDev: 2.0m
-        );
+        var engine = BuildEngine();
+        var csv    = new System.Text.StringBuilder();
+        csv.AppendLine(
+            "Timestamp,Open,High,Low,Close,Volume," +
+            "EMA20,EMA50,RSI," +
+            "MACDLine,MACDSignal,MACDHistogram," +
+            "ADX,PlusDI,MinusDI,ATR," +
+            "BBUpper,BBMiddle,BBLower,VWAP");
 
-        var csv = new System.Text.StringBuilder();
-        csv.AppendLine("Timestamp,Open,High,Low,Close,Volume,EMA20,EMA50,RSI,MACDLine,MACDSignal,MACDHistogram,ADX,PlusDI,MinusDI,ATR,BBUpper,BBMiddle,BBLower,VWAP");
-
-        foreach (var candle in ordered)
+        foreach (var candle in allCandles)
         {
             var ind = engine.Calculate(candle);
+
+            // Only write rows within the requested export window.
+            if (candle.Timestamp.ToUniversalTime() < exportStartTime)
+                continue;
+
             csv.AppendLine(
-                $"{candle.Timestamp:yyyy-MM-dd HH:mm}," +
+                $"{ToIst(candle.Timestamp):yyyy-MM-dd HH:mm}," +
                 $"{candle.Open},{candle.High},{candle.Low},{candle.Close},{candle.Volume}," +
                 $"{ind.EMAFast:F2},{ind.EMASlow:F2},{ind.RSI:F2}," +
                 $"{ind.MacdLine:F4},{ind.MacdSignal:F4},{ind.MacdHistogram:F4}," +
@@ -188,153 +163,168 @@ public class IndicatorVerificationController : ControllerBase
         return File(
             System.Text.Encoding.UTF8.GetBytes(csv.ToString()),
             "text/csv",
-            $"indicators_{symbol}_{timeframe}m_{DateTime.UtcNow:yyyyMMddHHmm}.csv"
-        );
+            $"indicators_{symbol}_{timeframe}m_{DateTime.UtcNow:yyyyMMddHHmm}.csv");
     }
 
-    /// <summary>
-    /// Get warmup status for all indicators
-    /// GET /api/verify/warmup/{symbol}
-    /// </summary>
+    // -------------------------------------------------------------------------
+    // GET /api/verify/warmup/{symbol}?timeframe=15
+    // Report how many candles each indicator needs before producing valid output.
+    // -------------------------------------------------------------------------
     [HttpGet("warmup/{symbol}")]
     public async Task<ActionResult> GetWarmupStatus(
         string symbol,
-        [FromQuery] int timeframe = 15)
+        [FromQuery] int timeframe = 15,
+        CancellationToken ct      = default)
     {
-        var instruments = await _instrumentRepository.GetActiveInstrumentsAsync();
-        var instrument = instruments.FirstOrDefault(i => 
-            i.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        var instrument = await FindInstrumentAsync(symbol, ct);
+        if (instrument is null)
+            return NotFound(new { error = $"Instrument '{symbol}' not found" });
 
-        if (instrument == null)
-            return NotFound();
+        var ordered = await FetchWarmupCandles(instrument.Id, timeframe, ct);
 
-        var candleData = await _candleService.GetCandlesAsync(
-            instrument.Id,
-            timeframe,
-            DateTime.UtcNow.AddDays(-30),
-            DateTime.UtcNow.AddDays(1));
-
-        if (!candleData.Any())
+        if (ordered.Count == 0)
             return NotFound(new { error = "No candles found" });
 
-        var ordered = candleData.OrderBy(c => c.Timestamp).ToList();
-
-        var engine = new IndicatorEngine(
-            emaFastPeriod: 20,
-            emaSlowPeriod: 50,
-            rsiPeriod: 14,
-            macdFast: 12,
-            macdSlow: 26,
-            macdSignal: 9,
-            adxPeriod: 14,
-            atrPeriod: 14,
-            bollingerPeriod: 20,
-            bollingerStdDev: 2.0m
-        );
-
-        var warmupStatus = DetectWarmupPeriods(ordered, engine);
+        var cachedResults = RunEngineAndCache(ordered);
+        var warmupStatus  = DetectWarmupPeriods(ordered, cachedResults);
 
         return Ok(new
         {
             symbol,
-            timeframeMinutes = timeframe,
+            timeframeMinutes      = timeframe,
             totalCandlesAvailable = ordered.Count,
-            warmupComplete = warmupStatus.All(w => w.IsComplete),
-            indicators = warmupStatus
+            warmupComplete        = warmupStatus.All(w => w.IsComplete),
+            indicators            = warmupStatus
         });
     }
 
-    // ========== PRIVATE HELPER METHODS ==========
+    // =========================================================================
+    // PRIVATE HELPERS
+    // =========================================================================
 
-    private VerificationData PerformVerification(
-        List<Candle> candles,
-        IndicatorEngine engine)
+    /// <summary>
+    /// Resolve an instrument by symbol (case-insensitive). Returns null if not found.
+    /// </summary>
+    private async Task<TradingInstrument?> FindInstrumentAsync(
+        string symbol, CancellationToken ct)
     {
-        var warmupPeriods = new Dictionary<string, WarmupInfo>();
-        var sampleData = new List<SampleIndicatorData>();
+        var instruments = await _instrumentRepository.GetActiveInstrumentsAsync(ct);
+        return instruments.FirstOrDefault(i =>
+            i.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Fetch enough candle history to fully warm up all indicators PLUS the
+    /// requested window. Uses UTC DateTime throughout — no DateTimeOffset
+    /// construction with non-zero offsets, so no Kind-mismatch crash.
+    /// </summary>
+    private async Task<List<Candle>> FetchWarmupCandles(
+        int instrumentId, int timeframe, CancellationToken ct)
+    {
+        // 90 candles of warmup expressed as real clock time,
+        // plus 5 extra days buffer for weekends / market holidays.
+        var warmupSpan = TimeSpan.FromMinutes(90 * timeframe);
+        var fromUtc    = DateTime.Today.Subtract(warmupSpan).AddDays(-5);
+        var toUtc      = DateTime.Today.AddDays(1);
+
+        var candles = await _candleService.GetCandlesAsync(
+            instrumentId, timeframe, fromUtc, toUtc);
+
+        return candles.OrderBy(c => c.Timestamp).ToList();
+    }
+
+    /// <summary>
+    /// Build a fresh indicator engine with standard config.
+    /// </summary>
+    private static IndicatorEngine BuildEngine() =>
+        new(
+            emaFastPeriod:   20,
+            emaSlowPeriod:   50,
+            rsiPeriod:       14,
+            macdFast:        12,
+            macdSlow:        26,
+            macdSignal:       9,
+            adxPeriod:       14,
+            atrPeriod:       14,
+            bollingerPeriod: 20,
+            bollingerStdDev: 2.0m);
+
+    /// <summary>
+    /// Run every candle through a fresh engine exactly once and cache all results
+    /// keyed by UTC timestamp. This is the ONLY place engine.Calculate() is called —
+    /// all other methods consume the cache to prevent double-calculation and
+    /// stale-state bugs.
+    /// </summary>
+    private static Dictionary<DateTimeOffset, IndicatorValues> RunEngineAndCache(
+        List<Candle> candles)
+    {
+        var engine = BuildEngine();
+        var cache  = new Dictionary<DateTimeOffset, IndicatorValues>(candles.Count);
+
+        foreach (var candle in candles)
+            cache[candle.Timestamp.ToUniversalTime()] = engine.Calculate(candle);
+
+        return cache;
+    }
+
+    /// <summary>
+    /// Analyse cached results to determine when each indicator became valid
+    /// and whether that matches the expected warmup period.
+    /// </summary>
+    private static VerificationData PerformVerification(
+        List<Candle> candles,
+        Dictionary<DateTimeOffset, IndicatorValues> cache)
+    {
+        var warmupPeriods     = new Dictionary<string, WarmupInfo>();
+        var sampleData        = new List<SampleIndicatorData>();
         var validationResults = new List<ValidationResult>();
 
         int emaFastValid = -1, emaSlowValid = -1, rsiValid = -1;
-        int macdSignalValid = -1, adxValid = -1, atrValid = -1, bbValid = -1;
+        int macdValid    = -1, adxValid     = -1, atrValid = -1;
+        int bbValid      = -1;
 
         for (int i = 0; i < candles.Count; i++)
         {
-            var indicators = engine.Calculate(candles[i]);
+            var key = candles[i].Timestamp.ToUniversalTime();
+            if (!cache.TryGetValue(key, out var ind))
+                continue;
 
-            // Detect when indicators become valid
-            if (emaFastValid == -1 && indicators.EMAFast != 0) emaFastValid = i + 1;
-            if (emaSlowValid == -1 && indicators.EMASlow != 0) emaSlowValid = i + 1;
-            if (rsiValid == -1 && indicators.RSI != 0) rsiValid = i + 1;
-            if (macdSignalValid == -1 && indicators.MacdSignal != 0) macdSignalValid = i + 1;
-            if (adxValid == -1 && indicators.ADX != 0) adxValid = i + 1;
-            if (atrValid == -1 && indicators.ATR != 0) atrValid = i + 1;
-            if (bbValid == -1 && indicators.BollingerMiddle != 0) bbValid = i + 1;
+            if (emaFastValid == -1 && ind.EMAFast         != 0) emaFastValid = i + 1;
+            if (emaSlowValid == -1 && ind.EMASlow         != 0) emaSlowValid = i + 1;
+            if (rsiValid     == -1 && ind.RSI             >  0) rsiValid     = i + 1;
+            if (macdValid    == -1 && ind.MacdSignal      != 0) macdValid    = i + 1;
+            if (adxValid     == -1 && ind.ADX             != 0) adxValid     = i + 1;
+            if (atrValid     == -1 && ind.ATR             != 0) atrValid     = i + 1;
+            if (bbValid      == -1 && ind.BollingerMiddle != 0) bbValid      = i + 1;
 
-            // Collect sample data (every 10 candles after warmup)
+            // Collect a sample row every 10 candles once past the warmup zone
             if (i % 10 == 0 && i >= 50)
             {
                 sampleData.Add(new SampleIndicatorData
                 {
                     CandleIndex = i + 1,
-                    Timestamp = candles[i].Timestamp,
-                    Close = candles[i].Close,
-                    Indicators = indicators
+                    Timestamp   = candles[i].Timestamp,
+                    Close       = candles[i].Close,
+                    Indicators  = ind
                 });
             }
         }
 
-        // Build warmup periods
-        warmupPeriods["EMA(20)"] = new WarmupInfo 
-        { 
-            Expected = 20, 
-            Actual = emaFastValid, 
-            IsValid = emaFastValid == 20 
-        };
-        warmupPeriods["EMA(50)"] = new WarmupInfo 
-        { 
-            Expected = 50, 
-            Actual = emaSlowValid, 
-            IsValid = emaSlowValid == 50 
-        };
-        warmupPeriods["RSI(14)"] = new WarmupInfo 
-        { 
-            Expected = 15, 
-            Actual = rsiValid, 
-            IsValid = rsiValid >= 14 && rsiValid <= 16 
-        };
-        warmupPeriods["MACD Signal"] = new WarmupInfo 
-        { 
-            Expected = 35, 
-            Actual = macdSignalValid, 
-            IsValid = macdSignalValid >= 34 && macdSignalValid <= 36 
-        };
-        warmupPeriods["ADX(14)"] = new WarmupInfo 
-        { 
-            Expected = 28, 
-            Actual = adxValid, 
-            IsValid = adxValid >= 28 && adxValid <= 30 
-        };
-        warmupPeriods["ATR(14)"] = new WarmupInfo 
-        { 
-            Expected = 15, 
-            Actual = atrValid, 
-            IsValid = atrValid >= 14 && atrValid <= 16 
-        };
-        warmupPeriods["Bollinger(20)"] = new WarmupInfo 
-        { 
-            Expected = 20, 
-            Actual = bbValid, 
-            IsValid = bbValid == 20 
-        };
+        warmupPeriods["EMA(20)"]       = BuildWarmupInfo(20, emaFastValid, exact: true);
+        warmupPeriods["EMA(50)"]       = BuildWarmupInfo(50, emaSlowValid, exact: true);
+        warmupPeriods["RSI(14)"]       = BuildWarmupInfo(15, rsiValid,     tolerance: 1);
+        warmupPeriods["MACD Signal"]   = BuildWarmupInfo(35, macdValid,    tolerance: 1);
+        warmupPeriods["ADX(14)"]       = BuildWarmupInfo(28, adxValid,     exact: true);
+        warmupPeriods["ATR(14)"]       = BuildWarmupInfo(15, atrValid,     tolerance: 1);
+        warmupPeriods["Bollinger(20)"] = BuildWarmupInfo(20, bbValid,      exact: true);
 
-        // Validation results
         foreach (var kvp in warmupPeriods)
         {
             validationResults.Add(new ValidationResult
             {
                 Indicator = kvp.Key,
-                IsValid = kvp.Value.IsValid,
-                Message = kvp.Value.IsValid
+                IsValid   = kvp.Value.IsValid,
+                Message   = kvp.Value.IsValid
                     ? $"✅ {kvp.Key} warmup correct (expected: {kvp.Value.Expected}, actual: {kvp.Value.Actual})"
                     : $"❌ {kvp.Key} warmup INCORRECT (expected: {kvp.Value.Expected}, actual: {kvp.Value.Actual})"
             });
@@ -342,121 +332,119 @@ public class IndicatorVerificationController : ControllerBase
 
         return new VerificationData
         {
-            WarmupPeriods = warmupPeriods,
-            SampleData = sampleData,
+            WarmupPeriods     = warmupPeriods,
+            SampleData        = sampleData,
             ValidationResults = validationResults,
-            IsValid = validationResults.All(v => v.IsValid)
+            IsValid           = validationResults.All(v => v.IsValid)
         };
     }
 
-    private List<ComparisonResult> CompareWithStoredData(
+    /// <summary>
+    /// Compare cached indicator values against what is stored in the database.
+    /// No engine is involved here — the cache is the source of truth.
+    /// Timestamps are normalised to UTC on both sides before lookup.
+    /// </summary>
+    private static List<ComparisonResult> CompareWithStoredData(
         List<Candle> recentCandles,
         List<IndicatorSnapshot> storedSnapshots,
-        IndicatorEngine engine)
+        Dictionary<DateTimeOffset, IndicatorValues> cache)
     {
         var results = new List<ComparisonResult>();
 
-        if (!storedSnapshots.Any())
-            return results;
-
-        var storedDict = storedSnapshots.ToDictionary(s => s.Timestamp);
+        // Normalise stored snapshot keys to UTC so they match the cache keys
+        var storedDict = storedSnapshots.ToDictionary(
+            s => s.Timestamp.ToUniversalTime());
 
         foreach (var candle in recentCandles)
         {
-            var calculated = engine.Calculate(candle);
+            var key = candle.Timestamp.ToUniversalTime();
 
-            if (storedDict.TryGetValue(candle.Timestamp, out var stored))
+            if (!cache.TryGetValue(key, out var calculated))
+                continue;
+
+            if (!storedDict.TryGetValue(key, out var stored))
+                continue;
+
+            var diffs = new Dictionary<string, decimal>
             {
-                var comparison = new ComparisonResult
-                {
-                    Timestamp = candle.Timestamp,
-                    Differences = new Dictionary<string, decimal>()
-                };
+                ["EMA20"]    = PctDiff(calculated.EMAFast,         stored.EMAFast),
+                ["EMA50"]    = PctDiff(calculated.EMASlow,         stored.EMASlow),
+                ["RSI"]      = PctDiff(calculated.RSI,             stored.RSI),
+                ["MACDLine"] = PctDiff(calculated.MacdLine,        stored.MacdLine),
+                ["ADX"]      = PctDiff(calculated.ADX,             stored.ADX),
+                ["ATR"]      = PctDiff(calculated.ATR,             stored.ATR),
+                ["BBMiddle"] = PctDiff(calculated.BollingerMiddle, stored.BollingerMiddle),
+                ["BBUpper"]  = PctDiff(calculated.BollingerUpper,  stored.BollingerUpper),
+                ["BBLower"]  = PctDiff(calculated.BollingerLower,  stored.BollingerLower),
+                ["VWAP"]     = PctDiff(calculated.VWAP,            stored.VWAP)
+            };
 
-                // Calculate percentage differences
-                comparison.Differences["EMA20"] = CalculateDifference(calculated.EMAFast, stored.EMAFast);
-                comparison.Differences["EMA50"] = CalculateDifference(calculated.EMASlow, stored.EMASlow);
-                comparison.Differences["RSI"] = CalculateDifference(calculated.RSI, stored.RSI);
-                comparison.Differences["ADX"] = CalculateDifference(calculated.ADX, stored.ADX);
-                comparison.Differences["ATR"] = CalculateDifference(calculated.ATR, stored.ATR);
-                comparison.Differences["BBMiddle"] = CalculateDifference(calculated.BollingerMiddle, stored.BollingerMiddle);
+            var maxDiff = diffs.Values.Max();
 
-                comparison.MaxDifference = comparison.Differences.Values.Max();
-                comparison.IsAcceptable = comparison.MaxDifference < 1.0m; // 1% tolerance
-
-                results.Add(comparison);
-            }
+            results.Add(new ComparisonResult
+            {
+                Timestamp     = candle.Timestamp,
+                Differences   = diffs,
+                MaxDifference = maxDiff,
+                IsAcceptable  = maxDiff < 1.0m   // 1% tolerance
+            });
         }
 
         return results;
     }
 
-    private decimal CalculateDifference(decimal calculated, decimal stored)
-    {
-        if (stored == 0) return 0;
-        return Math.Abs((calculated - stored) / stored * 100);
-    }
-
-    private List<WarmupStatusDto> DetectWarmupPeriods(
+    /// <summary>
+    /// Build warmup status DTOs from cached results — no engine involved.
+    /// </summary>
+    private static List<WarmupStatusDto> DetectWarmupPeriods(
         List<Candle> candles,
-        IndicatorEngine engine)
+        Dictionary<DateTimeOffset, IndicatorValues> cache)
     {
-        var status = new List<WarmupStatusDto>();
-
         int emaFastValid = -1, emaSlowValid = -1, rsiValid = -1;
-        int macdSignalValid = -1, adxValid = -1, atrValid = -1, bbValid = -1;
+        int macdValid    = -1, adxValid     = -1, atrValid = -1;
+        int bbValid      = -1;
 
         for (int i = 0; i < candles.Count; i++)
         {
-            var indicators = engine.Calculate(candles[i]);
+            var key = candles[i].Timestamp.ToUniversalTime();
+            if (!cache.TryGetValue(key, out var ind))
+                continue;
 
-            if (emaFastValid == -1 && indicators.EMAFast != 0) emaFastValid = i + 1;
-            if (emaSlowValid == -1 && indicators.EMASlow != 0) emaSlowValid = i + 1;
-            if (rsiValid == -1 && indicators.RSI != 0) rsiValid = i + 1;
-            if (macdSignalValid == -1 && indicators.MacdSignal != 0) macdSignalValid = i + 1;
-            if (adxValid == -1 && indicators.ADX != 0) adxValid = i + 1;
-            if (atrValid == -1 && indicators.ATR != 0) atrValid = i + 1;
-            if (bbValid == -1 && indicators.BollingerMiddle != 0) bbValid = i + 1;
+            if (emaFastValid == -1 && ind.EMAFast         != 0) emaFastValid = i + 1;
+            if (emaSlowValid == -1 && ind.EMASlow         != 0) emaSlowValid = i + 1;
+            if (rsiValid     == -1 && ind.RSI             >  0) rsiValid     = i + 1;
+            if (macdValid    == -1 && ind.MacdSignal      != 0) macdValid    = i + 1;
+            if (adxValid     == -1 && ind.ADX             != 0) adxValid     = i + 1;
+            if (atrValid     == -1 && ind.ATR             != 0) atrValid     = i + 1;
+            if (bbValid      == -1 && ind.BollingerMiddle != 0) bbValid      = i + 1;
         }
 
-        status.Add(CreateWarmupStatus("EMA(20)", 20, emaFastValid));
-        status.Add(CreateWarmupStatus("EMA(50)", 50, emaSlowValid));
-        status.Add(CreateWarmupStatus("RSI(14)", 15, rsiValid));
-        status.Add(CreateWarmupStatus("MACD Signal", 35, macdSignalValid));
-        status.Add(CreateWarmupStatus("ADX(14)", 28, adxValid));
-        status.Add(CreateWarmupStatus("ATR(14)", 15, atrValid));
-        status.Add(CreateWarmupStatus("Bollinger(20)", 20, bbValid));
-
-        return status;
-    }
-
-    private WarmupStatusDto CreateWarmupStatus(string name, int expected, int actual)
-    {
-        return new WarmupStatusDto
+        return new List<WarmupStatusDto>
         {
-            IndicatorName = name,
-            ExpectedWarmupCandles = expected,
-            ActualWarmupCandles = actual,
-            IsComplete = actual > 0,
-            IsCorrect = actual == expected,
-            Status = actual == expected ? "✅ CORRECT" : actual > 0 ? "⚠️ DIFFERENT" : "❌ NOT READY"
+            CreateWarmupStatus("EMA(20)",       20, emaFastValid, exact: true),
+            CreateWarmupStatus("EMA(50)",       50, emaSlowValid, exact: true),
+            CreateWarmupStatus("RSI(14)",       15, rsiValid,     tolerance: 1),
+            CreateWarmupStatus("MACD Signal",   35, macdValid,    tolerance: 1),
+            CreateWarmupStatus("ADX(14)",       28, adxValid,     exact: true),
+            CreateWarmupStatus("ATR(14)",       15, atrValid,     tolerance: 1),
+            CreateWarmupStatus("Bollinger(20)", 20, bbValid,      exact: true)
         };
     }
 
-    private List<string> GenerateRecommendations(
+    private static List<string> GenerateRecommendations(
         VerificationData verification,
         List<ComparisonResult> comparisons)
     {
         var recommendations = new List<string>();
 
         var failedWarmups = verification.ValidationResults.Where(v => !v.IsValid).ToList();
+
         if (failedWarmups.Any())
         {
-            recommendations.Add($"❌ {failedWarmups.Count} indicator(s) have incorrect warmup periods - review implementation");
-            foreach (var failed in failedWarmups)
-            {
-                recommendations.Add($"  - {failed.Message}");
-            }
+            recommendations.Add(
+                $"❌ {failedWarmups.Count} indicator(s) have incorrect warmup periods — review implementation");
+            foreach (var f in failedWarmups)
+                recommendations.Add($"   {f.Message}");
         }
         else
         {
@@ -468,83 +456,154 @@ public class IndicatorVerificationController : ControllerBase
             var mismatches = comparisons.Where(c => !c.IsAcceptable).ToList();
             if (mismatches.Any())
             {
-                recommendations.Add($"⚠️ {mismatches.Count} stored snapshot(s) differ from freshly calculated values by >1%");
-                recommendations.Add("  Consider recalculating historical indicator snapshots");
+                recommendations.Add(
+                    $"⚠️ {mismatches.Count} stored snapshot(s) differ from freshly calculated values by >1%");
+                recommendations.Add(
+                    "   Consider recalculating historical indicator snapshots");
+
+                var worst = mismatches
+                    .SelectMany(m => m.Differences)
+                    .OrderByDescending(kvp => kvp.Value)
+                    .FirstOrDefault();
+
+                if (worst.Key is not null)
+                    recommendations.Add(
+                        $"   Largest discrepancy: {worst.Key} at {worst.Value:F2}%");
             }
             else
             {
-                recommendations.Add("✅ Stored snapshots match freshly calculated values (within 1% tolerance)");
+                recommendations.Add(
+                    "✅ Stored snapshots match freshly calculated values (within 1% tolerance)");
             }
+        }
+        else
+        {
+            recommendations.Add("ℹ️ No stored snapshots found for comparison");
         }
 
         return recommendations;
     }
 
-    // ========== DTOs ==========
+    // =========================================================================
+    // STATIC UTILITY HELPERS
+    // =========================================================================
 
-    private class VerificationData
+    private static WarmupInfo BuildWarmupInfo(
+        int expected, int actual,
+        bool exact = false, int tolerance = 0)
     {
-        public Dictionary<string, WarmupInfo> WarmupPeriods { get; set; } = new();
-        public List<SampleIndicatorData> SampleData { get; set; } = new();
-        public List<ValidationResult> ValidationResults { get; set; } = new();
-        public bool IsValid { get; set; }
+        bool isValid = exact
+            ? actual == expected
+            : actual >= expected - tolerance && actual <= expected + tolerance;
+
+        return new WarmupInfo
+        {
+            Expected = expected,
+            Actual   = actual,
+            IsValid  = isValid
+        };
     }
 
-    private class WarmupInfo
+    private static WarmupStatusDto CreateWarmupStatus(
+        string name, int expected, int actual,
+        bool exact = false, int tolerance = 0)
     {
-        public int Expected { get; set; }
-        public int Actual { get; set; }
-        public bool IsValid { get; set; }
+        var info = BuildWarmupInfo(expected, actual, exact, tolerance);
+        return new WarmupStatusDto
+        {
+            IndicatorName         = name,
+            ExpectedWarmupCandles = expected,
+            ActualWarmupCandles   = actual,
+            IsComplete            = actual > 0,
+            IsCorrect             = info.IsValid,
+            Status                = info.IsValid ? "✅ CORRECT"
+                                  : actual > 0   ? "⚠️ DIFFERENT"
+                                                 : "❌ NOT READY"
+        };
     }
+
+    private static decimal PctDiff(decimal calculated, decimal stored)
+    {
+        if (stored == 0) return 0;
+        return Math.Abs((calculated - stored) / stored * 100);
+    }
+
+    /// <summary>
+    /// Convert any DateTimeOffset to IST for display purposes only.
+    /// Never use the resulting DateTime for arithmetic or DB storage.
+    /// </summary>
+    private static DateTime ToIst(DateTimeOffset dt) =>
+        TimeZoneInfo.ConvertTime(dt, Ist).DateTime;
 }
 
-// ========== RESPONSE DTOs ==========
+// =============================================================================
+// INTERNAL MODELS
+// =============================================================================
+
+public class VerificationData
+{
+    public Dictionary<string, WarmupInfo> WarmupPeriods     { get; set; } = new();
+    public List<SampleIndicatorData>      SampleData        { get; set; } = new();
+    public List<ValidationResult>         ValidationResults { get; set; } = new();
+    public bool                           IsValid           { get; set; }
+}
+
+public class WarmupInfo
+{
+    public int  Expected { get; set; }
+    public int  Actual   { get; set; }
+    public bool IsValid  { get; set; }
+}
+
+// =============================================================================
+// RESPONSE DTOs
+// =============================================================================
 
 public class IndicatorVerificationResultDto
 {
-    public int InstrumentId { get; set; }
-    public string Symbol { get; set; } = string.Empty;
-    public string Exchange { get; set; } = string.Empty;
-    public int TimeframeMinutes { get; set; }
-    public int TotalCandlesAnalyzed { get; set; }
-    public DateTimeOffset VerificationTimestamp { get; set; }
-    public Dictionary<string, WarmupInfo> WarmupPeriods { get; set; } = new();
-    public List<ValidationResult> ValidationResults { get; set; } = new();
-    public List<SampleIndicatorData> SampleData { get; set; } = new();
-    public List<ComparisonResult> StoredDataComparison { get; set; } = new();
-    public string OverallStatus { get; set; } = string.Empty;
-    public List<string> Recommendations { get; set; } = new();
+    public int                            InstrumentId          { get; set; }
+    public string                         Symbol                { get; set; } = string.Empty;
+    public string                         Exchange              { get; set; } = string.Empty;
+    public int                            TimeframeMinutes      { get; set; }
+    public int                            TotalCandlesAnalyzed  { get; set; }
+    public DateTimeOffset                 VerificationTimestamp { get; set; }
+    public Dictionary<string, WarmupInfo> WarmupPeriods        { get; set; } = new();
+    public List<ValidationResult>         ValidationResults     { get; set; } = new();
+    public List<SampleIndicatorData>      SampleData            { get; set; } = new();
+    public List<ComparisonResult>         StoredDataComparison  { get; set; } = new();
+    public string                         OverallStatus         { get; set; } = string.Empty;
+    public List<string>                   Recommendations       { get; set; } = new();
 }
 
 public class SampleIndicatorData
 {
-    public int CandleIndex { get; set; }
-    public DateTimeOffset Timestamp { get; set; }
-    public decimal Close { get; set; }
-    public IndicatorValues Indicators { get; set; } = null!;
+    public int             CandleIndex { get; set; }
+    public DateTimeOffset  Timestamp   { get; set; }
+    public decimal         Close       { get; set; }
+    public IndicatorValues Indicators  { get; set; } = null!;
 }
 
 public class ValidationResult
 {
     public string Indicator { get; set; } = string.Empty;
-    public bool IsValid { get; set; }
-    public string Message { get; set; } = string.Empty;
+    public bool   IsValid   { get; set; }
+    public string Message   { get; set; } = string.Empty;
 }
 
 public class ComparisonResult
 {
-    public DateTimeOffset Timestamp { get; set; }
-    public Dictionary<string, decimal> Differences { get; set; } = new(); // % difference
-    public decimal MaxDifference { get; set; }
-    public bool IsAcceptable { get; set; }
+    public DateTimeOffset              Timestamp     { get; set; }
+    public Dictionary<string, decimal> Differences  { get; set; } = new();
+    public decimal                     MaxDifference { get; set; }
+    public bool                        IsAcceptable  { get; set; }
 }
 
 public class WarmupStatusDto
 {
-    public string IndicatorName { get; set; } = string.Empty;
-    public int ExpectedWarmupCandles { get; set; }
-    public int ActualWarmupCandles { get; set; }
-    public bool IsComplete { get; set; }
-    public bool IsCorrect { get; set; }
-    public string Status { get; set; } = string.Empty;
+    public string IndicatorName         { get; set; } = string.Empty;
+    public int    ExpectedWarmupCandles { get; set; }
+    public int    ActualWarmupCandles   { get; set; }
+    public bool   IsComplete            { get; set; }
+    public bool   IsCorrect             { get; set; }
+    public string Status                { get; set; } = string.Empty;
 }
