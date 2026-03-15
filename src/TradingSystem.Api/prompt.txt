@@ -1,139 +1,617 @@
-I have a C# indicator engine that calculates EMA, RSI, MACD, ADX, ATR, and Bollinger Bands. I am seeing small but non-zero discrepancies between freshly calculated values and stored values when I run the same data through the engine twice at different points in time. I want absolutely zero discrepancy — the same input must always produce the exact same output down to the last decimal place.
-The core problem:
-All my indicator values use decimal in the domain model and database (NUMERIC(18,4) in Postgres), but somewhere in the calculation pipeline there is likely a mix of double, float, and decimal arithmetic. Every time a value crosses a double/float boundary and back, floating point rounding introduces a tiny error that compounds over hundreds of candles.
-What I need you to do:
-1. Audit every indicator class for type consistency
-Check these classes: EmaCalculator, RsiCalculator, MacdCalculator, AdxCalculator, AtrCalculator, BollingerBandsCalculator, VwapCalculator.
-For each class find and fix:
-
-Any field, variable, or intermediate calculation using double or float instead of decimal
-Any cast like (double)someDecimal or (decimal)someDouble mid-calculation
-Any use of Math.Sqrt, Math.Pow, Math.Abs, Math.Exp — these only accept double, so you must implement decimal versions:
-
-csharp// Decimal square root via Newton-Raphson — use this instead of Math.Sqrt
-private static decimal Sqrt(decimal value)
 {
-    if (value < 0) throw new ArgumentException("Cannot sqrt negative value");
-    if (value == 0) return 0;
-    
-    var x = (decimal)Math.Sqrt((double)value); // initial estimate only
-    var lastX = 0m;
-    
-    while (x != lastX)
-    {
-        lastX = x;
-        x = (x + value / x) / 2m;
+  "instrumentId": 365,
+  "symbol": "COALINDIA",
+  "exchange": "NSE",
+  "timeframeMinutes": 15,
+  "totalCandlesAnalyzed": 100,
+  "verificationTimestamp": "2026-03-15T14:07:57.427698+00:00",
+  "warmupPeriods": {
+    "EMA(20)": {
+      "expected": 20,
+      "actual": 20,
+      "isValid": true
+    },
+    "EMA(50)": {
+      "expected": 50,
+      "actual": 50,
+      "isValid": true
+    },
+    "RSI(14)": {
+      "expected": 15,
+      "actual": 15,
+      "isValid": true
+    },
+    "MACD Signal": {
+      "expected": 35,
+      "actual": 34,
+      "isValid": true
+    },
+    "ADX(14)": {
+      "expected": 28,
+      "actual": 28,
+      "isValid": true
+    },
+    "ATR(14)": {
+      "expected": 15,
+      "actual": 15,
+      "isValid": true
+    },
+    "Bollinger(20)": {
+      "expected": 20,
+      "actual": 20,
+      "isValid": true
     }
-    return x;
+  },
+  "validationResults": [
+    {
+      "indicator": "EMA(20)",
+      "isValid": true,
+      "message": "✅ EMA(20) warmup correct (expected: 20, actual: 20)"
+    },
+    {
+      "indicator": "EMA(50)",
+      "isValid": true,
+      "message": "✅ EMA(50) warmup correct (expected: 50, actual: 50)"
+    },
+    {
+      "indicator": "RSI(14)",
+      "isValid": true,
+      "message": "✅ RSI(14) warmup correct (expected: 15, actual: 15)"
+    },
+    {
+      "indicator": "MACD Signal",
+      "isValid": true,
+      "message": "✅ MACD Signal warmup correct (expected: 35, actual: 34)"
+    },
+    {
+      "indicator": "ADX(14)",
+      "isValid": true,
+      "message": "✅ ADX(14) warmup correct (expected: 28, actual: 28)"
+    },
+    {
+      "indicator": "ATR(14)",
+      "isValid": true,
+      "message": "✅ ATR(14) warmup correct (expected: 15, actual: 15)"
+    },
+    {
+      "indicator": "Bollinger(20)",
+      "isValid": true,
+      "message": "✅ Bollinger(20) warmup correct (expected: 20, actual: 20)"
+    }
+  ],
+  "sampleData": [
+    {
+      "candleIndex": 51,
+      "timestamp": "2026-03-11T03:45:00+00:00",
+      "close": 447.05,
+      "indicators": {
+        "emaFast": 442.2951041061257,
+        "emaSlow": 440.23707843137254,
+        "rsi": 67.56544624214015,
+        "macdLine": 1.3008556044473243,
+        "macdSignal": 0.9649555284765786,
+        "macdHistogram": 0.33590007597074556,
+        "adx": 39.8242171604537,
+        "plusDI": 44.82487427846683,
+        "minusDI": 9.568781702330421,
+        "atr": 2.564365962052822,
+        "bollingerMiddle": 442.275,
+        "bollingerUpper": 446.1631229404431,
+        "bollingerLower": 438.38687705955687,
+        "bollingerWidth": 0.017582377210754,
+        "vwap": 448,
+        "timestamp": "2026-03-11T03:45:00+00:00"
+      }
+    },
+    {
+      "candleIndex": 61,
+      "timestamp": "2026-03-11T06:15:00+00:00",
+      "close": 450.35,
+      "indicators": {
+        "emaFast": 446.20633593700524,
+        "emaSlow": 442.89420366081515,
+        "rsi": 69.8424331602678,
+        "macdLine": 2.2634633692389623,
+        "macdSignal": 1.9372094589272688,
+        "macdHistogram": 0.3262539103116936,
+        "adx": 51.370630355741646,
+        "plusDI": 40.6359130812457,
+        "minusDI": 8.960084405295639,
+        "atr": 2.1059110041335507,
+        "bollingerMiddle": 445.7425,
+        "bollingerUpper": 451.29013688429586,
+        "bollingerLower": 440.19486311570415,
+        "bollingerWidth": 0.024891666755114762,
+        "vwap": 448.0885221245286,
+        "timestamp": "2026-03-11T06:15:00+00:00"
+      }
+    },
+    {
+      "candleIndex": 71,
+      "timestamp": "2026-03-11T08:45:00+00:00",
+      "close": 449.1,
+      "indicators": {
+        "emaFast": 448.34472628961265,
+        "emaSlow": 445.13975711964093,
+        "rsi": 57.161905808982034,
+        "macdLine": 1.4685510442749894,
+        "macdSignal": 1.838856741576103,
+        "macdHistogram": -0.37030569730111357,
+        "adx": 46.85597168763246,
+        "plusDI": 27.09596144408865,
+        "minusDI": 16.61755541765786,
+        "atr": 1.9802722940608892,
+        "bollingerMiddle": 448.9825,
+        "bollingerUpper": 451.71568038189946,
+        "bollingerLower": 446.24931961810057,
+        "bollingerWidth": 0.012174997385864464,
+        "vwap": 449.13348132075487,
+        "timestamp": "2026-03-11T08:45:00+00:00"
+      }
+    },
+    {
+      "candleIndex": 81,
+      "timestamp": "2026-03-12T05:00:00+00:00",
+      "close": 455.3,
+      "indicators": {
+        "emaFast": 449.40030828239264,
+        "emaSlow": 446.59661501698673,
+        "rsi": 72.33817243157426,
+        "macdLine": 1.4400822462359986,
+        "macdSignal": 0.9970899772155073,
+        "macdHistogram": 0.44299226902049127,
+        "adx": 37.82783463226469,
+        "plusDI": 34.628904399217895,
+        "minusDI": 10.198463780262335,
+        "atr": 2.4327094152081274,
+        "bollingerMiddle": 449.53,
+        "bollingerUpper": 453.9623131658311,
+        "bollingerLower": 445.0976868341689,
+        "bollingerWidth": 0.019719765825778626,
+        "vwap": 450.3564501251657,
+        "timestamp": "2026-03-12T05:00:00+00:00"
+      }
+    },
+    {
+      "candleIndex": 91,
+      "timestamp": "2026-03-12T07:30:00+00:00",
+      "close": 465.4,
+      "indicators": {
+        "emaFast": 459.3553688017091,
+        "emaSlow": 452.70320353124356,
+        "rsi": 72.19607647817149,
+        "macdLine": 4.767400429865722,
+        "macdSignal": 4.259605608309507,
+        "macdHistogram": 0.5077948215562142,
+        "adx": 49.49280913222989,
+        "plusDI": 32.391334043954124,
+        "minusDI": 12.720387793492895,
+        "atr": 2.7466176809720624,
+        "bollingerMiddle": 457.18,
+        "bollingerUpper": 473.7003026606657,
+        "bollingerLower": 440.65969733933423,
+        "bollingerWidth": 0.07227045216617417,
+        "vwap": 460.4689055362119,
+        "timestamp": "2026-03-12T07:30:00+00:00"
+      }
+    },
+    {
+      "candleIndex": 101,
+      "timestamp": "2026-03-13T03:45:00+00:00",
+      "close": 472,
+      "indicators": {
+        "emaFast": 466.3607246480749,
+        "emaSlow": 458.52745701846,
+        "rsi": 69.31998903531768,
+        "macdLine": 4.5048552558944905,
+        "macdSignal": 4.757661889904162,
+        "macdHistogram": -0.2528066340096709,
+        "adx": 47.317193705117056,
+        "plusDI": 34.344404768297764,
+        "minusDI": 11.29173106642313,
+        "atr": 3.2641652540454236,
+        "bollingerMiddle": 467.7075,
+        "bollingerUpper": 473.81456762693847,
+        "bollingerLower": 461.6004323730615,
+        "bollingerWidth": 0.026114901415686002,
+        "vwap": 472.3,
+        "timestamp": "2026-03-13T03:45:00+00:00"
+      }
+    },
+    {
+      "candleIndex": 111,
+      "timestamp": "2026-03-13T06:15:00+00:00",
+      "close": 468.4,
+      "indicators": {
+        "emaFast": 467.1876326680181,
+        "emaSlow": 461.45078191166346,
+        "rsi": 54.382183164157034,
+        "macdLine": 2.036914576911266,
+        "macdSignal": 2.4828440216172685,
+        "macdHistogram": -0.4459294447060021,
+        "adx": 35.18315546383997,
+        "plusDI": 28.17110174036839,
+        "minusDI": 13.091475032728768,
+        "atr": 3.667762198708734,
+        "bollingerMiddle": 468.7725,
+        "bollingerUpper": 473.9774471659182,
+        "bollingerLower": 463.56755283408177,
+        "bollingerWidth": 0.022206708652569036,
+        "vwap": 469.11445934641733,
+        "timestamp": "2026-03-13T06:15:00+00:00"
+      }
+    },
+    {
+      "candleIndex": 121,
+      "timestamp": "2026-03-13T08:45:00+00:00",
+      "close": 465.5,
+      "indicators": {
+        "emaFast": 465.7684118704036,
+        "emaSlow": 462.6371675386612,
+        "rsi": 50.148119984260404,
+        "macdLine": -0.022844807311203887,
+        "macdSignal": 0.5597145070343829,
+        "macdHistogram": -0.5825593143455868,
+        "adx": 21.460157618803425,
+        "plusDI": 22.032099297741766,
+        "minusDI": 16.632162346350825,
+        "atr": 2.9549947583318175,
+        "bollingerMiddle": 466.18,
+        "bollingerUpper": 471.04183093083253,
+        "bollingerLower": 461.3181690691675,
+        "bollingerWidth": 0.020858170366950705,
+        "vwap": 467.95691638368834,
+        "timestamp": "2026-03-13T08:45:00+00:00"
+      }
+    }
+  ],
+  "storedDataComparison": [
+    {
+      "timestamp": "2026-03-13T05:00:00+00:00",
+      "differences": {
+        "EMA20": 0.000021455484268517103,
+        "EMA50": 0.024546621295639812,
+        "RSI": 0.010472097677521448,
+        "MACDLine": 0.03163269917303087,
+        "ADX": 0.190386025873773,
+        "ATR": 0.014643432420559379,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.190386025873773,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T05:15:00+00:00",
+      "differences": {
+        "EMA20": 0.00002145145706876994,
+        "EMA50": 0.023554059935521846,
+        "RSI": 0.009303140083399915,
+        "MACDLine": 0.029355643622486424,
+        "ADX": 0.18659789638550964,
+        "ATR": 0.011892374015162776,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.18659789638550964,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T05:30:00+00:00",
+      "differences": {
+        "EMA20": 0.000021451102747564497,
+        "EMA50": 0.022608101909765657,
+        "RSI": 0.00923232292781454,
+        "MACDLine": 0.03281557646029315,
+        "ADX": 0.18046188262493035,
+        "ATR": 0.011921082434285033,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.18046188262493035,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T05:45:00+00:00",
+      "differences": {
+        "EMA20": 0.000021440924464051932,
+        "EMA50": 0.02172450463354819,
+        "RSI": 0.007658580482107641,
+        "MACDLine": 0.027499725002749973,
+        "ADX": 0.17620968666192954,
+        "ATR": 0.008866296252512118,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.17620968666192954,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T06:00:00+00:00",
+      "differences": {
+        "EMA20": 0.000021410529998400632,
+        "EMA50": 0.02085576719413836,
+        "RSI": 0.005536272581456255,
+        "MACDLine": 0.022973718066531888,
+        "ADX": 0.16450270661027658,
+        "ATR": 0.008470030209774415,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.16450270661027658,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T06:15:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.02001979446344351,
+        "RSI": 0.005516206615034973,
+        "MACDLine": 0.02454108177088446,
+        "ADX": 0.1543805480509456,
+        "ATR": 0.0081799591002045,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.1543805480509456,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T06:30:00+00:00",
+      "differences": {
+        "EMA20": 0.000021393724108245397,
+        "EMA50": 0.01920482913764471,
+        "RSI": 0.005141579599630516,
+        "MACDLine": 0.019911394295385534,
+        "ADX": 0.14696992703072043,
+        "ATR": 0.008320621273055055,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.14696992703072043,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T06:45:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.018460626167991698,
+        "RSI": 0.005065757428153921,
+        "MACDLine": 0.022878059940517045,
+        "ADX": 0.14196028638944733,
+        "ATR": 0.008272438990762443,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.14196028638944733,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T07:00:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.01774307252026497,
+        "RSI": 0.005343170466373291,
+        "MACDLine": 0.03056001222400489,
+        "ADX": 0.14161881195823023,
+        "ATR": 0.00826856292376385,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.14161881195823023,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T07:15:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.01704899986412726,
+        "RSI": 0.005310274939484992,
+        "MACDLine": 0.03448672261179446,
+        "ADX": 0.14223332912393574,
+        "ATR": 0.005614980768690867,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.14223332912393574,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T07:30:00+00:00",
+      "differences": {
+        "EMA20": 0.000021439531623416342,
+        "EMA50": 0.016354779294849412,
+        "RSI": 0.005252411185009618,
+        "MACDLine": 0.055970149253731345,
+        "ADX": 0.1434858151988151,
+        "ATR": 0.005760700501180944,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.1434858151988151,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T07:45:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.015702250720821986,
+        "RSI": 0.004543727178097583,
+        "MACDLine": 0.0797872340425532,
+        "ADX": 0.1431047307629861,
+        "ATR": 0.005940711697261332,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.1431047307629861,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T08:00:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.015094290660245466,
+        "RSI": 0.004458731257404679,
+        "MACDLine": 0.15748031496062992,
+        "ADX": 0.14322119673711708,
+        "ATR": 0.0031099362463069507,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.15748031496062992,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T08:15:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.014508478270364519,
+        "RSI": 0.004496123699068018,
+        "MACDLine": 0.7407407407407407,
+        "ADX": 0.143963336201242,
+        "ATR": 0.003236874474007898,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.7407407407407407,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T08:30:00+00:00",
+      "differences": {
+        "EMA20": 0.000021468598096250594,
+        "EMA50": 0.013943389406655817,
+        "RSI": 0.004091510728964009,
+        "MACDLine": 0.78125,
+        "ADX": 0.14454992409996148,
+        "ATR": 0.0033970853008119034,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.78125,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T08:45:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.013378024724923821,
+        "RSI": 0.003988027940123749,
+        "MACDLine": 0.8849557522123894,
+        "ADX": 0.1395985146718039,
+        "ATR": 0.006768647624204684,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.8849557522123894,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T09:00:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.012855842148407843,
+        "RSI": 0.003913863687955476,
+        "MACDLine": 1.680672268907563,
+        "ADX": 0.1319482650901258,
+        "ATR": 0.0033928207912058087,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 1.680672268907563,
+      "isAcceptable": false
+    },
+    {
+      "timestamp": "2026-03-13T09:15:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.012352429498292686,
+        "RSI": 0.0029405405405405404,
+        "MACDLine": 0.03496503496503497,
+        "ADX": 0.12207843083664721,
+        "ATR": 0.0032098606920459654,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.12207843083664721,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T09:30:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.011851341435851538,
+        "RSI": 0.0029721215003269334,
+        "MACDLine": 0.026745119015779622,
+        "ADX": 0.11238861485492058,
+        "ATR": 0.00321099444497961,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.11238861485492058,
+      "isAcceptable": true
+    },
+    {
+      "timestamp": "2026-03-13T09:45:00+00:00",
+      "differences": {
+        "EMA20": 0,
+        "EMA50": 0.011394865318303046,
+        "RSI": 0.002912938105891126,
+        "MACDLine": 0.05512679162072767,
+        "ADX": 0.10665567246849625,
+        "ATR": 0.0032492851572654014,
+        "BBMiddle": 0,
+        "BBUpper": 0,
+        "BBLower": 0,
+        "VWAP": 0
+      },
+      "maxDifference": 0.10665567246849625,
+      "isAcceptable": true
+    }
+  ],
+  "overallStatus": "PASS",
+  "recommendations": [
+    "✅ All indicator warmup periods are correct",
+    "⚠️ 1 stored snapshot(s) differ from freshly calculated values by >1%",
+    "   Consider recalculating historical indicator snapshots",
+    "   Largest discrepancy: MACDLine at 1.68%"
+  ]
 }
-
-// Decimal abs — use instead of Math.Abs where input is decimal
-private static decimal Abs(decimal value) => value < 0 ? -value : value;
-2. Fix Wilder's smoothing to use exact decimal division
-Wilder's smoothing is used in RSI, ATR, and ADX. It must look exactly like this — no casting, no double arithmetic:
-csharp// CORRECT — pure decimal
-smoothed = ((smoothed * (period - 1)) + currentValue) / period;
-
-// WRONG — introduces double rounding
-smoothed = (decimal)((double)smoothed * (period - 1) + (double)currentValue) / period;
-3. Fix EMA multiplier to use exact decimal
-csharp// CORRECT
-private readonly decimal _multiplier;
-_multiplier = 2m / (period + 1m);  // pure decimal division, computed once
-
-// WRONG
-private readonly double _multiplier;
-_multiplier = 2.0 / (period + 1);  // double, loses precision on every candle
-4. Fix Bollinger standard deviation to use decimal sqrt
-csharp// CORRECT — population std dev, pure decimal
-var mean = _window.Sum() / _window.Count;
-var variance = _window.Sum(x => (x - mean) * (x - mean)) / _window.Count;
-var stdDev = Sqrt(variance);  // use the decimal Sqrt above
-
-// WRONG
-var stdDev = (decimal)Math.Sqrt((double)variance);  // double conversion loses precision
-5. Ensure all internal state fields are decimal
-Every rolling sum, every previous value, every smoothed value stored as a field must be decimal. Common mistakes:
-csharp// WRONG
-private double _prevEma;
-private float _avgGain;
-private double _smoothedTr;
-
-// CORRECT
-private decimal _prevEma;
-private decimal _avgGain;
-private decimal _smoothedTr;
-6. Fix MACD specifically — this is where the largest discrepancy appears
-MACD signal line is an EMA of the MACD line. The MACD line itself is the difference of two EMAs. Any double conversion in the EMA feeding into MACD compounds twice. Make sure:
-
-EMA12 and EMA26 are computed in pure decimal
-MacdLine = ema12 - ema26 is a pure decimal subtraction
-The signal line EMA is seeded and computed entirely in decimal
-The histogram is MacdLine - SignalLine in decimal
-
-7. Fix the database round-trip
-The stored value in Postgres is NUMERIC(18,4) — 4 decimal places. But the freshly calculated value has many more decimal places. When comparing stored vs fresh, the stored value has already been truncated to 4dp. This means even a perfect calculation will show a tiny difference.
-Fix this by rounding all calculated values to 4 decimal places before saving AND before comparing:
-csharp// In IndicatorSnapshotsUpdateJob, when building the snapshot:
-snapshots.Add(new IndicatorSnapshot
-{
-    EMAFast  = Math.Round(indicators.EMAFast,  4, MidpointRounding.AwayFromZero),
-    EMASlow  = Math.Round(indicators.EMASlow,  4, MidpointRounding.AwayFromZero),
-    RSI      = Math.Round(indicators.RSI,      4, MidpointRounding.AwayFromZero),
-    MacdLine = Math.Round(indicators.MacdLine, 4, MidpointRounding.AwayFromZero),
-    // ... same for all fields
-});
-
-// In the verification controller PctDiff, round both sides to 4dp before comparing:
-private static decimal PctDiff(decimal calculated, decimal stored)
-{
-    var calc   = Math.Round(calculated, 4, MidpointRounding.AwayFromZero);
-    var store  = Math.Round(stored,     4, MidpointRounding.AwayFromZero);
-    if (store == 0) return 0;
-    var absDiff = Math.Abs(calc - store);
-    if (absDiff == 0) return 0;
-    return absDiff / Math.Abs(store) * 100;
-}
-8. ADX values are wildly wrong — fix this first
-Looking at sample data, ADX values are showing as 600, 700, 776 — ADX is mathematically bounded between 0 and 100. Values above 100 mean the smoothing is wrong. The most common cause is:
-
-Using a regular EMA multiplier instead of Wilder's smoothing for the DX → ADX step
-Not dividing by TR correctly (dividing by _smoothedTr before it has been updated)
-Accumulating raw DX values instead of smoothing them
-
-The correct ADX algorithm step by step:
-csharp// Step 1: True Range
-var tr  = Max(high - low, Abs(high - prevClose), Abs(low - prevClose));
-
-// Step 2: Directional Movement
-var plusDm  = (high - prevHigh) > (prevLow - low) ? Max(high - prevHigh, 0) : 0;
-var minusDm = (prevLow - low) > (high - prevHigh) ? Max(prevLow - low,   0) : 0;
-
-// Step 3: Wilder smoothing (NOT regular EMA)
-_smoothedTr     = _smoothedTr     - (_smoothedTr     / period) + tr;
-_smoothedPlusDm = _smoothedPlusDm - (_smoothedPlusDm / period) + plusDm;
-_smoothedMinusDm= _smoothedMinusDm- (_smoothedMinusDm/ period) + minusDm;
-
-// Step 4: Directional Indicators — divide smoothed DM by smoothed TR
-_plusDi  = (_smoothedPlusDm  / _smoothedTr) * 100;
-_minusDi = (_smoothedMinusDm / _smoothedTr) * 100;
-
-// Step 5: DX
-var diSum  = _plusDi + _minusDi;
-var diDiff = Abs(_plusDi - _minusDi);
-var dx     = diSum == 0 ? 0 : (diDiff / diSum) * 100;
-
-// Step 6: ADX = Wilder smoothing of DX
-// Seed: first ADX = simple average of first 14 DX values
-// Then: Wilder smoothing
-_adx = ((_adx * (period - 1)) + dx) / period;
-
-// ADX must always be between 0 and 100 — if not, the smoothing is wrong
-What I expect after your fixes:
-
-All indicator calculations use decimal arithmetic end to end with zero double/float intermediate values
-ADX values are between 0 and 100
-When the same candle sequence is run through the engine twice, the output is bit-for-bit identical
-When stored values (rounded to 4dp) are compared against freshly calculated values (also rounded to 4dp), the difference is exactly zero
-
-Please show me the corrected implementation of every indicator class.
