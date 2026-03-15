@@ -30,15 +30,17 @@ public class BollingerBands
 
         if (_priceWindow.Count < _period)
         {
-            MiddleBand = price;
-            UpperBand = price;
-            LowerBand = price;
+            MiddleBand = 0; // Changed from price to 0
+            UpperBand = 0;  // Changed from price to 0
+            LowerBand = 0;  // Changed from price to 0
             BandWidth = 0;
             return;
         }
 
+        // MiddleBand = SMA(20) - simple moving average
         MiddleBand = _priceWindow.Average();
 
+        // Population standard deviation (divide by N, not N-1)
         var variance = _priceWindow.Sum(p => (p - MiddleBand) * (p - MiddleBand)) / _period;
         var stdDev = (decimal)Math.Sqrt((double)variance);
 

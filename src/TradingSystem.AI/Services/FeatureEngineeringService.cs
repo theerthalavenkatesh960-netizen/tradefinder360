@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using TradingSystem.Core.Events;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Repositories.Interfaces;
@@ -163,11 +163,18 @@ public class FeatureEngineeringService
         vector.Price_To_SMA50_Ratio = vector.SMA_50 > 0 ? currentPrice / vector.SMA_50 : 1f;
         vector.Price_To_SMA200_Ratio = vector.SMA_200 > 0 ? currentPrice / vector.SMA_200 : 1f;
 
-        if (indicators != null)
+        if (indicators != null && indicators.ADX > 0) // ✅ ADDED: Check ADX > 0
         {
             vector.Trend_Strength_ADX = (float)indicators.ADX;
             vector.Trend_Direction_DI_Plus = (float)indicators.PlusDI;
             vector.Trend_Direction_DI_Minus = (float)indicators.MinusDI;
+        }
+        else
+        {
+            // ✅ ADDED: Default values when ADX not available
+            vector.Trend_Strength_ADX = 0f;
+            vector.Trend_Direction_DI_Plus = 0f;
+            vector.Trend_Direction_DI_Minus = 0f;
         }
 
         vector.EMA_Crossover_Signal = (vector.EMA_9 - vector.EMA_21) / currentPrice * 100;
@@ -177,7 +184,7 @@ public class FeatureEngineeringService
     // ========== VOLATILITY FACTORS ==========
     private void ComputeVolatilityFactors(QuantFeatureVector vector, List<Candle> candles, IndicatorSnapshot? indicators)
     {
-        if (indicators != null)
+        if (indicators != null && indicators.ATR > 0) // ✅ ADDED: Check ATR > 0
         {
             vector.ATR_14 = (float)indicators.ATR;
             
@@ -202,6 +209,15 @@ public class FeatureEngineeringService
                 ? (float)bollingerWidth / bollMiddle 
                 : 0f;
         }
+        else
+        {
+            // ✅ ADDED: Set default values when indicators not available or in warmup
+            vector.ATR_14 = 0f;
+            vector.Bollinger_Width = 0f;
+            vector.ATR_Percent = 0f;
+            vector.Bollinger_Position = 0.5f;
+            vector.Bollinger_BandWidth_Ratio = 0f;
+        }
 
         vector.Historical_Volatility_10D = CalculateHistoricalVolatility(candles, 10);
         vector.Historical_Volatility_20D = CalculateHistoricalVolatility(candles, 20);
@@ -223,12 +239,18 @@ public class FeatureEngineeringService
         vector.Volume_Ratio_20D = avgVolume20 > 0 ? volumes.Last() / avgVolume20 : 1f;
         vector.Volume_Ratio_5D = avgVolume5 > 0 ? volumes.Last() / avgVolume5 : 1f;
 
-        if (indicators != null)
+        if (indicators != null && indicators.VWAP > 0) // ✅ ADDED: Check VWAP > 0
         {
             vector.VWAP = (float)indicators.VWAP;
             vector.Price_To_VWAP_Ratio = indicators.VWAP > 0 
                 ? (float)candles.Last().Close / (float)indicators.VWAP 
                 : 1f;
+        }
+        else
+        {
+            // ✅ ADDED: Default values when VWAP not available
+            vector.VWAP = (float)candles.Last().Close; // Use current price as fallback
+            vector.Price_To_VWAP_Ratio = 1f;
         }
 
         vector.OBV = CalculateOBV(candles);
@@ -246,9 +268,14 @@ public class FeatureEngineeringService
         vector.Deviation_From_Mean_20D = (currentPrice - vector.SMA_20) / vector.SMA_20 * 100;
         vector.Deviation_From_Mean_50D = (currentPrice - vector.SMA_50) / vector.SMA_50 * 100;
 
-        if (indicators != null)
+        if (indicators != null && indicators.VWAP > 0) // ✅ ADDED: Check VWAP > 0
         {
             vector.Price_Distance_To_VWAP = (float)((candles.Last().Close - indicators.VWAP) / indicators.VWAP * 100);
+        }
+        else
+        {
+            // ✅ ADDED: Default when VWAP not available
+            vector.Price_Distance_To_VWAP = 0f;
         }
 
         vector.Overbought_Oversold_Score = CalculateOverboughtOversoldScore(vector.RSI_14, vector.Bollinger_Position);

@@ -30,6 +30,16 @@ public class BreakoutStrategy : BaseTradingStrategy
         var lastCandle = candles.Last();
         var recentCandles = GetRecentCandles(candles, 20);
 
+        // Skip if indicators are not ready
+        if (indicators.BollingerMiddle == 0 || indicators.BollingerUpper == 0)
+        {
+            return new StrategySignal 
+            { 
+                IsValid = false, 
+                Explanation = "Indicators still warming up" 
+            };
+        }
+
         // Check for consolidation first (Bollinger Band squeeze)
         var bandwidth = indicators.BollingerUpper > 0 
             ? (indicators.BollingerUpper - indicators.BollingerLower) / indicators.BollingerMiddle 

@@ -1,4 +1,3 @@
- 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Quartz;
@@ -15,7 +14,7 @@ namespace TradingSystem.WorkerService.Jobs;
 public class IndicatorSnapshotsUpdateJob : IJob
 {
     private const int MaxParallelism     = 12;
-    private const int MinCandlesRequired = 90;
+    private const int MinCandlesRequired = 100; // CHANGED from 90 - need 50 (EMA slow) + 28 (ADX) + 22 buffer
     private const int TimeframeMinutes   = 15;
  
     private static readonly TimeZoneInfo Ist =
@@ -233,13 +232,26 @@ public class IndicatorSnapshotsUpdateJob : IJob
         {
             var indicators = engine.Calculate(candle);
  
-            // Map IndicatorValues → IndicatorSnapshot directly here
-            // IndicatorSnapshot has flat columns, not an Indicators nav property
+            // ✅ ADD VALIDATION: Skip snapshots during warmup period (indicators = 0)
+            // Only save once critical indicators are fully seeded
+            bool isValidSnapshot = 
+                indicators.EMASlow != 0 &&    // EMA slow (50) is seeded
+                indicators.ADX != 0 &&        // ADX (28 candles) is seeded
+                indicators.ATR != 0 &&        // ATR (14) is seeded
+                indicators.BollingerMiddle != 0; // Bollinger (20) is seeded
+            
+            if (!isValidSnapshot)
+            {
+                // Skip this candle - indicators still in warmup phase
+                continue;
+            }
+
+            // Map IndicatorValues → IndicatorSnapshot
             snapshots.Add(new IndicatorSnapshot
             {
                 InstrumentId     = instrument.Id,
                 TimeframeMinutes = TimeframeMinutes,
-                Timestamp        = candle.Timestamp,   // stored as UTC (Postgres timestamptz)
+                Timestamp        = candle.Timestamp,
                 EMAFast          = indicators.EMAFast,
                 EMASlow          = indicators.EMASlow,
                 RSI              = indicators.RSI,
@@ -259,12 +271,20 @@ public class IndicatorSnapshotsUpdateJob : IJob
         }
  
         // Step 7 — single bulk DB write for all new snapshots
-        await indicatorService.BulkSaveAsync(snapshots, ct);
+        if (snapshots.Count > 0) // ✅ ADDED: Only save if we have valid snapshots
+        {
+            await indicatorService.BulkSaveAsync(snapshots, ct);
  
-        _logger.LogDebug("{Symbol} {TF}m — saved {Count} snapshots",
-            instrument.Symbol, TimeframeMinutes, snapshots.Count);
+            _logger.LogDebug("{Symbol} {TF}m — saved {Count} snapshots",
+                instrument.Symbol, TimeframeMinutes, snapshots.Count);
+        }
+        else
+        {
+            _logger.LogDebug("{Symbol} {TF}m — no valid snapshots (still in warmup)",
+                instrument.Symbol, TimeframeMinutes);
+        }
  
-        return (snapshots.Count, 0);
+        return (snapshots.Count, newCandles.Count - snapshots.Count);
     }
  
     private record IndicatorEngineConfig(
