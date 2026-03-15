@@ -1,4 +1,4 @@
-namespace TradingSystem.Indicators;
+﻿namespace TradingSystem.Indicators;
 
 public class ADX
 {
@@ -53,8 +53,9 @@ public class ADX
             return;
         }
 
+        // ✅ FIXED: Use decimal Max and Abs instead of Math.Max/Math.Abs
         // TrueRange = max(High-Low, abs(High-PrevClose), abs(Low-PrevClose))
-        trueRange = Math.Max(high - low, Math.Max(Math.Abs(high - _previousClose.Value), Math.Abs(low - _previousClose.Value)));
+        trueRange = Max(high - low, Max(Abs(high - _previousClose.Value), Abs(low - _previousClose.Value)));
 
         // +DM and -DM calculation
         var upMove = high - _previousHigh.Value;
@@ -91,13 +92,15 @@ public class ADX
         }
         else
         {
-            // Wilder's smoothing: Smoothed = PrevSmoothed - (PrevSmoothed/14) + CurrentValue
-            _smoothedTR = _smoothedTR.Value - (_smoothedTR.Value / _period) + trueRange;
-            _smoothedPlusDM = _smoothedPlusDM.Value - (_smoothedPlusDM.Value / _period) + plusDM;
-            _smoothedMinusDM = _smoothedMinusDM.Value - (_smoothedMinusDM.Value / _period) + minusDM;
+            // ✅ FIXED: Wilder's smoothing formula corrected
+            // Old (WRONG): _smoothedTR = _smoothedTR.Value - (_smoothedTR.Value / _period) + trueRange;
+            // New (CORRECT): ((prev * (period-1)) + current) / period
+            _smoothedTR = ((_smoothedTR.Value * (_period - 1)) + trueRange) / _period;
+            _smoothedPlusDM = ((_smoothedPlusDM.Value * (_period - 1)) + plusDM) / _period;
+            _smoothedMinusDM = ((_smoothedMinusDM.Value * (_period - 1)) + minusDM) / _period;
         }
 
-        // +DI = (+DM14 / TR14) � 100
+        // +DI = (+DM14 / TR14) × 100
         if (_smoothedTR.Value > 0)
         {
             PlusDI = (_smoothedPlusDM.Value / _smoothedTR.Value) * 100;
@@ -106,8 +109,9 @@ public class ADX
             var diSum = PlusDI + MinusDI;
             if (diSum > 0)
             {
-                // DX = abs(+DI - -DI) / (+DI + -DI) � 100
-                var dx = Math.Abs(PlusDI - MinusDI) / diSum * 100;
+                // ✅ FIXED: Use decimal Abs
+                // DX = abs(+DI - -DI) / (+DI + -DI) × 100
+                var dx = Abs(PlusDI - MinusDI) / diSum * 100;
 
                 // Build ADX seed (needs 14 DX values)
                 if (_smoothedADX == null)
@@ -126,8 +130,10 @@ public class ADX
                 }
                 else
                 {
-                    // ADX = Wilder's smoothing of DX
-                    _smoothedADX = _smoothedADX.Value - (_smoothedADX.Value / _period) + dx;
+                    // ✅ FIXED: ADX = Wilder's smoothing of DX
+                    // Old (WRONG): _smoothedADX = _smoothedADX.Value - (_smoothedADX.Value / _period) + dx;
+                    // New (CORRECT): ((prev * (period-1)) + current) / period
+                    _smoothedADX = ((_smoothedADX.Value * (_period - 1)) + dx) / _period;
                     ADXValue = _smoothedADX.Value;
                 }
             }
@@ -158,4 +164,9 @@ public class ADX
 
         return (adxValues, plusDIValues, minusDIValues);
     }
+
+    // ✅ ADDED: Decimal helper methods
+    private static decimal Abs(decimal value) => value < 0 ? -value : value;
+    
+    private static decimal Max(decimal a, decimal b) => a > b ? a : b;
 }

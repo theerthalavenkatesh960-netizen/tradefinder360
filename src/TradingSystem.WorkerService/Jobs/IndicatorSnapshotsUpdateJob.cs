@@ -246,26 +246,27 @@ public class IndicatorSnapshotsUpdateJob : IJob
                 continue;
             }
 
-            // Map IndicatorValues → IndicatorSnapshot
+            // Map IndicatorValues → IndicatorSnapshot with 4dp rounding
             snapshots.Add(new IndicatorSnapshot
             {
                 InstrumentId     = instrument.Id,
                 TimeframeMinutes = TimeframeMinutes,
                 Timestamp        = candle.Timestamp,
-                EMAFast          = indicators.EMAFast,
-                EMASlow          = indicators.EMASlow,
-                RSI              = indicators.RSI,
-                MacdLine         = indicators.MacdLine,
-                MacdSignal       = indicators.MacdSignal,
-                MacdHistogram    = indicators.MacdHistogram,
-                ADX              = indicators.ADX,
-                PlusDI           = indicators.PlusDI,
-                MinusDI          = indicators.MinusDI,
-                ATR              = indicators.ATR,
-                BollingerUpper   = indicators.BollingerUpper,
-                BollingerMiddle  = indicators.BollingerMiddle,
-                BollingerLower   = indicators.BollingerLower,
-                VWAP             = indicators.VWAP,
+                // ✅ ADDED: Round all values to 4 decimal places before saving
+                EMAFast          = Math.Round(indicators.EMAFast,         4, MidpointRounding.AwayFromZero),
+                EMASlow          = Math.Round(indicators.EMASlow,         4, MidpointRounding.AwayFromZero),
+                RSI              = Math.Round(indicators.RSI,             4, MidpointRounding.AwayFromZero),
+                MacdLine         = Math.Round(indicators.MacdLine,        4, MidpointRounding.AwayFromZero),
+                MacdSignal       = Math.Round(indicators.MacdSignal,      4, MidpointRounding.AwayFromZero),
+                MacdHistogram    = Math.Round(indicators.MacdHistogram,   4, MidpointRounding.AwayFromZero),
+                ADX              = Math.Round(indicators.ADX,             4, MidpointRounding.AwayFromZero),
+                PlusDI           = Math.Round(indicators.PlusDI,          4, MidpointRounding.AwayFromZero),
+                MinusDI          = Math.Round(indicators.MinusDI,         4, MidpointRounding.AwayFromZero),
+                ATR              = Math.Round(indicators.ATR,             4, MidpointRounding.AwayFromZero),
+                BollingerUpper   = Math.Round(indicators.BollingerUpper,  4, MidpointRounding.AwayFromZero),
+                BollingerMiddle  = Math.Round(indicators.BollingerMiddle, 4, MidpointRounding.AwayFromZero),
+                BollingerLower   = Math.Round(indicators.BollingerLower,  4, MidpointRounding.AwayFromZero),
+                VWAP             = Math.Round(indicators.VWAP,            4, MidpointRounding.AwayFromZero),
                 CreatedAt        = DateTimeOffset.UtcNow
             });
         }

@@ -29,9 +29,9 @@ public class ATR
 
         // TrueRange = max(High-Low, abs(High-PrevClose), abs(Low-PrevClose))
         var highLow = high - low;
-        var highClose = Math.Abs(high - _previousClose.Value);
-        var lowClose = Math.Abs(low - _previousClose.Value);
-        trueRange = Math.Max(highLow, Math.Max(highClose, lowClose));
+        var highClose = Abs(high - _previousClose.Value);
+        var lowClose = Abs(low - _previousClose.Value);
+        trueRange = Max(highLow, Max(highClose, lowClose));
         _previousClose = close;
 
         // Seed with simple average of first 14 TrueRange values
@@ -71,4 +71,8 @@ public class ATR
 
         return results;
     }
+
+    private static decimal Abs(decimal value) => value < 0 ? -value : value;
+
+    private static decimal Max(decimal a, decimal b) => a > b ? a : b;
 }
