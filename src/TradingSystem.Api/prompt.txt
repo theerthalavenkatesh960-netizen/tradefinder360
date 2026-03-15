@@ -1,0 +1,70 @@
+I have a C# IndicatorEngine that calculates technical indicators. I need you to review each indicator implementation class for mathematical correctness against the industry-standard formulas. Here are the specifications each class must follow:
+1. EMA (Exponential Moving Average)
+
+Seed: first value = simple average of first period closes
+From period+1 onwards: EMA = (Close × k) + (PrevEMA × (1 - k)) where k = 2 / (period + 1)
+Must return 0 or null until seed is complete (not partial averages)
+Called with: _emaFast.Calculate(candle.Close) and _emaSlow.Calculate(candle.Close)
+
+2. RSI (Relative Strength Index, period=14)
+
+First RSI: simple average of gains and losses over first 14 periods
+Subsequent: Wilder's smoothing — AvgGain = ((PrevAvgGain × 13) + CurrentGain) / 14
+RS = AvgGain / AvgLoss, RSI = 100 - (100 / (1 + RS))
+Edge case: if AvgLoss = 0 → RSI must be exactly 100, not infinity or divide-by-zero crash
+Called with: _rsi.Calculate(candle.Close)
+
+3. MACD (Fast=12, Slow=26, Signal=9)
+
+MacdLine = EMA(12) - EMA(26)
+SignalLine = EMA(9) of MacdLine — must not start until MacdLine itself is valid (i.e. after 26 candles)
+Histogram = MacdLine - SignalLine
+All three must be 0 until enough candles exist
+Called with: _macd.Calculate(candle.Close), values read via _macd.MacdLine, _macd.SignalLine, _macd.Histogram
+
+4. ADX + DI (period=14)
+
+TrueRange = max(High-Low, abs(High-PrevClose), abs(Low-PrevClose))
++DM = High - PrevHigh if positive and greater than -DM, else 0
+-DM = PrevLow - Low if positive and greater than +DM, else 0
+Use Wilder's smoothing (not EMA): Smoothed = PrevSmoothed - (PrevSmoothed/14) + CurrentValue
++DI = (+DM14 / TR14) × 100, -DI = (-DM14 / TR14) × 100
+DX = abs(+DI - -DI) / (+DI + -DI) × 100
+ADX = Wilder's smoothing of DX over 14 periods
+ADX needs at least 28 candles (14 for DI + 14 for ADX smoothing) before it's valid
+Called with: _adx.Calculate(candle.High, candle.Low, candle.Close), values read via _adx.ADXValue, _adx.PlusDI, _adx.MinusDI
+
+5. ATR (Average True Range, period=14)
+
+First ATR: simple average of first 14 TrueRange values
+Subsequent: Wilder's smoothing — ATR = ((PrevATR × 13) + CurrentTR) / 14
+NOT regular EMA — must use Wilder's smoothing specifically
+Called with: _atr.Calculate(candle.High, candle.Low, candle.Close), returns value directly
+
+6. Bollinger Bands (period=20, stddev=2.0)
+
+MiddleBand = SMA(20) — must be simple moving average, NOT EMA
+σ = sqrt(sum of (Close - SMA)² / 20) — population standard deviation (divide by N, not N-1)
+UpperBand = Middle + (2 × σ), LowerBand = Middle - (2 × σ)
+BandWidth = (UpperBand - LowerBand) / MiddleBand — normalized width
+Must return 0 until 20 candles are available
+Called with: _bollingerBands.Calculate(candle.Close), values read via _bollingerBands.MiddleBand, _bollingerBands.UpperBand, _bollingerBands.LowerBand, _bollingerBands.BandWidth
+
+7. VWAP (Volume Weighted Average Price)
+
+Formula: VWAP = CumulativeSum(TypicalPrice × Volume) / CumulativeSum(Volume)
+TypicalPrice = (High + Low + Close) / 3 — already computed on the candle as candle.TypicalPrice
+Must reset at the start of each trading day (when date changes in IST — Asia/Kolkata timezone)
+Must handle zero volume candles without divide-by-zero
+Called with: _vwap.Calculate(candle.TypicalPrice, candle.Volume, candle.Timestamp), value read via _vwap.Value
+
+What I need you to do:
+
+Show me the current implementation of each class listed above
+For each one, verify the formula matches the specification exactly
+Point out any bugs, wrong smoothing methods, missing edge cases, or incorrect seeding logic
+Fix anything that is wrong and show me the corrected implementation
+Pay special attention to: Wilder's smoothing vs EMA (they are different), population vs sample standard deviation in Bollinger, and VWAP daily reset using IST timezone not server local time
+
+
+That prompt covers every edge case and common mistake. The three things Copilot is most likely to find wrong based on typical implementations are ATR/ADX using EMA instead of Wilder's smoothing, Bollinger using sample stddev (N-1) instead of population (N), and VWAP not resetting at IST midnight. Those are the most common bugs in indicator libraries. Sonnet 4.6
