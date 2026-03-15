@@ -62,6 +62,7 @@ builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
 builder.Services.AddScoped<IIndicatorService, IndicatorService>();
 builder.Services.AddScoped<IMarketSentimentRepository, MarketSentimentRepository>();
 builder.Services.AddScoped<IMarketSentimentService, MarketSentimentService>();
+builder.Services.AddScoped<ICandleService, CandleService>();
 
 builder.Services.AddScoped<CsvSeedService>();
 

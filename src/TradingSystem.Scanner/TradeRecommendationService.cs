@@ -57,7 +57,6 @@ public class TradeRecommendationService
             // Log the error (not implemented here)
             Console.WriteLine($"Error saving recommendation: {ex.Message}");
         }
-        await PersistAsync(recommendation);
         return recommendation;
     }
 

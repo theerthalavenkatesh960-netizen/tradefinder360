@@ -164,13 +164,6 @@ public class InstrumentController : ControllerBase
         }
 
         var key = instrument.InstrumentKey;
-        try
-        {
-            var r = await _recommender.GenerateAsync(key, timeframe);
-        }catch (Exception ex)
-        {
-            return StatusCode(500, $"Error generating recommendation: {ex.Message}");
-        }
         var recommendation = await _recommender.GenerateAsync(key, timeframe);
 
         if (recommendation == null)
