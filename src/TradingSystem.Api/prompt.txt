@@ -1,617 +1,247 @@
+I have two API endpoints in my trading system:
+GET /api/instrument/{symbol}/analysis?timeframe=15
+GET /api/instrument/{symbol}/recommend?timeframe=15
+The analysis endpoint produces a TrendStateResult and the recommend endpoint produces a SignalResult. There are serious bugs in both. Fix everything listed below.
+
+PART 1 — Analysis Endpoint Fixes
+1. MACD reasoning must check histogram direction, not just line polarity
+Find where reasoning points are generated for MACD. The current logic says "MACD is positive" if MacdLine > 0. This is wrong. Fix it to:
+csharp// WRONG — MacdLine > 0 does not mean momentum is intact
+if (indicators.MacdLine > 0)
+    reasons.Add("MACD is positive — upward momentum intact");
+
+// CORRECT — check histogram direction for momentum
+if (indicators.MacdLine > 0 && indicators.MacdHistogram > 0)
+    reasons.Add("MACD positive and rising — upward momentum building");
+else if (indicators.MacdLine > 0 && indicators.MacdHistogram < 0)
+    reasons.Add("MACD positive but weakening — momentum fading, caution");
+else if (indicators.MacdLine < 0 && indicators.MacdHistogram < 0)
+    reasons.Add("MACD negative and falling — downward momentum building");
+else if (indicators.MacdLine < 0 && indicators.MacdHistogram > 0)
+    reasons.Add("MACD negative but recovering — potential reversal watch");
+2. Bias must account for price vs VWAP
+Find where bias (BULLISH/BEARISH/NEUTRAL) is determined. Add VWAP as a required confirmation:
+csharp// WRONG — bias from EMA alone
+var bias = indicators.EMAFast > indicators.EMASlow ? "BULLISH" : "BEARISH";
+
+// CORRECT — EMA alignment AND price vs VWAP must agree
+bool emasBullish   = indicators.EMAFast > indicators.EMASlow;
+bool priceAboveVwap = lastClose > indicators.VWAP;
+
+string bias;
+if (emasBullish && priceAboveVwap)
+    bias = "BULLISH";
+else if (!emasBullish && !priceAboveVwap)
+    bias = "BEARISH";
+else
+    bias = "NEUTRAL";  // EMAs and VWAP disagree — no clear bias
+3. PULLBACK_READY state must require ADX >= 25
+Find where TrendState is set to PULLBACK_READY. Add ADX gate:
+csharp// WRONG — allows weak trends
+if (setupScore >= 50 && indicators.EMAFast > indicators.EMASlow)
+    state = "PULLBACK_READY";
+
+// CORRECT — trend must be confirmed before calling it pullback-ready
+if (setupScore >= 50 
+    && indicators.ADX >= 25               // trend confirmed
+    && indicators.EMAFast > indicators.EMASlow
+    && lastClose > indicators.VWAP)       // price above VWAP for bullish
+    state = "PULLBACK_READY";
+else if (setupScore >= 50 && indicators.ADX >= 20 && indicators.ADX < 25)
+    state = "TREND_FORMING";              // trend not confirmed yet
+else
+    state = "NO_SETUP";
+4. entryGuidance must be null when conditions are not met
+Find where entryGuidance is populated. It must be null in all these cases:
+csharpbool shouldGenerateEntry =
+    indicators.ADX >= 25           &&   // confirmed trend
+    setupScore >= 65               &&   // high quality setup only
+    bias != "NEUTRAL"              &&   // clear directional bias
+    state == "PULLBACK_READY";          // correct state
+
+entryGuidance = shouldGenerateEntry ? GenerateEntryGuidance(...) : null;
+5. Deduplicate and validate reasoning points
+Find where reasoningPoints list is built. It currently concatenates points from multiple stages causing duplicates and contradictions. Fix:
+csharp// After building the full reasoningPoints list, deduplicate by topic:
+// Only one RSI point, one MACD point, one EMA point, one ADX point per response.
+// If two points contradict each other on the same indicator, keep the more conservative one.
+
+var deduped = reasoningPoints
+    .GroupBy(r => ExtractIndicatorTopic(r))  // group by which indicator it's about
+    .Select(g => g.Last())                   // keep last (most specific) point per indicator
+    .ToList();
+
+// Helper to identify which indicator a reasoning string is about:
+private static string ExtractIndicatorTopic(string reason)
 {
-  "instrumentId": 365,
-  "symbol": "COALINDIA",
-  "exchange": "NSE",
-  "timeframeMinutes": 15,
-  "totalCandlesAnalyzed": 100,
-  "verificationTimestamp": "2026-03-15T14:16:02.178154+00:00",
-  "warmupPeriods": {
-    "EMA(20)": {
-      "expected": 20,
-      "actual": 20,
-      "isValid": true
-    },
-    "EMA(50)": {
-      "expected": 50,
-      "actual": 50,
-      "isValid": true
-    },
-    "RSI(14)": {
-      "expected": 15,
-      "actual": 15,
-      "isValid": true
-    },
-    "MACD Signal": {
-      "expected": 35,
-      "actual": 34,
-      "isValid": true
-    },
-    "ADX(14)": {
-      "expected": 28,
-      "actual": 28,
-      "isValid": true
-    },
-    "ATR(14)": {
-      "expected": 15,
-      "actual": 15,
-      "isValid": true
-    },
-    "Bollinger(20)": {
-      "expected": 20,
-      "actual": 20,
-      "isValid": true
-    }
-  },
-  "validationResults": [
-    {
-      "indicator": "EMA(20)",
-      "isValid": true,
-      "message": "✅ EMA(20) warmup correct (expected: 20, actual: 20)"
-    },
-    {
-      "indicator": "EMA(50)",
-      "isValid": true,
-      "message": "✅ EMA(50) warmup correct (expected: 50, actual: 50)"
-    },
-    {
-      "indicator": "RSI(14)",
-      "isValid": true,
-      "message": "✅ RSI(14) warmup correct (expected: 15, actual: 15)"
-    },
-    {
-      "indicator": "MACD Signal",
-      "isValid": true,
-      "message": "✅ MACD Signal warmup correct (expected: 35, actual: 34)"
-    },
-    {
-      "indicator": "ADX(14)",
-      "isValid": true,
-      "message": "✅ ADX(14) warmup correct (expected: 28, actual: 28)"
-    },
-    {
-      "indicator": "ATR(14)",
-      "isValid": true,
-      "message": "✅ ATR(14) warmup correct (expected: 15, actual: 15)"
-    },
-    {
-      "indicator": "Bollinger(20)",
-      "isValid": true,
-      "message": "✅ Bollinger(20) warmup correct (expected: 20, actual: 20)"
-    }
-  ],
-  "sampleData": [
-    {
-      "candleIndex": 51,
-      "timestamp": "2026-03-11T03:45:00+00:00",
-      "close": 447.05,
-      "indicators": {
-        "emaFast": 442.2951041061257,
-        "emaSlow": 440.23707843137254,
-        "rsi": 67.56544624214015,
-        "macdLine": 1.3008556044473243,
-        "macdSignal": 0.9649555284765786,
-        "macdHistogram": 0.33590007597074556,
-        "adx": 39.8242171604537,
-        "plusDI": 44.82487427846683,
-        "minusDI": 9.568781702330421,
-        "atr": 2.564365962052822,
-        "bollingerMiddle": 442.275,
-        "bollingerUpper": 446.1631229404431,
-        "bollingerLower": 438.38687705955687,
-        "bollingerWidth": 0.017582377210754,
-        "vwap": 448,
-        "timestamp": "2026-03-11T03:45:00+00:00"
-      }
-    },
-    {
-      "candleIndex": 61,
-      "timestamp": "2026-03-11T06:15:00+00:00",
-      "close": 450.35,
-      "indicators": {
-        "emaFast": 446.20633593700524,
-        "emaSlow": 442.89420366081515,
-        "rsi": 69.8424331602678,
-        "macdLine": 2.2634633692389623,
-        "macdSignal": 1.9372094589272688,
-        "macdHistogram": 0.3262539103116936,
-        "adx": 51.370630355741646,
-        "plusDI": 40.6359130812457,
-        "minusDI": 8.960084405295639,
-        "atr": 2.1059110041335507,
-        "bollingerMiddle": 445.7425,
-        "bollingerUpper": 451.29013688429586,
-        "bollingerLower": 440.19486311570415,
-        "bollingerWidth": 0.024891666755114762,
-        "vwap": 448.0885221245286,
-        "timestamp": "2026-03-11T06:15:00+00:00"
-      }
-    },
-    {
-      "candleIndex": 71,
-      "timestamp": "2026-03-11T08:45:00+00:00",
-      "close": 449.1,
-      "indicators": {
-        "emaFast": 448.34472628961265,
-        "emaSlow": 445.13975711964093,
-        "rsi": 57.161905808982034,
-        "macdLine": 1.4685510442749894,
-        "macdSignal": 1.838856741576103,
-        "macdHistogram": -0.37030569730111357,
-        "adx": 46.85597168763246,
-        "plusDI": 27.09596144408865,
-        "minusDI": 16.61755541765786,
-        "atr": 1.9802722940608892,
-        "bollingerMiddle": 448.9825,
-        "bollingerUpper": 451.71568038189946,
-        "bollingerLower": 446.24931961810057,
-        "bollingerWidth": 0.012174997385864464,
-        "vwap": 449.13348132075487,
-        "timestamp": "2026-03-11T08:45:00+00:00"
-      }
-    },
-    {
-      "candleIndex": 81,
-      "timestamp": "2026-03-12T05:00:00+00:00",
-      "close": 455.3,
-      "indicators": {
-        "emaFast": 449.40030828239264,
-        "emaSlow": 446.59661501698673,
-        "rsi": 72.33817243157426,
-        "macdLine": 1.4400822462359986,
-        "macdSignal": 0.9970899772155073,
-        "macdHistogram": 0.44299226902049127,
-        "adx": 37.82783463226469,
-        "plusDI": 34.628904399217895,
-        "minusDI": 10.198463780262335,
-        "atr": 2.4327094152081274,
-        "bollingerMiddle": 449.53,
-        "bollingerUpper": 453.9623131658311,
-        "bollingerLower": 445.0976868341689,
-        "bollingerWidth": 0.019719765825778626,
-        "vwap": 450.3564501251657,
-        "timestamp": "2026-03-12T05:00:00+00:00"
-      }
-    },
-    {
-      "candleIndex": 91,
-      "timestamp": "2026-03-12T07:30:00+00:00",
-      "close": 465.4,
-      "indicators": {
-        "emaFast": 459.3553688017091,
-        "emaSlow": 452.70320353124356,
-        "rsi": 72.19607647817149,
-        "macdLine": 4.767400429865722,
-        "macdSignal": 4.259605608309507,
-        "macdHistogram": 0.5077948215562142,
-        "adx": 49.49280913222989,
-        "plusDI": 32.391334043954124,
-        "minusDI": 12.720387793492895,
-        "atr": 2.7466176809720624,
-        "bollingerMiddle": 457.18,
-        "bollingerUpper": 473.7003026606657,
-        "bollingerLower": 440.65969733933423,
-        "bollingerWidth": 0.07227045216617417,
-        "vwap": 460.4689055362119,
-        "timestamp": "2026-03-12T07:30:00+00:00"
-      }
-    },
-    {
-      "candleIndex": 101,
-      "timestamp": "2026-03-13T03:45:00+00:00",
-      "close": 472,
-      "indicators": {
-        "emaFast": 466.3607246480749,
-        "emaSlow": 458.52745701846,
-        "rsi": 69.31998903531768,
-        "macdLine": 4.5048552558944905,
-        "macdSignal": 4.757661889904162,
-        "macdHistogram": -0.2528066340096709,
-        "adx": 47.317193705117056,
-        "plusDI": 34.344404768297764,
-        "minusDI": 11.29173106642313,
-        "atr": 3.2641652540454236,
-        "bollingerMiddle": 467.7075,
-        "bollingerUpper": 473.81456762693847,
-        "bollingerLower": 461.6004323730615,
-        "bollingerWidth": 0.026114901415686002,
-        "vwap": 472.3,
-        "timestamp": "2026-03-13T03:45:00+00:00"
-      }
-    },
-    {
-      "candleIndex": 111,
-      "timestamp": "2026-03-13T06:15:00+00:00",
-      "close": 468.4,
-      "indicators": {
-        "emaFast": 467.1876326680181,
-        "emaSlow": 461.45078191166346,
-        "rsi": 54.382183164157034,
-        "macdLine": 2.036914576911266,
-        "macdSignal": 2.4828440216172685,
-        "macdHistogram": -0.4459294447060021,
-        "adx": 35.18315546383997,
-        "plusDI": 28.17110174036839,
-        "minusDI": 13.091475032728768,
-        "atr": 3.667762198708734,
-        "bollingerMiddle": 468.7725,
-        "bollingerUpper": 473.9774471659182,
-        "bollingerLower": 463.56755283408177,
-        "bollingerWidth": 0.022206708652569036,
-        "vwap": 469.11445934641733,
-        "timestamp": "2026-03-13T06:15:00+00:00"
-      }
-    },
-    {
-      "candleIndex": 121,
-      "timestamp": "2026-03-13T08:45:00+00:00",
-      "close": 465.5,
-      "indicators": {
-        "emaFast": 465.7684118704036,
-        "emaSlow": 462.6371675386612,
-        "rsi": 50.148119984260404,
-        "macdLine": -0.022844807311203887,
-        "macdSignal": 0.5597145070343829,
-        "macdHistogram": -0.5825593143455868,
-        "adx": 21.460157618803425,
-        "plusDI": 22.032099297741766,
-        "minusDI": 16.632162346350825,
-        "atr": 2.9549947583318175,
-        "bollingerMiddle": 466.18,
-        "bollingerUpper": 471.04183093083253,
-        "bollingerLower": 461.3181690691675,
-        "bollingerWidth": 0.020858170366950705,
-        "vwap": 467.95691638368834,
-        "timestamp": "2026-03-13T08:45:00+00:00"
-      }
-    }
-  ],
-  "storedDataComparison": [
-    {
-      "timestamp": "2026-03-13T05:00:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.024546621295639812,
-        "RSI": 0.010472097677521448,
-        "MACDLine": 0.03163269917303087,
-        "ADX": 0.190386025873773,
-        "ATR": 0.014643432420559379,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.190386025873773,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T05:15:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.023554059935521846,
-        "RSI": 0.009303140083399915,
-        "MACDLine": 0.029355643622486424,
-        "ADX": 0.18659789638550964,
-        "ATR": 0.011892374015162776,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.18659789638550964,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T05:30:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.022608101909765657,
-        "RSI": 0.00923232292781454,
-        "MACDLine": 0.03281557646029315,
-        "ADX": 0.18046188262493035,
-        "ATR": 0.011921082434285033,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.18046188262493035,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T05:45:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.02172450463354819,
-        "RSI": 0.007658580482107641,
-        "MACDLine": 0.027499725002749973,
-        "ADX": 0.17620968666192954,
-        "ATR": 0.008866296252512118,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.17620968666192954,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T06:00:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.02085576719413836,
-        "RSI": 0.005536272581456255,
-        "MACDLine": 0.022973718066531888,
-        "ADX": 0.16450270661027658,
-        "ATR": 0.008470030209774415,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.16450270661027658,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T06:15:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.02001979446344351,
-        "RSI": 0.005516206615034973,
-        "MACDLine": 0.02454108177088446,
-        "ADX": 0.1543805480509456,
-        "ATR": 0.0081799591002045,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.1543805480509456,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T06:30:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.01920482913764471,
-        "RSI": 0.005141579599630516,
-        "MACDLine": 0.019911394295385534,
-        "ADX": 0.14696992703072043,
-        "ATR": 0.008320621273055055,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.14696992703072043,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T06:45:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.018460626167991698,
-        "RSI": 0.005065757428153921,
-        "MACDLine": 0.022878059940517045,
-        "ADX": 0.14196028638944733,
-        "ATR": 0.008272438990762443,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.14196028638944733,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T07:00:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.01774307252026497,
-        "RSI": 0.005343170466373291,
-        "MACDLine": 0.03056001222400489,
-        "ADX": 0.14161881195823023,
-        "ATR": 0.00826856292376385,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.14161881195823023,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T07:15:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.01704899986412726,
-        "RSI": 0.005310274939484992,
-        "MACDLine": 0.03448672261179446,
-        "ADX": 0.14223332912393574,
-        "ATR": 0.005614980768690867,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.14223332912393574,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T07:30:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.016354779294849412,
-        "RSI": 0.005252411185009618,
-        "MACDLine": 0.055970149253731345,
-        "ADX": 0.1434858151988151,
-        "ATR": 0.005760700501180944,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.1434858151988151,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T07:45:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.015702250720821986,
-        "RSI": 0.004543727178097583,
-        "MACDLine": 0.0797872340425532,
-        "ADX": 0.1431047307629861,
-        "ATR": 0.005940711697261332,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.1431047307629861,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T08:00:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.015094290660245466,
-        "RSI": 0.004458731257404679,
-        "MACDLine": 0.15748031496062992,
-        "ADX": 0.14322119673711708,
-        "ATR": 0,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.15748031496062992,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T08:15:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.014508478270364519,
-        "RSI": 0.004496123699068018,
-        "MACDLine": 0.7407407407407407,
-        "ADX": 0.143963336201242,
-        "ATR": 0,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.7407407407407407,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T08:30:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.013943389406655817,
-        "RSI": 0.004091510728964009,
-        "MACDLine": 0.78125,
-        "ADX": 0.14454992409996148,
-        "ATR": 0,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.78125,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T08:45:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.013378024724923821,
-        "RSI": 0.003988027940123749,
-        "MACDLine": 0.8849557522123894,
-        "ADX": 0.1395985146718039,
-        "ATR": 0.006768647624204684,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.8849557522123894,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T09:00:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.012855842148407843,
-        "RSI": 0.003913863687955476,
-        "MACDLine": 1.680672268907563,
-        "ADX": 0.1319482650901258,
-        "ATR": 0,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 1.680672268907563,
-      "isAcceptable": false
-    },
-    {
-      "timestamp": "2026-03-13T09:15:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.012352429498292686,
-        "RSI": 0.0029405405405405404,
-        "MACDLine": 0,
-        "ADX": 0.12207843083664721,
-        "ATR": 0,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.12207843083664721,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T09:30:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.011851341435851538,
-        "RSI": 0.0029721215003269334,
-        "MACDLine": 0,
-        "ADX": 0.11238861485492058,
-        "ATR": 0,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.11238861485492058,
-      "isAcceptable": true
-    },
-    {
-      "timestamp": "2026-03-13T09:45:00+00:00",
-      "differences": {
-        "EMA20": 0,
-        "EMA50": 0.011394865318303046,
-        "RSI": 0.002912938105891126,
-        "MACDLine": 0.05512679162072767,
-        "ADX": 0.10665567246849625,
-        "ATR": 0,
-        "BBMiddle": 0,
-        "BBUpper": 0,
-        "BBLower": 0,
-        "VWAP": 0
-      },
-      "maxDifference": 0.10665567246849625,
-      "isAcceptable": true
-    }
-  ],
-  "overallStatus": "PASS",
-  "recommendations": [
-    "✅ All indicator warmup periods are correct",
-    "⚠️ 1 stored snapshot(s) differ from freshly calculated values by >1%",
-    "   Consider recalculating historical indicator snapshots",
-    "   Largest discrepancy: MACDLine at 1.68%"
-  ]
+    if (reason.Contains("RSI"))       return "RSI";
+    if (reason.Contains("MACD"))      return "MACD";
+    if (reason.Contains("EMA"))       return "EMA";
+    if (reason.Contains("ADX"))       return "ADX";
+    if (reason.Contains("VWAP"))      return "VWAP";
+    if (reason.Contains("Bollinger")) return "Bollinger";
+    if (reason.Contains("Volume"))    return "Volume";
+    return reason;
 }
+
+PART 2 — Recommend Endpoint Fixes
+1. Hard gate — never generate a signal if entryGuidance is null
+This is the most critical fix. Find the signal generation entry point and add this as the very first check:
+csharp// Get analysis result first
+var analysis = await GetAnalysis(symbol, timeframe, ct);
+
+// HARD GATE — if analysis says no entry, stop immediately
+if (analysis.EntryGuidance == null)
+    return null;  // or return NoSignalResult with reason "No entry guidance from analysis"
+
+if (analysis.Confidence < 65)
+    return null;  // below minimum confidence threshold
+
+if (analysis.TrendState.State != "PULLBACK_READY" 
+    && analysis.TrendState.State != "BREAKOUT_READY")
+    return null;  // wrong market state for entry
+2. Enforce minimum Risk-Reward of 2.0
+Find where target is calculated. Fix it to always produce RR >= 2.0:
+csharpvar risk = entryPrice - stopLoss;  // for BUY
+
+// WRONG — arbitrary target
+var target = entryPrice + (risk * 1.33m);
+
+// CORRECT — minimum 2:1, prefer 2.5:1 if key level allows
+var minimumTarget = entryPrice + (risk * 2.0m);
+var preferredTarget = entryPrice + (risk * 2.5m);
+
+// Use preferred if no major resistance in the way, else minimum
+var target = HasResistanceAbove(preferredTarget) ? minimumTarget : preferredTarget;
+
+// Final check — if even minimum RR is not achievable, return null (no signal)
+var actualRR = (target - entryPrice) / risk;
+if (actualRR < 2.0m)
+    return null;
+3. Block signals outside market hours
+Find where the signal timestamp is set. Add market hours gate:
+csharpprivate static readonly TimeZoneInfo Ist = 
+    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
+private static readonly TimeOnly MarketOpen  = new(9,  15);
+private static readonly TimeOnly MarketClose = new(15, 25);  // 5 min before close
+
+private static bool IsMarketOpen()
+{
+    var istNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist);
+    var istTime = TimeOnly.FromDateTime(istNow);
+    var istDay  = istNow.DayOfWeek;
+
+    // NSE is closed on weekends
+    if (istDay == DayOfWeek.Saturday || istDay == DayOfWeek.Sunday)
+        return false;
+
+    return istTime >= MarketOpen && istTime <= MarketClose;
+}
+
+// At the start of signal generation:
+if (!IsMarketOpen())
+    return null;  // or NoSignalResult with reason "Market is closed"
+4. ADX gate for signal generation
+csharp// Minimum ADX for any signal
+if (indicators.ADX < 25)
+    return null;  // trend not confirmed, no signal
+
+// For strong signals only
+if (indicators.ADX < 25 || indicators.ADX > 60)
+    return null;  // ADX > 60 means trend exhaustion, also skip
+5. Price vs VWAP gate per direction
+csharp// For BUY signals — price must be at or above VWAP
+if (direction == "BUY" && lastClose < indicators.VWAP)
+    return null;  // selling pressure dominant, no buy signal
+
+// For SELL signals — price must be at or below VWAP
+if (direction == "SELL" && lastClose > indicators.VWAP)
+    return null;  // buying pressure dominant, no sell signal
+6. Fix signal expiry to respect market hours
+csharp// WRONG — fixed 1 hour expiry ignores market close
+var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
+
+// CORRECT — expire at market close today (15:30 IST) or in 1 hour, whichever is sooner
+var istNow       = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist);
+var marketClose  = istNow.Date.Add(new TimeSpan(15, 30, 0));
+var oneHourLater = istNow.AddHours(1);
+
+var expiryIst  = oneHourLater < marketClose ? oneHourLater : marketClose;
+var expiresAt  = new DateTimeOffset(
+    DateTime.SpecifyKind(expiryIst, DateTimeKind.Unspecified),
+    TimeSpan.FromHours(5.5)).ToUniversalTime();
+7. Remove contradictory reasoning from signal
+The signal endpoint is pulling reasoning from two sources (analysis stage + signal stage) and concatenating them. This produces duplicates and contradictions. Fix:
+csharp// WRONG — concatenating both lists
+signal.ReasoningPoints = analysis.ReasoningPoints
+    .Concat(signalReasons)
+    .ToList();
+
+// CORRECT — use only signal-specific reasons, reference analysis by state only
+signal.ReasoningPoints = new List<string>
+{
+    $"Setup state: {analysis.TrendState.State} with score {analysis.Confidence}/100",
+    $"Direction confirmed: {DirectionReason(indicators)}",
+    $"Entry at {entryPrice} with {rr:F1}:1 risk-reward",
+    $"Stop loss at {stopLoss} ({stopBasis})",
+    $"Target at {target} ({targetBasis})"
+};
+// Do NOT copy reasoningPoints from analysis into signal
+
+PART 3 — Summary Of All Gates (implement as a single validation method)
+Create a method ValidateSignalGates that runs all checks in order and returns the first failure reason:
+csharpprivate static string? ValidateSignalGates(
+    TrendStateResult analysis,
+    IndicatorValues indicators,
+    decimal lastClose,
+    string direction)
+{
+    if (analysis.EntryGuidance == null)
+        return "No entry guidance from analysis";
+
+    if (analysis.Confidence < 65)
+        return $"Confidence {analysis.Confidence} below minimum 65";
+
+    if (analysis.TrendState.State != "PULLBACK_READY" 
+        && analysis.TrendState.State != "BREAKOUT_READY")
+        return $"State {analysis.TrendState.State} not actionable";
+
+    if (indicators.ADX < 25)
+        return $"ADX {indicators.ADX:F1} below minimum 25 — trend not confirmed";
+
+    if (indicators.ADX > 60)
+        return $"ADX {indicators.ADX:F1} above 60 — trend exhaustion risk";
+
+    if (direction == "BUY"  && lastClose < indicators.VWAP)
+        return $"Price {lastClose} below VWAP {indicators.VWAP} — no buy signal";
+
+    if (direction == "SELL" && lastClose > indicators.VWAP)
+        return $"Price {lastClose} above VWAP {indicators.VWAP} — no sell signal";
+
+    if (!IsMarketOpen())
+        return "Market is closed";
+
+    return null;  // all gates passed
+}
+
+// Usage:
+var gateFailure = ValidateSignalGates(analysis, indicators, lastClose, direction);
+if (gateFailure != null)
+{
+    _logger.LogInformation("Signal blocked for {Symbol}: {Reason}", symbol, gateFailure);
+    return new NoSignalResult { Reason = gateFailure };
+}
+```
+
+---
+
+## PART 4 — Expected Behaviour After Fixes
+
+For the COALINDIA example that triggered this:
+```
+ADX: 22.3      → fails ADX >= 25 gate   → no signal generated
+Confidence: 52 → fails confidence >= 65 → no signal generated
+Price < VWAP   → fails VWAP gate        → no signal generated
+After market   → fails market hours gate → no signal generated
+entryGuidance: null → fails first gate  → no signal generated
