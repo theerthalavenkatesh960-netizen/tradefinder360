@@ -528,13 +528,14 @@ public class IndicatorVerificationController : ControllerBase
     /// </summary>
     private static decimal PctDiff(decimal calculated, decimal stored)
     {
-        // ✅ FIXED: Round both sides to 4dp before comparing
         var calc  = Math.Round(calculated, 4, MidpointRounding.AwayFromZero);
         var store = Math.Round(stored,     4, MidpointRounding.AwayFromZero);
         
-        if (store == 0) return 0;
-        
+        // ✅ ADDED: Absolute difference check for near-zero values
         var absDiff = Math.Abs(calc - store);
+        if (absDiff <= 0.0001m) return 0m; // Ignore sub-basis-point differences
+        
+        if (store == 0) return 0;
         if (absDiff == 0) return 0;
         
         return absDiff / Math.Abs(store) * 100;
