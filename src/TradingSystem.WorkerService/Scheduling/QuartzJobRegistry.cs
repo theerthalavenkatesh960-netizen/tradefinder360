@@ -22,7 +22,7 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(MarketCandlesUpdateJob),
-                    "0 */1 * 1 * ?",        // Every 4 minutes
+                    "0 */5 * 1 * ?",        // Every 4 minutes
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 ),
 
@@ -34,7 +34,7 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(IndicatorSnapshotsUpdateJob),
-                    "0 */2 * * * ?",       // Every 10 minutes (after candles are loaded)
+                    "0 */3 * 1 * ?",       // Every 10 minutes (after candles are loaded)
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 ),
 

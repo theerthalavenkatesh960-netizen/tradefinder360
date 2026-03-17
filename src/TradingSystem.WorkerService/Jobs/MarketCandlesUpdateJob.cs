@@ -434,8 +434,8 @@ public class MarketCandlesUpdateJob : IJob
     {
         Exception? lastException = null;
 
-        for (int attempt = 1; attempt <= MaxApiRetries; attempt++)
-        {
+        // for (int attempt = 1; attempt <= MaxApiRetries; attempt++)
+        // {
             try
             {
                 var result = await _upstoxClient.GetHistoricalCandlesV3Async(
@@ -452,17 +452,17 @@ public class MarketCandlesUpdateJob : IJob
             {
                 lastException = ex;
 
-                if (attempt < MaxApiRetries)
-                {
-                    var delay = RetryBaseDelay * Math.Pow(2, attempt - 1); // 1s → 2s → 4s
-                    _logger.LogWarning(ex,
-                        "{Symbol} {TF}m attempt {A}/{Max} failed, retrying in {D}s",
-                        instrument.Symbol, config.TimeframeMinutes,
-                        attempt, MaxApiRetries, delay.TotalSeconds);
-                    await Task.Delay(delay, ct);
-                }
+                // if (attempt < MaxApiRetries)
+                // {
+                //     var delay = RetryBaseDelay * Math.Pow(2, attempt - 1); // 1s → 2s → 4s
+                //     _logger.LogWarning(ex,
+                //         "{Symbol} {TF}m attempt {A}/{Max} failed, retrying in {D}s",
+                //         instrument.Symbol, config.TimeframeMinutes,
+                //         attempt, MaxApiRetries, delay.TotalSeconds);
+                //     await Task.Delay(delay, ct);
+                // }
             }
-        }
+        //}
 
         throw new InvalidOperationException(
             $"API failed after {MaxApiRetries} attempts: {from:yyyy-MM-dd}→{to:yyyy-MM-dd}",
