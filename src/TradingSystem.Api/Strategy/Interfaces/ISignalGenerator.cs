@@ -16,6 +16,6 @@ public interface ISignalGenerator
         BreakoutResult breakout,
         FairValueGap fvg,
         Candle confirmationCandle,
-        StrategyConfig config,
+        IntraDayStrategyConfig config,
         CancellationToken ct = default);
 }

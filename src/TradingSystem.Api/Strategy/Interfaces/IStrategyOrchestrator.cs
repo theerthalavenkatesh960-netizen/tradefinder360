@@ -14,6 +14,6 @@ public interface IStrategyOrchestrator
         string symbol,
         IAsyncEnumerable<Candle> oneMinCandles,
         DateOnly sessionDate,
-        StrategyConfig config,
+        IntraDayStrategyConfig config,
         CancellationToken ct = default);
 }
