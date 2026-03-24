@@ -83,10 +83,15 @@ public class InstrumentDetailDto
 }
 
 /// <summary>
-/// Filter parameters for instrument listing.
+/// Search/filter request body for POST /api/instrument/search.
+/// Defaults return all active STOCK instruments sorted by symbol.
+/// Send an empty {} body to get the default stock listing.
 /// </summary>
-public class InstrumentFilterQuery
+public class InstrumentSearchRequest
 {
+    /// <summary>Search by symbol or name (partial match)</summary>
+    public string? Search { get; set; }
+
     /// <summary>Exchange: NSE, BSE</summary>
     public string? Exchange { get; set; }
 
@@ -96,8 +101,8 @@ public class InstrumentFilterQuery
     /// <summary>Industry name</summary>
     public string? Industry { get; set; }
 
-    /// <summary>Instrument type: STOCK, INDEX</summary>
-    public string? InstrumentType { get; set; }
+    /// <summary>Instrument type: STOCK, INDEX. Default: STOCK</summary>
+    public string InstrumentType { get; set; } = "STOCK";
 
     /// <summary>Only instruments with derivatives (F&O)</summary>
     public bool? DerivativesEnabled { get; set; }
@@ -132,19 +137,22 @@ public class InstrumentFilterQuery
     /// <summary>Only show instruments with active recommendations</summary>
     public bool? HasRecommendation { get; set; }
 
-    /// <summary>Search by symbol or name (partial match)</summary>
-    public string? Search { get; set; }
+    /// <summary>Price timeframe for market data. Default: 1D</summary>
+    public string PriceTimeframe { get; set; } = "1D";
 
-    /// <summary>Sort field: symbol, price, change, adx, rsi, score, marketCap</summary>
-    public string? SortBy { get; set; }
+    /// <summary>Scan timeframe in minutes. Default: 15</summary>
+    public int ScanTimeframe { get; set; } = 15;
 
-    /// <summary>Sort direction: asc, desc (default: asc)</summary>
-    public string? SortDirection { get; set; }
+    /// <summary>Sort field: symbol, price, change, marketCap, confidence, volume. Default: symbol</summary>
+    public string SortBy { get; set; } = "symbol";
 
-    /// <summary>Page number (1-based, default: 1)</summary>
+    /// <summary>Sort direction: asc, desc. Default: asc</summary>
+    public string SortDirection { get; set; } = "asc";
+
+    /// <summary>Page number (1-based). Default: 1</summary>
     public int Page { get; set; } = 1;
 
-    /// <summary>Page size (default: 50, max: 200)</summary>
+    /// <summary>Page size (1-200). Default: 50</summary>
     public int PageSize { get; set; } = 50;
 }
 

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+ï»¿using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
@@ -36,40 +36,68 @@ public class InstrumentController : ControllerBase
     }
 
     // =========================================================================
-    // GET /api/instrument — list all instruments with filters & pagination
+    // GET /api/instrument â€” simple list for the instruments page
+    // Returns all active instruments with price data. No filters, no scan.
     // =========================================================================
     [HttpGet]
+    [ProducesResponseType(typeof(List<InstrumentDto>), 200)]
+    public async Task<ActionResult<List<InstrumentDto>>> GetAllInstruments(
+        [FromQuery] string priceTimeframe = "1D")
+    {
+        var instruments = await _instrumentService.GetActiveAsync();
+        if (!instruments.Any())
+            return Ok(new List<InstrumentDto>());
+
+        var ids = instruments.Select(i => i.Id);
+        var priceMap = await _priceRepository
+            .GetLatestPricesForInstrumentsAsync(ids, priceTimeframe);
+
+        var dtos = instruments.Select(inst =>
+        {
+            var dto = MapToInstrumentDto(inst);
+            if (priceMap.TryGetValue(inst.Id, out var price))
+                ApplyPriceData(dto, price);
+            return dto;
+        }).OrderBy(d => d.Symbol).ToList();
+
+        return Ok(dtos);
+    }
+
+    // =========================================================================
+    // POST /api/instrument/search â€” advanced filtered search
+    // Send {} for defaults â†’ all STOCK instruments, sorted by symbol, page 1.
+    // =========================================================================
+    [HttpPost("search")]
     [ProducesResponseType(typeof(PaginatedResult<InstrumentDto>), 200)]
-    public async Task<ActionResult<PaginatedResult<InstrumentDto>>> GetAllInstruments(
-        [FromQuery] InstrumentFilterQuery filter,
-        [FromQuery] string priceTimeframe = "1D",
-        [FromQuery] int scanTimeframe = 15)
+    public async Task<ActionResult<PaginatedResult<InstrumentDto>>> SearchInstruments(
+        [FromBody] InstrumentSearchRequest request)
     {
         var instruments = await _instrumentService.GetActiveAsync();
         if (!instruments.Any())
             return Ok(new PaginatedResult<InstrumentDto>());
 
-        // Step 1 — cheap metadata filters (no I/O)
-        var filtered = ApplyMetadataFilters(instruments, filter);
+        // Step 1 â€” metadata filters (no I/O)
+        var filtered = ApplyMetadataFilters(instruments, request);
 
-        // Step 2 — bulk-fetch prices
+        // Step 2 â€” bulk-fetch prices
         var ids = filtered.Select(i => i.Id);
-        var priceMap = await _priceRepository.GetLatestPricesForInstrumentsAsync(ids, priceTimeframe);
+        var priceMap = await _priceRepository
+            .GetLatestPricesForInstrumentsAsync(ids, request.PriceTimeframe);
 
-        // Step 3 — price-based filters
-        if (filter.MinChangePercent.HasValue || filter.MaxChangePercent.HasValue)
+        // Step 3 â€” price-based filters
+        if (request.MinChangePercent.HasValue || request.MaxChangePercent.HasValue)
         {
             filtered = filtered.Where(inst =>
             {
                 if (!priceMap.TryGetValue(inst.Id, out var p) || p.Open == 0) return false;
                 var pct = (p.Close - p.Open) / p.Open * 100;
-                if (filter.MinChangePercent.HasValue && pct < filter.MinChangePercent.Value) return false;
-                if (filter.MaxChangePercent.HasValue && pct > filter.MaxChangePercent.Value) return false;
+                if (request.MinChangePercent.HasValue && pct < request.MinChangePercent.Value) return false;
+                if (request.MaxChangePercent.HasValue && pct > request.MaxChangePercent.Value) return false;
                 return true;
             }).ToList();
         }
 
-        // Step 4 — build DTOs with scan + recommendation data
+        // Step 4 â€” build DTOs with scan + recommendation
         var dtoTasks = filtered.Select(async inst =>
         {
             var dto = MapToInstrumentDto(inst);
@@ -77,40 +105,47 @@ public class InstrumentController : ControllerBase
             if (priceMap.TryGetValue(inst.Id, out var price))
                 ApplyPriceData(dto, price);
 
-            var scanResult = await _scanner.ScanInstrumentAsync(inst, scanTimeframe);
-            if (scanResult != null)
-                dto.Trend = scanResult.Bias.ToString().ToLower();
+            ScanResult? scanResult = null;
+            Recommendation? recommendation = null;
 
-            var recommendation = await _recommender.GetLatestForInstrumentAsync(inst.Id);
-            if (recommendation != null)
-                ApplyRecommendationData(dto, recommendation);
+            // Only scan if analysis filters are requested
+            if (NeedsAnalysisData(request))
+            {
+                scanResult = await _scanner.ScanInstrumentAsync(inst, request.ScanTimeframe);
+                if (scanResult != null)
+                    dto.Trend = scanResult.Bias.ToString().ToLower();
+
+                recommendation = await _recommender.GetLatestForInstrumentAsync(inst.Id);
+                if (recommendation != null)
+                    ApplyRecommendationData(dto, recommendation);
+            }
 
             return (dto, scanResult, recommendation);
         });
 
         var results = await Task.WhenAll(dtoTasks);
 
-        // Step 5 — analysis-based filters (need scan data)
+        // Step 5 â€” analysis-based filters
         var finalList = results.AsEnumerable();
 
-        if (filter.Trend is not null)
+        if (request.Trend is not null)
             finalList = finalList.Where(r =>
-                string.Equals(r.dto.Trend, filter.Trend, StringComparison.OrdinalIgnoreCase));
+                string.Equals(r.dto.Trend, request.Trend, StringComparison.OrdinalIgnoreCase));
 
-        if (filter.MinSetupScore.HasValue)
+        if (request.MinSetupScore.HasValue)
             finalList = finalList.Where(r =>
-                r.scanResult != null && r.scanResult.SetupScore >= filter.MinSetupScore.Value);
+                r.scanResult != null && r.scanResult.SetupScore >= request.MinSetupScore.Value);
 
-        if (filter.HasRecommendation == true)
+        if (request.HasRecommendation == true)
             finalList = finalList.Where(r =>
                 r.recommendation is { IsActive: true });
 
-        // Step 6 — indicator-based filters (lazy — only fetched if needed)
-        if (filter.MinAdx.HasValue || filter.RsiBelow.HasValue || filter.RsiAbove.HasValue)
+        // Step 6 â€” indicator-based filters (only fetched when needed)
+        if (request.MinAdx.HasValue || request.RsiBelow.HasValue || request.RsiAbove.HasValue)
         {
             var indicatorTasks = finalList.Select(async r =>
             {
-                var ind = await _indicatorService.GetLatestAsync(r.dto.Id, scanTimeframe);
+                var ind = await _indicatorService.GetLatestAsync(r.dto.Id, request.ScanTimeframe);
                 return (r.dto, r.scanResult, r.recommendation, ind);
             });
 
@@ -119,22 +154,22 @@ public class InstrumentController : ControllerBase
             finalList = withIndicators.Where(r =>
             {
                 if (r.ind == null) return false;
-                if (filter.MinAdx.HasValue && r.ind.ADX < filter.MinAdx.Value) return false;
-                if (filter.RsiBelow.HasValue && r.ind.RSI >= filter.RsiBelow.Value) return false;
-                if (filter.RsiAbove.HasValue && r.ind.RSI <= filter.RsiAbove.Value) return false;
+                if (request.MinAdx.HasValue && r.ind.ADX < request.MinAdx.Value) return false;
+                if (request.RsiBelow.HasValue && r.ind.RSI >= request.RsiBelow.Value) return false;
+                if (request.RsiAbove.HasValue && r.ind.RSI <= request.RsiAbove.Value) return false;
                 return true;
             }).Select(r => (r.dto, r.scanResult, r.recommendation));
         }
 
         var dtos = finalList.Select(r => r.dto).ToList();
 
-        // Step 7 — sort
-        dtos = ApplySorting(dtos, filter.SortBy, filter.SortDirection);
+        // Step 7 â€” sort
+        dtos = ApplySorting(dtos, request.SortBy, request.SortDirection);
 
-        // Step 8 — paginate
+        // Step 8 â€” paginate
         var totalCount = dtos.Count;
-        var pageSize = Math.Clamp(filter.PageSize, 1, 200);
-        var page = Math.Max(filter.Page, 1);
+        var pageSize = Math.Clamp(request.PageSize, 1, 200);
+        var page = Math.Max(request.Page, 1);
         var paged = dtos.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
         return Ok(new PaginatedResult<InstrumentDto>
@@ -147,7 +182,7 @@ public class InstrumentController : ControllerBase
     }
 
     // =========================================================================
-    // GET /api/instrument/{symbol} — full detail with candles for charting
+    // GET /api/instrument/{symbol} â€” full detail with candles for charting
     // =========================================================================
     [HttpGet("{symbol}")]
     [ProducesResponseType(typeof(InstrumentDetailDto), 200)]
@@ -269,7 +304,7 @@ public class InstrumentController : ControllerBase
     }
 
     // =========================================================================
-    // GET /api/instrument/{symbol}/candles — raw candle data for chart updates
+    // GET /api/instrument/{symbol}/candles â€” raw candle data for chart updates
     // =========================================================================
     [HttpGet("{symbol}/candles")]
     [ProducesResponseType(typeof(List<CandleDto>), 200)]
@@ -321,8 +356,21 @@ public class InstrumentController : ControllerBase
     // PRIVATE HELPERS
     // =========================================================================
 
+    /// <summary>
+    /// Returns true if any analysis/indicator filter is set,
+    /// meaning we need to run the scanner and fetch recommendations.
+    /// Avoids expensive I/O when only metadata filters are used.
+    /// </summary>
+    private static bool NeedsAnalysisData(InstrumentSearchRequest r) =>
+        r.Trend is not null
+        || r.MinSetupScore.HasValue
+        || r.HasRecommendation == true
+        || r.MinAdx.HasValue
+        || r.RsiBelow.HasValue
+        || r.RsiAbove.HasValue;
+
     private static List<TradingInstrument> ApplyMetadataFilters(
-        List<TradingInstrument> instruments, InstrumentFilterQuery filter)
+        List<TradingInstrument> instruments, InstrumentSearchRequest filter)
     {
         var q = instruments.AsEnumerable();
 
@@ -347,6 +395,7 @@ public class InstrumentController : ControllerBase
             q = q.Where(i =>
                 i.Industry.Contains(filter.Industry, StringComparison.OrdinalIgnoreCase));
 
+        // Default: STOCK â€” always applied unless explicitly set to something else
         if (!string.IsNullOrWhiteSpace(filter.InstrumentType) &&
             Enum.TryParse<InstrumentType>(filter.InstrumentType, true, out var instType))
             q = q.Where(i => i.InstrumentType == instType);
@@ -364,25 +413,25 @@ public class InstrumentController : ControllerBase
     }
 
     private static List<InstrumentDto> ApplySorting(
-        List<InstrumentDto> dtos, string? sortBy, string? sortDirection)
+        List<InstrumentDto> dtos, string sortBy, string sortDirection)
     {
         bool desc = string.Equals(sortDirection, "desc", StringComparison.OrdinalIgnoreCase);
 
-        return (sortBy?.ToLowerInvariant()) switch
+        return (sortBy.ToLowerInvariant()) switch
         {
-            "symbol"     => desc ? dtos.OrderByDescending(d => d.Symbol).ToList()
+            "symbol" => desc ? dtos.OrderByDescending(d => d.Symbol).ToList()
                                 : dtos.OrderBy(d => d.Symbol).ToList(),
-            "price"      => desc ? dtos.OrderByDescending(d => d.Price ?? 0).ToList()
+            "price" => desc ? dtos.OrderByDescending(d => d.Price ?? 0).ToList()
                                 : dtos.OrderBy(d => d.Price ?? 0).ToList(),
-            "change"     => desc ? dtos.OrderByDescending(d => d.ChangePercent ?? 0).ToList()
+            "change" => desc ? dtos.OrderByDescending(d => d.ChangePercent ?? 0).ToList()
                                 : dtos.OrderBy(d => d.ChangePercent ?? 0).ToList(),
-            "marketcap"  => desc ? dtos.OrderByDescending(d => d.MarketCap ?? 0).ToList()
+            "marketcap" => desc ? dtos.OrderByDescending(d => d.MarketCap ?? 0).ToList()
                                 : dtos.OrderBy(d => d.MarketCap ?? 0).ToList(),
             "confidence" => desc ? dtos.OrderByDescending(d => d.Confidence ?? 0).ToList()
                                 : dtos.OrderBy(d => d.Confidence ?? 0).ToList(),
-            "volume"     => desc ? dtos.OrderByDescending(d => d.Volume ?? 0).ToList()
+            "volume" => desc ? dtos.OrderByDescending(d => d.Volume ?? 0).ToList()
                                 : dtos.OrderBy(d => d.Volume ?? 0).ToList(),
-            _            => dtos.OrderBy(d => d.Symbol).ToList()
+            _ => dtos.OrderBy(d => d.Symbol).ToList()
         };
     }
 
