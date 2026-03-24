@@ -1,247 +1,1426 @@
-I have two API endpoints in my trading system:
-GET /api/instrument/{symbol}/analysis?timeframe=15
-GET /api/instrument/{symbol}/recommend?timeframe=15
-The analysis endpoint produces a TrendStateResult and the recommend endpoint produces a SignalResult. There are serious bugs in both. Fix everything listed below.
+# Copilot Implementation Prompt — NIFTY ORB + FVG Strategy Engine
 
-PART 1 — Analysis Endpoint Fixes
-1. MACD reasoning must check histogram direction, not just line polarity
-Find where reasoning points are generated for MACD. The current logic says "MACD is positive" if MacdLine > 0. This is wrong. Fix it to:
-csharp// WRONG — MacdLine > 0 does not mean momentum is intact
-if (indicators.MacdLine > 0)
-    reasons.Add("MACD is positive — upward momentum intact");
+---
 
-// CORRECT — check histogram direction for momentum
-if (indicators.MacdLine > 0 && indicators.MacdHistogram > 0)
-    reasons.Add("MACD positive and rising — upward momentum building");
-else if (indicators.MacdLine > 0 && indicators.MacdHistogram < 0)
-    reasons.Add("MACD positive but weakening — momentum fading, caution");
-else if (indicators.MacdLine < 0 && indicators.MacdHistogram < 0)
-    reasons.Add("MACD negative and falling — downward momentum building");
-else if (indicators.MacdLine < 0 && indicators.MacdHistogram > 0)
-    reasons.Add("MACD negative but recovering — potential reversal watch");
-2. Bias must account for price vs VWAP
-Find where bias (BULLISH/BEARISH/NEUTRAL) is determined. Add VWAP as a required confirmation:
-csharp// WRONG — bias from EMA alone
-var bias = indicators.EMAFast > indicators.EMASlow ? "BULLISH" : "BEARISH";
+## HOW TO READ THIS PROMPT
 
-// CORRECT — EMA alignment AND price vs VWAP must agree
-bool emasBullish   = indicators.EMAFast > indicators.EMASlow;
-bool priceAboveVwap = lastClose > indicators.VWAP;
+Every section is structured as:
 
-string bias;
-if (emasBullish && priceAboveVwap)
-    bias = "BULLISH";
-else if (!emasBullish && !priceAboveVwap)
-    bias = "BEARISH";
-else
-    bias = "NEUTRAL";  // EMAs and VWAP disagree — no clear bias
-3. PULLBACK_READY state must require ADX >= 25
-Find where TrendState is set to PULLBACK_READY. Add ADX gate:
-csharp// WRONG — allows weak trends
-if (setupScore >= 50 && indicators.EMAFast > indicators.EMASlow)
-    state = "PULLBACK_READY";
+```
+CHECK → what to look for in the existing codebase
+CREATE → exactly what file to create if it does not exist
+WRITE → the exact code to write, character for character
+```
 
-// CORRECT — trend must be confirmed before calling it pullback-ready
-if (setupScore >= 50 
-    && indicators.ADX >= 25               // trend confirmed
-    && indicators.EMAFast > indicators.EMASlow
-    && lastClose > indicators.VWAP)       // price above VWAP for bullish
-    state = "PULLBACK_READY";
-else if (setupScore >= 50 && indicators.ADX >= 20 && indicators.ADX < 25)
-    state = "TREND_FORMING";              // trend not confirmed yet
-else
-    state = "NO_SETUP";
-4. entryGuidance must be null when conditions are not met
-Find where entryGuidance is populated. It must be null in all these cases:
-csharpbool shouldGenerateEntry =
-    indicators.ADX >= 25           &&   // confirmed trend
-    setupScore >= 65               &&   // high quality setup only
-    bias != "NEUTRAL"              &&   // clear directional bias
-    state == "PULLBACK_READY";          // correct state
+Do not invent names. Do not change namespaces. Do not add extra methods.
+If a file already exists, read it first, then append or modify only what is described.
+If a file does not exist, create it at the exact path shown.
 
-entryGuidance = shouldGenerateEntry ? GenerateEntryGuidance(...) : null;
-5. Deduplicate and validate reasoning points
-Find where reasoningPoints list is built. It currently concatenates points from multiple stages causing duplicates and contradictions. Fix:
-csharp// After building the full reasoningPoints list, deduplicate by topic:
-// Only one RSI point, one MACD point, one EMA point, one ADX point per response.
-// If two points contradict each other on the same indicator, keep the more conservative one.
+---
 
-var deduped = reasoningPoints
-    .GroupBy(r => ExtractIndicatorTopic(r))  // group by which indicator it's about
-    .Select(g => g.Last())                   // keep last (most specific) point per indicator
-    .ToList();
+## STEP 0 — READ THE EXISTING CODEBASE FIRST
 
-// Helper to identify which indicator a reasoning string is about:
-private static string ExtractIndicatorTopic(string reason)
+Before writing a single line, do the following:
+
+1. Open the solution file (`.sln`) and find the project name. Note it.
+2. Find the folder that contains `IMarketDataService.cs` or equivalent.
+   That folder is your **existing services folder**. Note its namespace.
+3. Find the folder that contains `Candle.cs` or equivalent.
+   That folder is your **existing models folder**. Note its namespace.
+4. Open `Program.cs` or `Startup.cs`. Note how services are registered (DI container).
+5. Check if `appsettings.json` exists. Note its location.
+6. Check if any of these files already exist — if they do, do NOT recreate them:
+   - `StrategyConfig.cs`
+   - `OpeningRange.cs`
+   - `FairValueGap.cs`
+   - `TradeSignal.cs`
+   - `Direction.cs`
+   - `BreakoutResult.cs`
+
+**Use the namespace you found above everywhere below.**
+Every placeholder `{YourNamespace}` in this prompt = that namespace.
+Every placeholder `{YourProject}` = the project name you found.
+
+---
+
+## STEP 1 — CREATE FOLDER STRUCTURE
+
+In the root of the existing project, create these folders exactly:
+
+```
+Strategy/
+Strategy/Models/
+Strategy/Interfaces/
+Strategy/Services/
+Strategy/Extensions/
+```
+
+If any folder already exists, skip creating it.
+
+---
+
+## STEP 2 — MODELS
+
+### FILE: `Strategy/Models/Direction.cs`
+
+CHECK: Does `Direction.cs` exist anywhere in the project?
+- If YES and it already has `Bullish` and `Bearish` values: skip this file entirely.
+- If YES but it is missing values: add the missing values only.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Models;
+
+public enum Direction
 {
-    if (reason.Contains("RSI"))       return "RSI";
-    if (reason.Contains("MACD"))      return "MACD";
-    if (reason.Contains("EMA"))       return "EMA";
-    if (reason.Contains("ADX"))       return "ADX";
-    if (reason.Contains("VWAP"))      return "VWAP";
-    if (reason.Contains("Bollinger")) return "Bollinger";
-    if (reason.Contains("Volume"))    return "Volume";
-    return reason;
-}
-
-PART 2 — Recommend Endpoint Fixes
-1. Hard gate — never generate a signal if entryGuidance is null
-This is the most critical fix. Find the signal generation entry point and add this as the very first check:
-csharp// Get analysis result first
-var analysis = await GetAnalysis(symbol, timeframe, ct);
-
-// HARD GATE — if analysis says no entry, stop immediately
-if (analysis.EntryGuidance == null)
-    return null;  // or return NoSignalResult with reason "No entry guidance from analysis"
-
-if (analysis.Confidence < 65)
-    return null;  // below minimum confidence threshold
-
-if (analysis.TrendState.State != "PULLBACK_READY" 
-    && analysis.TrendState.State != "BREAKOUT_READY")
-    return null;  // wrong market state for entry
-2. Enforce minimum Risk-Reward of 2.0
-Find where target is calculated. Fix it to always produce RR >= 2.0:
-csharpvar risk = entryPrice - stopLoss;  // for BUY
-
-// WRONG — arbitrary target
-var target = entryPrice + (risk * 1.33m);
-
-// CORRECT — minimum 2:1, prefer 2.5:1 if key level allows
-var minimumTarget = entryPrice + (risk * 2.0m);
-var preferredTarget = entryPrice + (risk * 2.5m);
-
-// Use preferred if no major resistance in the way, else minimum
-var target = HasResistanceAbove(preferredTarget) ? minimumTarget : preferredTarget;
-
-// Final check — if even minimum RR is not achievable, return null (no signal)
-var actualRR = (target - entryPrice) / risk;
-if (actualRR < 2.0m)
-    return null;
-3. Block signals outside market hours
-Find where the signal timestamp is set. Add market hours gate:
-csharpprivate static readonly TimeZoneInfo Ist = 
-    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
-
-private static readonly TimeOnly MarketOpen  = new(9,  15);
-private static readonly TimeOnly MarketClose = new(15, 25);  // 5 min before close
-
-private static bool IsMarketOpen()
-{
-    var istNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist);
-    var istTime = TimeOnly.FromDateTime(istNow);
-    var istDay  = istNow.DayOfWeek;
-
-    // NSE is closed on weekends
-    if (istDay == DayOfWeek.Saturday || istDay == DayOfWeek.Sunday)
-        return false;
-
-    return istTime >= MarketOpen && istTime <= MarketClose;
-}
-
-// At the start of signal generation:
-if (!IsMarketOpen())
-    return null;  // or NoSignalResult with reason "Market is closed"
-4. ADX gate for signal generation
-csharp// Minimum ADX for any signal
-if (indicators.ADX < 25)
-    return null;  // trend not confirmed, no signal
-
-// For strong signals only
-if (indicators.ADX < 25 || indicators.ADX > 60)
-    return null;  // ADX > 60 means trend exhaustion, also skip
-5. Price vs VWAP gate per direction
-csharp// For BUY signals — price must be at or above VWAP
-if (direction == "BUY" && lastClose < indicators.VWAP)
-    return null;  // selling pressure dominant, no buy signal
-
-// For SELL signals — price must be at or below VWAP
-if (direction == "SELL" && lastClose > indicators.VWAP)
-    return null;  // buying pressure dominant, no sell signal
-6. Fix signal expiry to respect market hours
-csharp// WRONG — fixed 1 hour expiry ignores market close
-var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
-
-// CORRECT — expire at market close today (15:30 IST) or in 1 hour, whichever is sooner
-var istNow       = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist);
-var marketClose  = istNow.Date.Add(new TimeSpan(15, 30, 0));
-var oneHourLater = istNow.AddHours(1);
-
-var expiryIst  = oneHourLater < marketClose ? oneHourLater : marketClose;
-var expiresAt  = new DateTimeOffset(
-    DateTime.SpecifyKind(expiryIst, DateTimeKind.Unspecified),
-    TimeSpan.FromHours(5.5)).ToUniversalTime();
-7. Remove contradictory reasoning from signal
-The signal endpoint is pulling reasoning from two sources (analysis stage + signal stage) and concatenating them. This produces duplicates and contradictions. Fix:
-csharp// WRONG — concatenating both lists
-signal.ReasoningPoints = analysis.ReasoningPoints
-    .Concat(signalReasons)
-    .ToList();
-
-// CORRECT — use only signal-specific reasons, reference analysis by state only
-signal.ReasoningPoints = new List<string>
-{
-    $"Setup state: {analysis.TrendState.State} with score {analysis.Confidence}/100",
-    $"Direction confirmed: {DirectionReason(indicators)}",
-    $"Entry at {entryPrice} with {rr:F1}:1 risk-reward",
-    $"Stop loss at {stopLoss} ({stopBasis})",
-    $"Target at {target} ({targetBasis})"
-};
-// Do NOT copy reasoningPoints from analysis into signal
-
-PART 3 — Summary Of All Gates (implement as a single validation method)
-Create a method ValidateSignalGates that runs all checks in order and returns the first failure reason:
-csharpprivate static string? ValidateSignalGates(
-    TrendStateResult analysis,
-    IndicatorValues indicators,
-    decimal lastClose,
-    string direction)
-{
-    if (analysis.EntryGuidance == null)
-        return "No entry guidance from analysis";
-
-    if (analysis.Confidence < 65)
-        return $"Confidence {analysis.Confidence} below minimum 65";
-
-    if (analysis.TrendState.State != "PULLBACK_READY" 
-        && analysis.TrendState.State != "BREAKOUT_READY")
-        return $"State {analysis.TrendState.State} not actionable";
-
-    if (indicators.ADX < 25)
-        return $"ADX {indicators.ADX:F1} below minimum 25 — trend not confirmed";
-
-    if (indicators.ADX > 60)
-        return $"ADX {indicators.ADX:F1} above 60 — trend exhaustion risk";
-
-    if (direction == "BUY"  && lastClose < indicators.VWAP)
-        return $"Price {lastClose} below VWAP {indicators.VWAP} — no buy signal";
-
-    if (direction == "SELL" && lastClose > indicators.VWAP)
-        return $"Price {lastClose} above VWAP {indicators.VWAP} — no sell signal";
-
-    if (!IsMarketOpen())
-        return "Market is closed";
-
-    return null;  // all gates passed
-}
-
-// Usage:
-var gateFailure = ValidateSignalGates(analysis, indicators, lastClose, direction);
-if (gateFailure != null)
-{
-    _logger.LogInformation("Signal blocked for {Symbol}: {Reason}", symbol, gateFailure);
-    return new NoSignalResult { Reason = gateFailure };
+    Bullish,
+    Bearish
 }
 ```
 
 ---
 
-## PART 4 — Expected Behaviour After Fixes
+### FILE: `Strategy/Models/StrategyConfig.cs`
 
-For the COALINDIA example that triggered this:
+CHECK: Does `StrategyConfig.cs` exist anywhere in the project?
+- If YES: skip this file entirely.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Models;
+
+public sealed class StrategyConfig
+{
+    // Minimum opening range width as a fraction of price (0.003 = 0.3%)
+    public decimal MinOpeningRangePct { get; set; } = 0.003m;
+
+    // Minimum FVG gap size as a fraction of price (0.001 = 0.1%)
+    public decimal MinFvgGapPct { get; set; } = 0.001m;
+
+    // Number of prior candles to average for volume comparison
+    public int VolumeAvgLookback { get; set; } = 10;
+
+    // EMA period on 15-min chart for trend filter
+    public int EmaPeriod { get; set; } = 20;
+
+    // RSI period on 5-min chart
+    public int RsiPeriod { get; set; } = 14;
+
+    // RSI must be ABOVE this value to allow bullish trades
+    public decimal RsiBullThreshold { get; set; } = 55m;
+
+    // RSI must be BELOW this value to allow bearish trades
+    public decimal RsiBearThreshold { get; set; } = 45m;
+
+    // Full exit risk:reward ratio (3 = exit at 3× risk)
+    public decimal RiskRewardRatio { get; set; } = 3.0m;
+
+    // Partial exit risk multiple (2 = exit 50% at 2× risk)
+    public decimal PartialExitR { get; set; } = 2.0m;
+
+    // Earliest candle time allowed for trades (inclusive), IST
+    public TimeOnly TradeWindowStart { get; set; } = new TimeOnly(9, 20, 0);
+
+    // Latest candle time allowed for trades (inclusive), IST
+    public TimeOnly TradeWindowEnd { get; set; } = new TimeOnly(10, 30, 0);
+
+    // Stop loss buffer as fraction of entry price (0.0005 = 0.05%)
+    public decimal StopLossBufferPct { get; set; } = 0.0005m;
+}
 ```
-ADX: 22.3      → fails ADX >= 25 gate   → no signal generated
-Confidence: 52 → fails confidence >= 65 → no signal generated
-Price < VWAP   → fails VWAP gate        → no signal generated
-After market   → fails market hours gate → no signal generated
-entryGuidance: null → fails first gate  → no signal generated
+
+---
+
+### FILE: `Strategy/Models/OpeningRange.cs`
+
+CHECK: Does `OpeningRange.cs` exist anywhere in the project?
+- If YES: skip this file entirely.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Models;
+
+public sealed class OpeningRange
+{
+    // Highest price of the 09:15 5-min candle
+    public decimal High { get; init; }
+
+    // Lowest price of the 09:15 5-min candle
+    public decimal Low { get; init; }
+
+    // Timestamp of the 09:15 candle (must equal 09:15:00 IST exactly)
+    public DateTime CapturedAt { get; init; }
+
+    // Absolute width of the range
+    public decimal Width => High - Low;
+
+    // Midpoint of the range
+    public decimal MidPoint => (High + Low) / 2m;
+
+    // Width as a fraction of the midpoint price
+    public decimal WidthPct => MidPoint == 0m ? 0m : Width / MidPoint;
+}
+```
+
+---
+
+### FILE: `Strategy/Models/FairValueGap.cs`
+
+CHECK: Does `FairValueGap.cs` exist anywhere in the project?
+- If YES: skip this file entirely.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Models;
+
+public sealed class FairValueGap
+{
+    // Direction this FVG supports (must match breakout direction)
+    public Direction Direction { get; init; }
+
+    // Upper boundary of the gap zone
+    public decimal GapHigh { get; init; }
+
+    // Lower boundary of the gap zone
+    public decimal GapLow { get; init; }
+
+    // Timestamp of the 3rd candle (when FVG was confirmed)
+    public DateTime FormedAt { get; init; }
+
+    // Absolute size of the gap
+    public decimal Size => GapHigh - GapLow;
+
+    // Returns true if the given price is inside the gap zone (inclusive)
+    public bool Contains(decimal price) => price >= GapLow && price <= GapHigh;
+}
+```
+
+---
+
+### FILE: `Strategy/Models/BreakoutResult.cs`
+
+CHECK: Does `BreakoutResult.cs` exist anywhere in the project?
+- If YES: skip this file entirely.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Models;
+
+// Returned by IBreakoutDetector when a valid close-based breakout is confirmed
+public sealed class BreakoutResult
+{
+    public Direction Direction { get; init; }
+
+    // The 1-min candle whose CLOSE crossed the opening range boundary
+    public required Candle BreakoutCandle { get; init; }
+}
+```
+
+---
+
+### FILE: `Strategy/Models/TradeSignal.cs`
+
+CHECK: Does `TradeSignal.cs` exist anywhere in the project?
+- If YES: skip this file entirely.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Models;
+
+public sealed class TradeSignal
+{
+    // Always "NIFTY"
+    public string Symbol { get; init; } = "NIFTY";
+
+    // "BUY_CE" for bullish, "BUY_PE" for bearish
+    public string SignalDirection { get; init; } = string.Empty;
+
+    // Price at which to enter (close of confirmation candle)
+    public decimal EntryPrice { get; init; }
+
+    // Stop loss price
+    public decimal StopLoss { get; init; }
+
+    // Full exit target (3R)
+    public decimal Target { get; init; }
+
+    // Partial exit target (2R) — exit 50% of position here
+    public decimal PartialTarget { get; init; }
+
+    // Always 3.0
+    public decimal RiskReward { get; init; }
+
+    // Integer 0–100. See confidence score rules in SignalGenerator.
+    public int ConfidenceScore { get; init; }
+
+    // Timestamp of the confirmation candle
+    public DateTime Timestamp { get; init; }
+
+    // Human-readable explanation of why the trade was taken. Use pipe separator.
+    // Example: "Bullish breakout at 19500 | FVG 19480–19490 | EMA aligned | RSI 61"
+    public string Reason { get; init; } = string.Empty;
+
+    // Every filter that was evaluated and rejected, in order.
+    // Empty array if signal was successfully generated.
+    public string[] RejectionLog { get; init; } = Array.Empty<string>();
+}
+```
+
+---
+
+## STEP 3 — INTERFACES
+
+### FILE: `Strategy/Interfaces/IOpeningRangeService.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface IOpeningRangeService
+{
+    /// <summary>
+    /// Fetches the single 5-min candle starting at exactly 09:15:00 IST for the given date.
+    /// Returns null if:
+    ///   (a) the candle is unavailable, OR
+    ///   (b) OR.WidthPct is less than StrategyConfig.MinOpeningRangePct.
+    /// Logs the rejection reason before returning null.
+    /// </summary>
+    Task<OpeningRange?> CaptureAsync(string symbol, DateOnly date, CancellationToken ct = default);
+}
+```
+
+---
+
+### FILE: `Strategy/Interfaces/IBreakoutDetector.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface IBreakoutDetector
+{
+    /// <summary>
+    /// Evaluates a single 1-min candle against the opening range.
+    /// Returns a BreakoutResult if:
+    ///   - candle.Close > or.High  (bullish), OR
+    ///   - candle.Close < or.Low   (bearish)
+    /// Returns null if:
+    ///   - only the wick crosses (close does not cross)
+    ///   - candle time is outside TradeWindowStart–TradeWindowEnd
+    /// The caller must pass only the FIRST breakout candle per session.
+    /// This method does NOT track state — call it once per candle.
+    /// </summary>
+    BreakoutResult? Detect(Candle candle, OpeningRange or, StrategyConfig config);
+}
+```
+
+---
+
+### FILE: `Strategy/Interfaces/IVolumeFilter.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface IVolumeFilter
+{
+    /// <summary>
+    /// Returns true if breakoutCandle.Volume is strictly greater than
+    /// the simple average volume of the prior [lookback] 1-min candles
+    /// before breakoutCandle.Timestamp on the same symbol.
+    /// Returns false (not throw) if insufficient candle history.
+    /// </summary>
+    Task<bool> IsConfirmedAsync(
+        string symbol,
+        Candle breakoutCandle,
+        int lookback,
+        CancellationToken ct = default);
+}
+```
+
+---
+
+### FILE: `Strategy/Interfaces/IFvgDetector.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface IFvgDetector
+{
+    /// <summary>
+    /// Scans a list of 1-min candles (all AFTER the breakout candle, in chronological order)
+    /// for the first valid Fair Value Gap matching the breakout direction.
+    ///
+    /// Bullish FVG: candles[i-2].High < candles[i].Low
+    ///     GapLow  = candles[i-2].High
+    ///     GapHigh = candles[i].Low
+    ///
+    /// Bearish FVG: candles[i-2].Low > candles[i].High
+    ///     GapHigh = candles[i-2].Low
+    ///     GapLow  = candles[i].High
+    ///
+    /// A FVG is valid only if:
+    ///     (GapHigh - GapLow) / candles[i-1].Close >= minGapPct
+    ///
+    /// Returns the FIRST valid FVG found, or null if none.
+    /// i starts at index 2 (minimum 3 candles required).
+    /// </summary>
+    FairValueGap? Detect(
+        IReadOnlyList<Candle> candlesAfterBreakout,
+        Direction breakoutDirection,
+        decimal minGapPct);
+}
+```
+
+---
+
+### FILE: `Strategy/Interfaces/ITrendFilterService.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface ITrendFilterService
+{
+    /// <summary>
+    /// Fetches the 20 EMA on the 15-min chart for the given symbol.
+    /// Compares current 15-min EMA vs the previous 15-min candle's EMA to determine slope.
+    ///
+    /// Bullish pass condition (both must be true):
+    ///   (1) currentPrice > currentEma15
+    ///   (2) currentEma15 > previousEma15  (slope is upward)
+    ///
+    /// Bearish pass condition (both must be true):
+    ///   (1) currentPrice < currentEma15
+    ///   (2) currentEma15 < previousEma15  (slope is downward)
+    ///
+    /// Returns false (not throw) if EMA data is unavailable.
+    /// </summary>
+    Task<bool> IsAlignedAsync(
+        string symbol,
+        decimal currentPrice,
+        Direction direction,
+        CancellationToken ct = default);
+}
+```
+
+---
+
+### FILE: `Strategy/Interfaces/IEngulfingConfirmation.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface IEngulfingConfirmation
+{
+    /// <summary>
+    /// Returns true if currentCandle body engulfs previousCandle body in the given direction.
+    ///
+    /// Bullish engulf (both conditions required):
+    ///   currentCandle.Open  < previousCandle.Low
+    ///   currentCandle.Close > previousCandle.High
+    ///
+    /// Bearish engulf (both conditions required):
+    ///   currentCandle.Open  > previousCandle.High
+    ///   currentCandle.Close < previousCandle.Low
+    ///
+    /// Uses candle BODY (open/close), not wicks (high/low).
+    /// </summary>
+    bool IsEngulfing(Candle previous, Candle current, Direction direction);
+}
+```
+
+---
+
+### FILE: `Strategy/Interfaces/IRsiFilter.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface IRsiFilter
+{
+    /// <summary>
+    /// Fetches 14-period RSI on the 5-min chart.
+    /// This is a SOFT filter — failure reduces confidence score but does NOT block the signal.
+    ///
+    /// Bullish pass: RSI > StrategyConfig.RsiBullThreshold (default 55)
+    /// Bearish pass: RSI < StrategyConfig.RsiBearThreshold (default 45)
+    ///
+    /// Returns (passed: bool, rsiValue: decimal).
+    /// Returns (false, 0) if RSI data is unavailable — do not throw.
+    /// </summary>
+    Task<(bool Passed, decimal RsiValue)> EvaluateAsync(
+        string symbol,
+        Direction direction,
+        StrategyConfig config,
+        CancellationToken ct = default);
+}
+```
+
+---
+
+### FILE: `Strategy/Interfaces/ISignalGenerator.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface ISignalGenerator
+{
+    /// <summary>
+    /// Called only after ALL hard-gate filters have passed.
+    /// Computes entry, SL, targets, and confidence score.
+    /// Returns null only if arithmetic produces invalid values (SL >= entry for bullish, etc.).
+    /// </summary>
+    Task<TradeSignal?> GenerateAsync(
+        string symbol,
+        OpeningRange or,
+        BreakoutResult breakout,
+        FairValueGap fvg,
+        Candle confirmationCandle,
+        StrategyConfig config,
+        CancellationToken ct = default);
+}
+```
+
+---
+
+### FILE: `Strategy/Interfaces/IStrategyOrchestrator.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Interfaces;
+
+using {YourNamespace}.Strategy.Models;
+
+public interface IStrategyOrchestrator
+{
+    /// <summary>
+    /// Runs the full strategy pipeline for one trading session.
+    /// Accepts candle streams — works identically for live and backtesting.
+    /// Emits at most ONE TradeSignal per session per symbol.
+    /// The 1-min stream is the primary event loop.
+    /// 5-min and 15-min candles are used only for OR capture, EMA, and RSI.
+    /// </summary>
+    IAsyncEnumerable<TradeSignal> RunAsync(
+        string symbol,
+        IAsyncEnumerable<Candle> oneMinCandles,
+        DateOnly sessionDate,
+        StrategyConfig config,
+        CancellationToken ct = default);
+}
+```
+
+---
+
+## STEP 4 — SERVICES
+
+### FILE: `Strategy/Services/OpeningRangeService.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using Microsoft.Extensions.Logging;
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class OpeningRangeService : IOpeningRangeService
+{
+    private readonly IMarketDataService _marketData;
+    private readonly ILogger<OpeningRangeService> _logger;
+
+    // The opening range is captured from the SINGLE 5-min candle at exactly this time IST
+    private static readonly TimeOnly OpeningCandleTime = new TimeOnly(9, 15, 0);
+
+    public OpeningRangeService(IMarketDataService marketData, ILogger<OpeningRangeService> logger)
+    {
+        _marketData = marketData;
+        _logger = logger;
+    }
+
+    public async Task<OpeningRange?> CaptureAsync(string symbol, DateOnly date, CancellationToken ct = default)
+    {
+        // Build exact DateTime for 09:15:00 IST
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        var candleStart = TimeZoneInfo.ConvertTimeToUtc(
+            new DateTime(date.Year, date.Month, date.Day, 9, 15, 0),
+            ist);
+        var candleEnd = candleStart.AddMinutes(5);
+
+        Candle? candle = await _marketData.GetCandleAsync(symbol, TimeFrame.FiveMin, candleStart, candleEnd);
+
+        if (candle is null)
+        {
+            _logger.LogDebug("[OR] No 5-min candle found at 09:15 for {Symbol} on {Date}", symbol, date);
+            return null;
+        }
+
+        var or = new OpeningRange
+        {
+            High       = candle.High,
+            Low        = candle.Low,
+            CapturedAt = candle.Timestamp
+        };
+
+        if (or.WidthPct < 0.003m) // checked against StrategyConfig.MinOpeningRangePct default
+        {
+            _logger.LogInformation(
+                "[OR] Rejected: width {Width:P2} below 0.3% threshold for {Symbol} on {Date}",
+                or.WidthPct, symbol, date);
+            return null;
+        }
+
+        _logger.LogInformation(
+            "[OR] Captured for {Symbol}: High={High} Low={Low} Width={Width:P2}",
+            symbol, or.High, or.Low, or.WidthPct);
+
+        return or;
+    }
+}
+```
+
+---
+
+### FILE: `Strategy/Services/BreakoutDetector.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class BreakoutDetector : IBreakoutDetector
+{
+    public BreakoutResult? Detect(Candle candle, OpeningRange or, StrategyConfig config)
+    {
+        var candleTime = TimeOnly.FromDateTime(candle.Timestamp.ToLocalTime());
+
+        // Reject candles outside the trade window
+        if (candleTime < config.TradeWindowStart || candleTime > config.TradeWindowEnd)
+            return null;
+
+        // Bullish: close (not wick) must be strictly above opening range high
+        if (candle.Close > or.High)
+            return new BreakoutResult { Direction = Direction.Bullish, BreakoutCandle = candle };
+
+        // Bearish: close (not wick) must be strictly below opening range low
+        if (candle.Close < or.Low)
+            return new BreakoutResult { Direction = Direction.Bearish, BreakoutCandle = candle };
+
+        return null;
+    }
+}
+```
+
+---
+
+### FILE: `Strategy/Services/VolumeFilter.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using Microsoft.Extensions.Logging;
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class VolumeFilter : IVolumeFilter
+{
+    private readonly IMarketDataService _marketData;
+    private readonly ILogger<VolumeFilter> _logger;
+
+    public VolumeFilter(IMarketDataService marketData, ILogger<VolumeFilter> logger)
+    {
+        _marketData = marketData;
+        _logger = logger;
+    }
+
+    public async Task<bool> IsConfirmedAsync(
+        string symbol,
+        Candle breakoutCandle,
+        int lookback,
+        CancellationToken ct = default)
+    {
+        // Fetch the [lookback] 1-min candles immediately before the breakout candle
+        var avgVolume = await _marketData.GetVolumeAvgAsync(symbol, lookback, TimeFrame.OneMin);
+
+        if (avgVolume <= 0)
+        {
+            _logger.LogDebug("[VOLUME] Cannot compute average — insufficient history for {Symbol}", symbol);
+            return false;
+        }
+
+        bool confirmed = breakoutCandle.Volume > avgVolume;
+
+        if (!confirmed)
+        {
+            _logger.LogInformation(
+                "[VOLUME] Breakout volume {Actual} not above avg {Avg} — signal rejected for {Symbol}",
+                breakoutCandle.Volume, avgVolume, symbol);
+        }
+
+        return confirmed;
+    }
+}
+```
+
+---
+
+### FILE: `Strategy/Services/FvgDetector.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using Microsoft.Extensions.Logging;
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class FvgDetector : IFvgDetector
+{
+    private readonly ILogger<FvgDetector> _logger;
+
+    public FvgDetector(ILogger<FvgDetector> logger)
+    {
+        _logger = logger;
+    }
+
+    public FairValueGap? Detect(
+        IReadOnlyList<Candle> candlesAfterBreakout,
+        Direction breakoutDirection,
+        decimal minGapPct)
+    {
+        // Minimum 3 candles required to form a FVG
+        if (candlesAfterBreakout.Count < 3)
+            return null;
+
+        // Scan from index 2 onward (candles[i-2], candles[i-1], candles[i])
+        for (int i = 2; i < candlesAfterBreakout.Count; i++)
+        {
+            var c0 = candlesAfterBreakout[i - 2]; // first candle
+            var c1 = candlesAfterBreakout[i - 1]; // middle candle (reference price for gap %)
+            var c2 = candlesAfterBreakout[i];     // third candle
+
+            if (breakoutDirection == Direction.Bullish)
+            {
+                // Bullish FVG: gap between top of candle 1 and bottom of candle 3
+                if (c0.High < c2.Low)
+                {
+                    var gapLow  = c0.High;
+                    var gapHigh = c2.Low;
+                    var gapSize = gapHigh - gapLow;
+
+                    if (c1.Close > 0 && gapSize / c1.Close >= minGapPct)
+                    {
+                        _logger.LogInformation(
+                            "[FVG] Bullish FVG detected: GapLow={GapLow} GapHigh={GapHigh} at {Time}",
+                            gapLow, gapHigh, c2.Timestamp);
+
+                        return new FairValueGap
+                        {
+                            Direction = Direction.Bullish,
+                            GapLow    = gapLow,
+                            GapHigh   = gapHigh,
+                            FormedAt  = c2.Timestamp
+                        };
+                    }
+                }
+            }
+            else // Bearish
+            {
+                // Bearish FVG: gap between bottom of candle 1 and top of candle 3
+                if (c0.Low > c2.High)
+                {
+                    var gapHigh = c0.Low;
+                    var gapLow  = c2.High;
+                    var gapSize = gapHigh - gapLow;
+
+                    if (c1.Close > 0 && gapSize / c1.Close >= minGapPct)
+                    {
+                        _logger.LogInformation(
+                            "[FVG] Bearish FVG detected: GapHigh={GapHigh} GapLow={GapLow} at {Time}",
+                            gapHigh, gapLow, c2.Timestamp);
+
+                        return new FairValueGap
+                        {
+                            Direction = Direction.Bearish,
+                            GapHigh   = gapHigh,
+                            GapLow    = gapLow,
+                            FormedAt  = c2.Timestamp
+                        };
+                    }
+                }
+            }
+        }
+
+        _logger.LogDebug("[FVG] No valid FVG found in {Count} candles after breakout", candlesAfterBreakout.Count);
+        return null;
+    }
+}
+```
+
+---
+
+### FILE: `Strategy/Services/TrendFilterService.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using Microsoft.Extensions.Logging;
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class TrendFilterService : ITrendFilterService
+{
+    private readonly IMarketDataService _marketData;
+    private readonly ILogger<TrendFilterService> _logger;
+
+    public TrendFilterService(IMarketDataService marketData, ILogger<TrendFilterService> logger)
+    {
+        _marketData = marketData;
+        _logger = logger;
+    }
+
+    public async Task<bool> IsAlignedAsync(
+        string symbol,
+        decimal currentPrice,
+        Direction direction,
+        CancellationToken ct = default)
+    {
+        // Fetch current 15-min EMA(20)
+        decimal currentEma = await _marketData.GetEmaAsync(symbol, 20, TimeFrame.FifteenMin);
+
+        // Fetch previous 15-min candle's EMA(20) by getting EMA one bar ago
+        // IMarketDataService must provide a way to get prior bar EMA — use overload with barOffset=1
+        decimal previousEma = await _marketData.GetEmaAsync(symbol, 20, TimeFrame.FifteenMin, barOffset: 1);
+
+        if (currentEma <= 0 || previousEma <= 0)
+        {
+            _logger.LogDebug("[TREND] EMA unavailable for {Symbol} — filter failed", symbol);
+            return false;
+        }
+
+        bool slopeUp   = currentEma > previousEma;
+        bool slopeDown = currentEma < previousEma;
+
+        if (direction == Direction.Bullish)
+        {
+            bool aligned = currentPrice > currentEma && slopeUp;
+            if (!aligned)
+                _logger.LogInformation(
+                    "[TREND] Bullish not aligned: price={Price} ema={Ema} slopeUp={Slope} for {Symbol}",
+                    currentPrice, currentEma, slopeUp, symbol);
+            return aligned;
+        }
+        else
+        {
+            bool aligned = currentPrice < currentEma && slopeDown;
+            if (!aligned)
+                _logger.LogInformation(
+                    "[TREND] Bearish not aligned: price={Price} ema={Ema} slopeDown={Slope} for {Symbol}",
+                    currentPrice, currentEma, slopeDown, symbol);
+            return aligned;
+        }
+    }
+}
+```
+
+> **NOTE TO COPILOT**: `IMarketDataService.GetEmaAsync` may not have a `barOffset` parameter yet.
+> Check the existing signature. If `barOffset` is missing, add it as an optional parameter with default value 0
+> to the existing `IMarketDataService` interface and its implementation. Do not create a new interface.
+
+---
+
+### FILE: `Strategy/Services/EngulfingConfirmation.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class EngulfingConfirmation : IEngulfingConfirmation
+{
+    public bool IsEngulfing(Candle previous, Candle current, Direction direction)
+    {
+        if (direction == Direction.Bullish)
+        {
+            // Current candle body must fully engulf previous candle body
+            // Open below previous low, close above previous high
+            return current.Open < previous.Low && current.Close > previous.High;
+        }
+        else
+        {
+            // Open above previous high, close below previous low
+            return current.Open > previous.High && current.Close < previous.Low;
+        }
+    }
+}
+```
+
+---
+
+### FILE: `Strategy/Services/RsiFilter.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using Microsoft.Extensions.Logging;
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class RsiFilter : IRsiFilter
+{
+    private readonly IMarketDataService _marketData;
+    private readonly ILogger<RsiFilter> _logger;
+
+    public RsiFilter(IMarketDataService marketData, ILogger<RsiFilter> logger)
+    {
+        _marketData = marketData;
+        _logger = logger;
+    }
+
+    public async Task<(bool Passed, decimal RsiValue)> EvaluateAsync(
+        string symbol,
+        Direction direction,
+        StrategyConfig config,
+        CancellationToken ct = default)
+    {
+        decimal rsi = await _marketData.GetRsiAsync(symbol, config.RsiPeriod, TimeFrame.FiveMin);
+
+        if (rsi <= 0)
+        {
+            _logger.LogDebug("[RSI] Value unavailable for {Symbol}", symbol);
+            return (false, 0m);
+        }
+
+        bool passed = direction == Direction.Bullish
+            ? rsi > config.RsiBullThreshold
+            : rsi < config.RsiBearThreshold;
+
+        if (!passed)
+            _logger.LogDebug(
+                "[RSI] Soft fail: RSI={Rsi} threshold={Threshold} direction={Dir} for {Symbol}",
+                rsi,
+                direction == Direction.Bullish ? config.RsiBullThreshold : config.RsiBearThreshold,
+                direction,
+                symbol);
+
+        return (passed, rsi);
+    }
+}
+```
+
+---
+
+### FILE: `Strategy/Services/SignalGenerator.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using Microsoft.Extensions.Logging;
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class SignalGenerator : ISignalGenerator
+{
+    private readonly IRsiFilter _rsiFilter;
+    private readonly ILogger<SignalGenerator> _logger;
+
+    public SignalGenerator(IRsiFilter rsiFilter, ILogger<SignalGenerator> logger)
+    {
+        _rsiFilter = rsiFilter;
+        _logger = logger;
+    }
+
+    public async Task<TradeSignal?> GenerateAsync(
+        string symbol,
+        OpeningRange or,
+        BreakoutResult breakout,
+        FairValueGap fvg,
+        Candle confirmationCandle,
+        StrategyConfig config,
+        CancellationToken ct = default)
+    {
+        decimal entry = confirmationCandle.Close;
+        decimal buffer = entry * config.StopLossBufferPct;
+
+        decimal stopLoss, target, partialTarget, risk;
+
+        if (breakout.Direction == Direction.Bullish)
+        {
+            stopLoss      = fvg.GapLow - buffer;
+            risk          = entry - stopLoss;
+            target        = entry + (config.RiskRewardRatio * risk);
+            partialTarget = entry + (config.PartialExitR * risk);
+        }
+        else
+        {
+            stopLoss      = fvg.GapHigh + buffer;
+            risk          = stopLoss - entry;
+            target        = entry - (config.RiskRewardRatio * risk);
+            partialTarget = entry - (config.PartialExitR * risk);
+        }
+
+        // Sanity check: risk must be positive
+        if (risk <= 0)
+        {
+            _logger.LogWarning("[SIGNAL] Invalid risk={Risk} for {Symbol} — signal aborted", risk, symbol);
+            return null;
+        }
+
+        // RSI is a SOFT filter — evaluate for confidence scoring only, do not block
+        var (rsiPassed, rsiValue) = await _rsiFilter.EvaluateAsync(symbol, breakout.Direction, config, ct);
+
+        int confidence = ComputeConfidence(
+            breakoutCandle:      breakout.BreakoutCandle,
+            fvg:                 fvg,
+            entry:               entry,
+            rsiPassed:           rsiPassed,
+            rsiValue:            rsiValue,
+            direction:           breakout.Direction,
+            config:              config);
+
+        string signalDir = breakout.Direction == Direction.Bullish ? "BUY_CE" : "BUY_PE";
+
+        string reason = string.Join(" | ", new[]
+        {
+            $"{breakout.Direction} breakout at {entry}",
+            $"FVG {fvg.GapLow}–{fvg.GapHigh}",
+            $"EMA aligned",
+            $"RSI {rsiValue:F1} ({(rsiPassed ? "pass" : "soft-fail")})",
+            $"Confidence {confidence}"
+        });
+
+        _logger.LogInformation(
+            "[SIGNAL] {Dir} signal generated for {Symbol}: Entry={Entry} SL={SL} T1={T1} T2={T2} Conf={Conf}",
+            signalDir, symbol, entry, stopLoss, partialTarget, target, confidence);
+
+        return new TradeSignal
+        {
+            Symbol          = symbol,
+            SignalDirection = signalDir,
+            EntryPrice      = entry,
+            StopLoss        = stopLoss,
+            Target          = target,
+            PartialTarget   = partialTarget,
+            RiskReward      = config.RiskRewardRatio,
+            ConfidenceScore = confidence,
+            Timestamp       = confirmationCandle.Timestamp,
+            Reason          = reason
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // Confidence score: deterministic weighted additive model, max 100
+    // -----------------------------------------------------------------------
+    private static int ComputeConfidence(
+        Candle    breakoutCandle,
+        FairValueGap fvg,
+        decimal   entry,
+        bool      rsiPassed,
+        decimal   rsiValue,
+        Direction direction,
+        StrategyConfig config)
+    {
+        int score = 0;
+
+        // --- Volume scoring (uses breakout candle) ---
+        // Strong volume: already confirmed > 1× avg (required to reach here)
+        // We score based on candle body size as a proxy for conviction
+        decimal candleRange = breakoutCandle.High - breakoutCandle.Low;
+        decimal candleBody  = Math.Abs(breakoutCandle.Close - breakoutCandle.Open);
+        decimal bodyRatio   = candleRange > 0 ? candleBody / candleRange : 0m;
+
+        score += bodyRatio >= 0.6m ? 20 : 10; // strong body = strong breakout conviction
+
+        // --- FVG gap size scoring ---
+        decimal fvgPct = entry > 0 ? fvg.Size / entry : 0m;
+        score += fvgPct >= 0.002m ? 15 : 8; // 0.2% gap = strong, 0.1–0.2% = moderate
+
+        // --- EMA distance scoring (trend alignment strength) ---
+        // Entry price is already confirmed to be on correct side of EMA
+        // Score is added as a fixed bonus since alignment is binary here
+        score += 15;
+
+        // --- RSI scoring (soft filter) ---
+        if (rsiPassed)
+        {
+            bool strongRsi = direction == Direction.Bullish
+                ? rsiValue > 60m
+                : rsiValue < 40m;
+            score += strongRsi ? 15 : 8;
+        }
+        // If RSI failed (soft), no RSI points added — penalty via omission
+
+        // --- All conditions bonus ---
+        bool allStrong = bodyRatio >= 0.6m && fvgPct >= 0.002m && rsiPassed;
+        if (allStrong) score += 15;
+
+        // Cap at 100
+        return Math.Min(score, 100);
+    }
+}
+```
+
+---
+
+### FILE: `Strategy/Services/StrategyOrchestrator.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Services;
+
+using Microsoft.Extensions.Logging;
+using System.Runtime.CompilerServices;
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+
+public sealed class StrategyOrchestrator : IStrategyOrchestrator
+{
+    private readonly IOpeningRangeService    _orService;
+    private readonly IBreakoutDetector       _breakoutDetector;
+    private readonly IVolumeFilter           _volumeFilter;
+    private readonly IFvgDetector            _fvgDetector;
+    private readonly ITrendFilterService     _trendFilter;
+    private readonly IEngulfingConfirmation  _engulfing;
+    private readonly ISignalGenerator        _signalGenerator;
+    private readonly ILogger<StrategyOrchestrator> _logger;
+
+    public StrategyOrchestrator(
+        IOpeningRangeService   orService,
+        IBreakoutDetector      breakoutDetector,
+        IVolumeFilter          volumeFilter,
+        IFvgDetector           fvgDetector,
+        ITrendFilterService    trendFilter,
+        IEngulfingConfirmation engulfing,
+        ISignalGenerator       signalGenerator,
+        ILogger<StrategyOrchestrator> logger)
+    {
+        _orService        = orService;
+        _breakoutDetector = breakoutDetector;
+        _volumeFilter     = volumeFilter;
+        _fvgDetector      = fvgDetector;
+        _trendFilter      = trendFilter;
+        _engulfing        = engulfing;
+        _signalGenerator  = signalGenerator;
+        _logger           = logger;
+    }
+
+    public async IAsyncEnumerable<TradeSignal> RunAsync(
+        string symbol,
+        IAsyncEnumerable<Candle> oneMinCandles,
+        DateOnly sessionDate,
+        StrategyConfig config,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        // PHASE 1: Capture opening range. If unavailable or too narrow, abort session.
+        OpeningRange? or = await _orService.CaptureAsync(symbol, sessionDate, ct);
+        if (or is null)
+        {
+            _logger.LogInformation("[ORCH] Session aborted — no valid opening range for {Symbol} on {Date}", symbol, sessionDate);
+            yield break;
+        }
+
+        // State machine variables — one signal allowed per session
+        BreakoutResult?      breakout             = null;
+        FairValueGap?        fvg                  = null;
+        bool                 awaitingRetracement  = false;
+        bool                 awaitingEngulf       = false;
+        bool                 signalEmitted        = false;
+        Candle?              previousCandle       = null;
+        var                  postBreakoutCandles  = new List<Candle>();
+
+        await foreach (Candle candle in oneMinCandles.WithCancellation(ct))
+        {
+            // Once signal is emitted, stop processing for this session
+            if (signalEmitted) yield break;
+
+            // PHASE 2: Detect first breakout
+            if (breakout is null)
+            {
+                breakout = _breakoutDetector.Detect(candle, or, config);
+
+                if (breakout is not null)
+                {
+                    // HARD GATE: Volume must confirm the breakout candle
+                    bool volumeOk = await _volumeFilter.IsConfirmedAsync(
+                        symbol, breakout.BreakoutCandle, config.VolumeAvgLookback, ct);
+
+                    if (!volumeOk)
+                    {
+                        _logger.LogInformation("[ORCH] Breakout rejected by volume filter — waiting for next breakout");
+                        breakout = null; // reset, keep waiting
+                        continue;
+                    }
+
+                    // HARD GATE: Trend must be aligned
+                    bool trendOk = await _trendFilter.IsAlignedAsync(
+                        symbol, candle.Close, breakout.Direction, ct);
+
+                    if (!trendOk)
+                    {
+                        _logger.LogInformation("[ORCH] Breakout rejected by trend filter — session aborted");
+                        yield break; // trend misaligned — no point waiting further
+                    }
+
+                    _logger.LogInformation(
+                        "[ORCH] Valid {Dir} breakout confirmed at {Price} for {Symbol}",
+                        breakout.Direction, candle.Close, symbol);
+                }
+
+                previousCandle = candle;
+                continue;
+            }
+
+            // PHASE 3: Collect candles after breakout for FVG detection
+            postBreakoutCandles.Add(candle);
+
+            // PHASE 4: Find first valid FVG if not yet found
+            if (fvg is null && !awaitingRetracement)
+            {
+                fvg = _fvgDetector.Detect(postBreakoutCandles, breakout.Direction, config.MinFvgGapPct);
+
+                if (fvg is not null)
+                {
+                    awaitingRetracement = true;
+                    _logger.LogInformation(
+                        "[ORCH] FVG found {Low}–{High}, awaiting retracement for {Symbol}",
+                        fvg.GapLow, fvg.GapHigh, symbol);
+                }
+            }
+
+            // PHASE 5: Wait for price to retrace INTO the FVG zone
+            if (awaitingRetracement && !awaitingEngulf && fvg is not null)
+            {
+                if (fvg.Contains(candle.Close))
+                {
+                    awaitingEngulf      = true;
+                    awaitingRetracement = false;
+                    _logger.LogInformation(
+                        "[ORCH] Price {Price} entered FVG zone — awaiting engulfing candle for {Symbol}",
+                        candle.Close, symbol);
+                }
+            }
+
+            // PHASE 6: Confirm engulfing candle AFTER retracement
+            else if (awaitingEngulf && previousCandle is not null && fvg is not null)
+            {
+                bool engulfed = _engulfing.IsEngulfing(previousCandle, candle, breakout.Direction);
+
+                if (engulfed)
+                {
+                    _logger.LogInformation(
+                        "[ORCH] Engulfing candle confirmed at {Time} for {Symbol}",
+                        candle.Timestamp, symbol);
+
+                    // PHASE 7: Generate signal (RSI evaluated as soft filter inside)
+                    TradeSignal? signal = await _signalGenerator.GenerateAsync(
+                        symbol, or, breakout, fvg, candle, config, ct);
+
+                    if (signal is not null)
+                    {
+                        signalEmitted = true;
+                        yield return signal;
+                    }
+                }
+            }
+
+            previousCandle = candle;
+        }
+
+        if (!signalEmitted)
+            _logger.LogInformation("[ORCH] Session ended with no signal for {Symbol} on {Date}", symbol, sessionDate);
+    }
+}
+```
+
+---
+
+## STEP 5 — DEPENDENCY INJECTION
+
+### FILE: `Strategy/Extensions/ServiceCollectionExtensions.cs`
+
+CHECK: Does this file exist?
+- If YES: skip.
+- If NO: create it with this exact content:
+
+```csharp
+namespace {YourNamespace}.Strategy.Extensions;
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
+using {YourNamespace}.Strategy.Interfaces;
+using {YourNamespace}.Strategy.Models;
+using {YourNamespace}.Strategy.Services;
+
+public static class ServiceCollectionExtensions
+{
+    /// <summary>
+    /// Call this from Program.cs: builder.Services.AddNiftyStrategy(builder.Configuration);
+    /// </summary>
+    public static IServiceCollection AddNiftyStrategy(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Bind config from appsettings.json section "StrategyConfig"
+        services.Configure<StrategyConfig>(configuration.GetSection("StrategyConfig"));
+
+        // Register all strategy services as Scoped (one instance per trade session)
+        services.AddScoped<IOpeningRangeService,    OpeningRangeService>();
+        services.AddScoped<IBreakoutDetector,       BreakoutDetector>();
+        services.AddScoped<IVolumeFilter,           VolumeFilter>();
+        services.AddScoped<IFvgDetector,            FvgDetector>();
+        services.AddScoped<ITrendFilterService,     TrendFilterService>();
+        services.AddScoped<IEngulfingConfirmation,  EngulfingConfirmation>();
+        services.AddScoped<IRsiFilter,              RsiFilter>();
+        services.AddScoped<ISignalGenerator,        SignalGenerator>();
+        services.AddScoped<IStrategyOrchestrator,   StrategyOrchestrator>();
+
+        return services;
+    }
+}
+```
+
+---
+
+## STEP 6 — APPSETTINGS
+
+### FILE: `appsettings.json`
+
+CHECK: Does `appsettings.json` already have a `"StrategyConfig"` section?
+- If YES: skip.
+- If NO: ADD this block inside the existing root JSON object (do not replace the file):
+
+```json
+"StrategyConfig": {
+  "MinOpeningRangePct": 0.003,
+  "MinFvgGapPct": 0.001,
+  "VolumeAvgLookback": 10,
+  "EmaPeriod": 20,
+  "RsiPeriod": 14,
+  "RsiBullThreshold": 55.0,
+  "RsiBearThreshold": 45.0,
+  "RiskRewardRatio": 3.0,
+  "PartialExitR": 2.0,
+  "TradeWindowStart": "09:20:00",
+  "TradeWindowEnd": "10:30:00",
+  "StopLossBufferPct": 0.0005
+}
+```
+
+---
+
+## STEP 7 — REGISTER IN PROGRAM.CS
+
+CHECK: Does `Program.cs` already call `AddNiftyStrategy`?
+- If YES: skip.
+- If NO: Find the line `var app = builder.Build();` in `Program.cs`.
+  Add this line IMMEDIATELY BEFORE it:
+
+```csharp
+builder.Services.AddNiftyStrategy(builder.Configuration);
+```
+
+---
+
+## STEP 8 — FINAL CHECKLIST
+
+After writing all files, verify:
+
+1. Every `{YourNamespace}` placeholder has been replaced with the actual project namespace.
+2. `IMarketDataService` is referenced (not redefined) — it already exists.
+3. `Candle` is referenced (not redefined) — it already exists.
+4. `TimeFrame` enum is referenced (not redefined) — it already exists, or create it once in `Strategy/Models/TimeFrame.cs` with values `OneMin`, `FiveMin`, `FifteenMin` only if it does not already exist.
+5. No file has been created that already existed.
+6. `Program.cs` compiles with the added registration line.
+7. All `using` statements resolve correctly.
+
+---
+
+## WHAT THIS DOES NOT INCLUDE (out of scope — do not implement)
+
+- Options strike selection
+- Broker API integration
+- Order placement
+- Position sizing
+- Any UI or dashboard
