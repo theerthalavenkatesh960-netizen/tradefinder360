@@ -5,9 +5,11 @@ namespace TradingSystem.Core.Models;
 /// </summary>
 public enum SentimentType
 {
+    STRONGLY_BULLISH,
     BEARISH,
     NEUTRAL,
-    BULLISH
+    BULLISH,
+    STRONGLY_BEARISH
 }
 
 /// <summary>
