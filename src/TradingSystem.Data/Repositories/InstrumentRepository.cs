@@ -23,7 +23,7 @@ public class InstrumentRepository : CommonRepository<TradingInstrument>, IInstru
     public async Task<IReadOnlyList<TradingInstrument>> GetActiveInstrumentsAsync(CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .Where(i => i.IsActive && i.InstrumentType == InstrumentType.STOCK)
+            .Where(i => i.IsActive)
             .OrderBy(i => i.Symbol)
             .ToListAsync(cancellationToken);
     }
