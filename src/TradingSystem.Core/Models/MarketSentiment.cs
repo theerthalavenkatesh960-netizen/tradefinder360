@@ -23,6 +23,17 @@ public class MarketSentiment
     public decimal SentimentScore { get; set; } // -100 to +100
     public decimal VolatilityIndex { get; set; } // VIX equivalent
     public decimal MarketBreadth { get; set; } // Advancing vs Declining ratio
+
+    // ?? Multi-period indicator fields ????????????????????????????????????????
+    public decimal RSI { get; set; }                  // market-wide average RSI
+    public decimal MacdHistogram { get; set; }        // average MACD histogram across major indices
+    public decimal PriceVs20DMA { get; set; }         // % above/below 20DMA (index average)
+    public decimal PriceVs50DMA { get; set; }         // % above/below 50DMA
+    public int NewHighs52W { get; set; }              // count of stocks at 52-week highs today
+    public int NewLows52W { get; set; }               // count of stocks at 52-week lows today
+    public decimal MclellanOscillator { get; set; }   // rolling breadth oscillator
+    public decimal VixVs20DMA { get; set; }           // VIX minus its 20-day SMA
+
     // JSONB fields
     public List<IndexPerformance> IndexPerformance { get; set; } = new();
     public List<SectorPerformance> SectorPerformance { get; set; } = new();
@@ -66,6 +77,17 @@ public class MarketContext
     public decimal SentimentScore { get; set; }
     public decimal VolatilityIndex { get; set; }
     public decimal MarketBreadth { get; set; }
+
+    // ?? Multi-period indicator fields ????????????????????????????????????????
+    public decimal RSI { get; set; }
+    public decimal MacdHistogram { get; set; }
+    public decimal PriceVs20DMA { get; set; }
+    public decimal PriceVs50DMA { get; set; }
+    public int NewHighs52W { get; set; }
+    public int NewLows52W { get; set; }
+    public decimal MclellanOscillator { get; set; }
+    public decimal VixVs20DMA { get; set; }
+
     public List<IndexPerformance> MajorIndices { get; set; } = new();
     public List<SectorPerformance> Sectors { get; set; } = new();
     public List<string> KeyFactors { get; set; } = new();
