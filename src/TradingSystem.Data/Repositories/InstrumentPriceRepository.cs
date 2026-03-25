@@ -102,22 +102,26 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
         return await _context.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<Dictionary<int, InstrumentPrice>> GetLatestPricesForInstrumentsAsync(
-        IEnumerable<int> instrumentIds,
-        string timeframe,
-        CancellationToken cancellationToken = default)
+    public async Task<Dictionary<int, InstrumentPrice>> GetLatestPricesForInstrumentsAsync(IEnumerable<int> instrumentIds, string timeframe,
+    CancellationToken cancellationToken = default)
     {
         var ids = instrumentIds.ToList();
 
-        var latestPrices = await _dbSet
-            .Where(p => ids.Contains(p.InstrumentId) && p.Timeframe == timeframe)
-            .GroupBy(p => p.InstrumentId)
-            .Select(g => g.OrderByDescending(p => p.Timestamp).FirstOrDefault())
-            .Where(p => p != null)
-            .ToListAsync(cancellationToken);
+        try
+        {
+            var latestPrices = await _dbSet
+                .Where(p => ids.Contains(p.InstrumentId) && p.Timeframe == timeframe)
+                .OrderByDescending(p => p.Timestamp)
+                .GroupBy(p => p.InstrumentId)
+                .Select(g => g.First())
+                .ToListAsync(cancellationToken);
 
-        return latestPrices
-            .Where(p => p != null)
-            .ToDictionary(p => p!.InstrumentId, p => p!);
+            return latestPrices.ToDictionary(p => p.InstrumentId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error fetching latest prices: {ex.Message}");
+            return new Dictionary<int, InstrumentPrice>();
+        }
     }
 }

@@ -12,6 +12,13 @@ namespace TradingSystem.Api.Controllers;
 [Route("api/instrument")]
 public class InstrumentController : ControllerBase
 {
+    private static readonly TimeZoneInfo Ist =
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
+    /// <summary>Consistent IST "today" for the lifetime of a single call-chain.</summary>
+    private static DateTime IstNow =>
+        TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist);
+
     private readonly IInstrumentService _instrumentService;
     private readonly IIndicatorService _indicatorService;
     private readonly ICandleService _candleService;
@@ -282,10 +289,14 @@ public class InstrumentController : ControllerBase
         }
 
         // Candles for charting
-        var fromDate = DateTime.UtcNow.AddDays(-candleDays);
-        var toDate = DateTime.UtcNow.AddDays(1);
+        // var fromDate = DateTime.UtcNow.AddDays(-candleDays);
+        // var toDate = DateTime.UtcNow.AddDays(1);
+        var fromDateUtc = IstNow.AddDays(-candleDays);
+
+        var toDateUtc = IstNow.AddDays(1);
+
         var candles = await _candleService.GetCandlesAsync(
-            instrument.Id, scanTimeframe, fromDate, toDate);
+            instrument.Id, scanTimeframe, fromDateUtc, toDateUtc);
 
         dto.Candles = candles
             .OrderBy(c => c.Timestamp)
