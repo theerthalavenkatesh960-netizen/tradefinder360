@@ -83,6 +83,38 @@ public class InstrumentDetailDto
 }
 
 /// <summary>
+/// Lightweight instrument summary for stock cards and hover previews.
+/// No analysis/scanner data — just metadata and latest price.
+/// </summary>
+public class InstrumentSummaryDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Symbol { get; set; } = string.Empty;
+    public string Exchange { get; set; } = string.Empty;
+    public string InstrumentKey { get; set; } = string.Empty;
+
+    // metadata
+    public string? Sector { get; set; }
+    public string? Industry { get; set; }
+    public decimal? MarketCap { get; set; }
+    public string? InstrumentType { get; set; }
+    public string? TradingMode { get; set; }
+    public int LotSize { get; set; }
+    public decimal TickSize { get; set; }
+    public bool IsDerivativesEnabled { get; set; }
+
+    // latest price
+    public decimal? Price { get; set; }
+    public long? Volume { get; set; }
+    public decimal? Change { get; set; }
+    public decimal? ChangePercent { get; set; }
+    public decimal? DayHigh { get; set; }
+    public decimal? DayLow { get; set; }
+    public decimal? DayOpen { get; set; }
+}
+
+/// <summary>
 /// Search/filter request body for POST /api/instrument/search.
 /// Defaults return all active STOCK instruments sorted by symbol.
 /// Send an empty {} body to get the default stock listing.

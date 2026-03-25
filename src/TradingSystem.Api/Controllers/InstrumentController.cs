@@ -353,6 +353,107 @@ public class InstrumentController : ControllerBase
     }
 
     // =========================================================================
+    // GET /api/instrument/sectors/{sectorName}/instruments
+    // Instruments belonging to a specific sector, with latest prices.
+    // =========================================================================
+    [HttpGet("sectors/{sectorName}/instruments")]
+    [ProducesResponseType(typeof(List<InstrumentDto>), 200)]
+    public async Task<ActionResult<List<InstrumentDto>>> GetInstrumentsBySector(
+        string sectorName,
+        [FromQuery] string priceTimeframe = "1D")
+    {
+        var instruments = await _instrumentService.GetActiveAsync();
+
+        var filtered = instruments
+            .Where(i => i.Sector != null &&
+                (i.Sector.Name.Equals(sectorName, StringComparison.OrdinalIgnoreCase) ||
+                 i.Sector.Code.Equals(sectorName, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (!filtered.Any())
+            return Ok(new List<InstrumentDto>());
+
+        var ids = filtered.Select(i => i.Id);
+        var priceMap = await _priceRepository
+            .GetLatestPricesForInstrumentsAsync(ids, priceTimeframe);
+
+        var dtos = filtered.Select(inst =>
+        {
+            var dto = MapToInstrumentDto(inst);
+            if (priceMap.TryGetValue(inst.Id, out var price))
+                ApplyPriceData(dto, price);
+            return dto;
+        }).OrderBy(d => d.Symbol).ToList();
+
+        return Ok(dtos);
+    }
+
+    // =========================================================================
+    // GET /api/instrument/exchanges — distinct exchanges for UI dropdowns
+    // =========================================================================
+    [HttpGet("exchanges")]
+    [ProducesResponseType(typeof(List<string>), 200)]
+    public async Task<ActionResult<List<string>>> GetExchanges()
+    {
+        var instruments = await _instrumentService.GetActiveAsync();
+        var exchanges = instruments
+            .Select(i => i.Exchange)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(e => e)
+            .ToList();
+
+        return Ok(exchanges);
+    }
+
+    // =========================================================================
+    // GET /api/instrument/{symbol}/summary — lightweight preview for stock cards
+    // No scanner, no recommendation generation — just metadata + latest price.
+    // =========================================================================
+    [HttpGet("{symbol}/summary")]
+    [ProducesResponseType(typeof(InstrumentSummaryDto), 200)]
+    public async Task<ActionResult<InstrumentSummaryDto>> GetInstrumentSummary(
+        string symbol,
+        [FromQuery] string priceTimeframe = "1D")
+    {
+        var instrument = await _instrumentService.GetBySymbolAsync(symbol);
+        if (instrument == null)
+            return NotFound($"Instrument '{symbol}' not found.");
+
+        var dto = new InstrumentSummaryDto
+        {
+            Id = instrument.Id,
+            Name = instrument.Name,
+            Symbol = instrument.Symbol,
+            Exchange = instrument.Exchange,
+            InstrumentKey = instrument.InstrumentKey,
+            Sector = instrument.Sector?.Name,
+            Industry = instrument.Industry,
+            MarketCap = instrument.MarketCap,
+            InstrumentType = instrument.InstrumentType.ToString(),
+            TradingMode = instrument.DefaultTradingMode.ToString(),
+            LotSize = instrument.LotSize,
+            TickSize = instrument.TickSize,
+            IsDerivativesEnabled = instrument.IsDerivativesEnabled
+        };
+
+        var latestPrice = await _priceRepository.GetLatestPriceAsync(instrument.Id, priceTimeframe);
+        if (latestPrice != null)
+        {
+            dto.Price = latestPrice.Close;
+            dto.Volume = latestPrice.Volume;
+            dto.DayOpen = latestPrice.Open;
+            dto.DayHigh = latestPrice.High;
+            dto.DayLow = latestPrice.Low;
+            dto.Change = latestPrice.Close - latestPrice.Open;
+            dto.ChangePercent = latestPrice.Open != 0
+                ? Math.Round((latestPrice.Close - latestPrice.Open) / latestPrice.Open * 100, 2)
+                : 0;
+        }
+
+        return Ok(dto);
+    }
+
+    // =========================================================================
     // PRIVATE HELPERS
     // =========================================================================
 
