@@ -356,6 +356,45 @@ public class TradingDbContext : DbContext
                 .HasPrecision(10, 4)
                 .IsRequired();
 
+            // ── Multi-period indicator columns ───────────────────────────────
+            entity.Property(e => e.RSI)
+                .HasColumnName("rsi")
+                .HasPrecision(8, 4)
+                .IsRequired();
+
+            entity.Property(e => e.MacdHistogram)
+                .HasColumnName("macd_histogram")
+                .HasPrecision(18, 4)
+                .IsRequired();
+
+            entity.Property(e => e.PriceVs20DMA)
+                .HasColumnName("price_vs_20dma")
+                .HasPrecision(8, 4)
+                .IsRequired();
+
+            entity.Property(e => e.PriceVs50DMA)
+                .HasColumnName("price_vs_50dma")
+                .HasPrecision(8, 4)
+                .IsRequired();
+
+            entity.Property(e => e.NewHighs52W)
+                .HasColumnName("new_highs_52w")
+                .IsRequired();
+
+            entity.Property(e => e.NewLows52W)
+                .HasColumnName("new_lows_52w")
+                .IsRequired();
+
+            entity.Property(e => e.MclellanOscillator)
+                .HasColumnName("mclellan_oscillator")
+                .HasPrecision(12, 4)
+                .IsRequired();
+
+            entity.Property(e => e.VixVs20DMA)
+                .HasColumnName("vix_vs_20dma")
+                .HasPrecision(8, 4)
+                .IsRequired();
+
             // ✅ FIXED: JSONB mapping (NO nvarchar)
             entity.Property(e => e.IndexPerformance)
                 .HasColumnName("index_performance")
