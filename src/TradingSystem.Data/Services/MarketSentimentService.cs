@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Repositories.Interfaces;
@@ -48,18 +49,21 @@ public class MarketSentimentService : IMarketSentimentService
     private readonly IMarketCandleRepository    _candleRepository;
     private readonly IInstrumentService         _instrumentService;
     private readonly ILogger<MarketSentimentService> _logger;
+    private readonly IDbContextFactory<TradingDbContext> _contextFactory;
 
     public MarketSentimentService(
         IMarketSentimentRepository sentimentRepository,
         IInstrumentRepository      instrumentRepository,
         IMarketCandleRepository    candleRepository,
         IInstrumentService         instrumentService,
+        IDbContextFactory<TradingDbContext> contextFactory,
         ILogger<MarketSentimentService> logger)
     {
         _sentimentRepository = sentimentRepository;
         _instrumentRepository = instrumentRepository;
         _candleRepository    = candleRepository;
         _instrumentService   = instrumentService;
+        _contextFactory = contextFactory;
         _logger              = logger;
     }
 
@@ -98,13 +102,13 @@ public class MarketSentimentService : IMarketSentimentService
         {
             // Snapshot a single IST "now" so every sub-task shares the same boundary.
             var istToday = IstToday;
-            var utcNow   = DateTime.UtcNow;
+            var utcNow   = istToday.AddDays(1);
 
             // Run independent data fetches concurrently.
-            var indicesTask     = AnalyzeIndicesAsync(istToday, utcNow, cancellationToken);
-            var sectorsTask     = AnalyzeSectorsAsync(istToday, utcNow, cancellationToken);
-            var breadthTask     = CalculateMarketBreadthAsync(istToday, utcNow, cancellationToken);
-            var volatilityTask  = GetVolatilityIndexAsync(istToday, utcNow, cancellationToken);
+            var indicesTask     = AnalyzeIndicesAsync(istToday, cancellationToken);
+            var sectorsTask     = AnalyzeSectorsAsync(istToday, cancellationToken);
+            var breadthTask     = CalculateMarketBreadthAsync(istToday, cancellationToken);
+            var volatilityTask  = GetVolatilityIndexAsync(istToday, cancellationToken);
 
             await Task.WhenAll(indicesTask, sectorsTask, breadthTask, volatilityTask);
 
@@ -221,267 +225,185 @@ public class MarketSentimentService : IMarketSentimentService
     /// per index and returns aggregated averages.
     /// </summary>
     private async Task<IndexAnalysisResult> AnalyzeIndicesAsync(
-        DateTime istToday, DateTime utcNow, CancellationToken cancellationToken)
+    DateTime istToday, CancellationToken cancellationToken)
     {
         try
         {
-            var indices = await _instrumentRepository.GetListAsync(
-                i => i.InstrumentType == InstrumentType.INDEX && i.IsActive,
-                cancellationToken);
+            await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
 
-            _logger.LogInformation("Found {Count} active indices to analyze", indices.Count);
+            var indices = await context.Instruments
+                .Where(i => i.InstrumentType == InstrumentType.INDEX && i.IsActive)
+                .ToListAsync(cancellationToken);
 
-            var fromDate = istToday.AddDays(-IndexLookbackDays);
+            var fromDateUtc = TimeZoneInfo.ConvertTimeToUtc(
+                istToday.AddDays(-IndexLookbackDays), Ist);
 
-            // Fetch candles for every index concurrently — widest window once.
-            var tasks = indices.Select(async instrument =>
+            var toDateUtc = TimeZoneInfo.ConvertTimeToUtc(
+                istToday.AddDays(1), Ist);
+
+            var ids = indices.Select(i => i.Id).ToList();
+
+            var candles = await context.MarketCandles
+                .Where(c => ids.Contains(c.InstrumentId) &&
+                            c.Timestamp >= fromDateUtc &&
+                            c.Timestamp <= toDateUtc)
+                .OrderBy(c => c.Timestamp)
+                .ToListAsync(cancellationToken);
+
+            var map = candles.GroupBy(c => c.InstrumentId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var results = new List<dynamic>();
+            var locker = new object();
+
+            Parallel.ForEach(indices, index =>
             {
-                try
+                if (!map.TryGetValue(index.Id, out var c) || c.Count < 2) return;
+
+                var closes = c.Select(x => x.Close).ToArray();
+                var latest = closes[^1];
+                var prev = closes[^2];
+
+                var rsi = CalculateRsiFromSeries(closes, 14);
+                var (macd, _) = CalculateMacdFromSeries(closes);
+
+                var dma20 = CalculateSMA(closes, 20);
+                var dma50 = CalculateSMA(closes, 50);
+
+                lock (locker)
                 {
-                    var candles = (await _candleRepository.GetByInstrumentIdAsync(
-                        instrument.Id, 1440, fromDate, utcNow, cancellationToken))
-                        .OrderBy(c => c.Timestamp)
-                        .ToList();
-
-                    if (candles.Count < 2)
-                    {
-                        _logger.LogDebug("Insufficient candles for index {Symbol}", instrument.Symbol);
-                        return null;
-                    }
-
-                    var closes = candles.Select(c => c.Close).ToArray();
-                    var latestClose = closes[^1];
-
-                    // Daily change: today's close vs previous day's close
-                    var previousDayClose = closes[^2];
-                    var changePercent = previousDayClose != 0
-                        ? (latestClose - previousDayClose) / previousDayClose * 100m
-                        : 0m;
-
-                    // Single-pass min/max for today's candle (last in daily series)
-                    var lastCandle = candles[^1];
-                    var dayHigh = lastCandle.High;
-                    var dayLow  = lastCandle.Low;
-
-                    // RSI-14 using existing Indicators.RSI (Wilder's smoothing)
-                    var rsiValue = CalculateRsiFromSeries(closes, 14);
-
-                    // MACD using existing Indicators.MACD
-                    var (macdHist, _) = CalculateMacdFromSeries(closes);
-
-                    // 20DMA and 50DMA
-                    var dma20 = CalculateSMA(closes, 20);
-                    var dma50 = CalculateSMA(closes, 50);
-
-                    var priceVs20 = dma20 != 0 ? (latestClose - dma20) / dma20 * 100m : 0m;
-                    var priceVs50 = dma50 != 0 ? (latestClose - dma50) / dma50 * 100m : 0m;
-                    var isGoldenCross = dma20 > dma50;
-
-                    _logger.LogDebug(
-                        "Analyzed index {Symbol}: {Change:F2}% RSI:{RSI:F1} MACD-H:{MACD:F2} vs20:{V20:F2}% vs50:{V50:F2}%",
-                        instrument.Symbol, changePercent, rsiValue, macdHist, priceVs20, priceVs50);
-
-                    return new
+                    results.Add(new
                     {
                         Performance = new IndexPerformance
                         {
-                            IndexName     = instrument.Name,
-                            Symbol        = instrument.Symbol,
-                            CurrentValue  = latestClose,
-                            ChangePercent = changePercent,
-                            DayHigh       = dayHigh,
-                            DayLow        = dayLow
+                            IndexName = index.Name,
+                            Symbol = index.Symbol,
+                            CurrentValue = latest,
+                            ChangePercent = prev != 0 ? (latest - prev) / prev * 100m : 0,
+                            DayHigh = c[^1].High,
+                            DayLow = c[^1].Low
                         },
-                        Rsi           = rsiValue,
-                        MacdHist      = macdHist,
-                        PriceVs20DMA  = priceVs20,
-                        PriceVs50DMA  = priceVs50,
-                        GoldenCross   = isGoldenCross
-                    };
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error analyzing index {Symbol}", instrument.Symbol);
-                    return null;
+                        Rsi = rsi,
+                        MacdHist = macd,
+                        PriceVs20DMA = dma20 != 0 ? (latest - dma20) / dma20 * 100 : 0,
+                        PriceVs50DMA = dma50 != 0 ? (latest - dma50) / dma50 * 100 : 0,
+                        GoldenCross = dma20 > dma50
+                    });
                 }
             });
 
-            var results = (await Task.WhenAll(tasks)).Where(r => r is not null).ToList();
-
-            if (results.Count == 0)
-            {
-                return new IndexAnalysisResult(
-                    new List<IndexPerformance>(), 50m, 0m, 0m, 0m, false);
-            }
+            if (!results.Any())
+                return new IndexAnalysisResult(new(), 50, 0, 0, 0, false);
 
             return new IndexAnalysisResult(
-                Performances:    results.Select(r => r!.Performance).ToList(),
-                AvgRsi:          results.Average(r => r!.Rsi),
-                AvgMacdHistogram: results.Average(r => r!.MacdHist),
-                AvgPriceVs20DMA: results.Average(r => r!.PriceVs20DMA),
-                AvgPriceVs50DMA: results.Average(r => r!.PriceVs50DMA),
-                GoldenCross:     results.All(r => r!.GoldenCross));
+                results.Select(x => (IndexPerformance)x.Performance).ToList(),
+                results.Average(x => (decimal)x.Rsi),
+                results.Average(x => (decimal)x.MacdHist),
+                results.Average(x => (decimal)x.PriceVs20DMA),
+                results.Average(x => (decimal)x.PriceVs50DMA),
+                results.All(x => (bool)x.GoldenCross)
+            );
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting indices from database");
-            return new IndexAnalysisResult(
-                new List<IndexPerformance>(), 50m, 0m, 0m, 0m, false);
+            _logger.LogError(ex, "Error analyzing indices");
+            return new IndexAnalysisResult(new(), 50, 0, 0, 0, false);
         }
     }
-
     /// <summary>
     /// Analyzes sector performance with 30-day lookback for 20DMA calculations.
     /// Per-sector stock candles are fetched concurrently.
     /// </summary>
     private async Task<SectorAnalysisResult> AnalyzeSectorsAsync(
-        DateTime istToday, DateTime utcNow, CancellationToken cancellationToken)
+    DateTime istToday, CancellationToken cancellationToken)
     {
-        try
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var sectors = await _instrumentService.GetSectorsAsync();
+        var activeSectors = sectors.Where(s => s.IsActive).ToList();
+
+        var stocks = await context.Instruments
+            .Where(i => i.InstrumentType == InstrumentType.STOCK && i.IsActive)
+            .ToListAsync(cancellationToken);
+
+        var fromDateUtc = TimeZoneInfo.ConvertTimeToUtc(
+            istToday.AddDays(-SectorLookbackDays), Ist);
+
+        var toDateUtc = TimeZoneInfo.ConvertTimeToUtc(
+            istToday.AddDays(1), Ist);
+
+        var ids = stocks.Select(s => s.Id).ToList();
+
+        var candles = await context.MarketCandles
+            .Where(c => ids.Contains(c.InstrumentId) &&
+                        c.Timestamp >= fromDateUtc &&
+                        c.Timestamp <= toDateUtc)
+            .ToListAsync(cancellationToken);
+
+        var map = candles.GroupBy(c => c.InstrumentId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var results = new List<dynamic>();
+        var locker = new object();
+
+        Parallel.ForEach(activeSectors, sector =>
         {
-            var sectors = await _instrumentService.GetSectorsAsync();
-            var activeSectors = sectors.Where(s => s.IsActive).ToList();
+            var sectorStocks = stocks.Where(s => s.SectorId == sector.Id).ToList();
 
-            _logger.LogInformation("Found {Count} active sectors to analyze", activeSectors.Count);
+            int adv = 0, dec = 0;
+            decimal total = 0;
+            int count = 0;
+            int above20 = 0;
 
-            var fromDate = istToday.AddDays(-SectorLookbackDays);
-
-            var sectorTasks = activeSectors.Select(async sector =>
+            foreach (var stock in sectorStocks)
             {
-                try
-                {
-                    var sectorStocks = await _instrumentRepository.GetListAsync(
-                        i => i.SectorId == sector.Id
-                             && i.InstrumentType == InstrumentType.STOCK
-                             && i.IsActive,
-                        cancellationToken);
+                if (!map.TryGetValue(stock.Id, out var c) || c.Count < 2) continue;
 
-                    if (sectorStocks.Count == 0)
-                    {
-                        _logger.LogDebug("No stocks found for sector {SectorName}", sector.Name);
-                        return null;
-                    }
+                var closes = c.Select(x => x.Close).ToArray();
+                var latest = closes[^1];
+                var prev = closes[^2];
 
-                    // Fetch candles for every stock in this sector concurrently.
-                    var stockTasks = sectorStocks.Select(async stock =>
-                    {
-                        try
-                        {
-                            return (await _candleRepository.GetByInstrumentIdAsync(
-                                stock.Id, 1440, fromDate, utcNow, cancellationToken))
-                                .OrderBy(c => c.Timestamp)
-                                .ToList();
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogDebug(ex,
-                                "Error fetching candles for stock {Symbol} in sector {SectorName}",
-                                stock.Symbol, sector.Name);
-                            return new List<MarketCandle>();
-                        }
-                    });
+                var change = prev != 0 ? (latest - prev) / prev * 100 : 0;
 
-                    var allCandleSets = await Task.WhenAll(stockTasks);
+                total += change;
+                count++;
 
-                    var advancing      = 0;
-                    var declining      = 0;
-                    var unchanged      = 0;
-                    var totalChange    = 0m;
-                    var processedCount = 0;
-                    var stocksAbove20DMA = 0;
-                    var totalStocksWithDMA = 0;
+                if (change > 0) adv++;
+                else if (change < 0) dec++;
 
-                    foreach (var candles in allCandleSets)
-                    {
-                        if (candles is null || candles.Count < 2) continue;
-
-                        var closes = candles.Select(c => c.Close).ToArray();
-                        var todayClose      = closes[^1];
-                        var previousDayClose = closes[^2];
-
-                        var change = previousDayClose != 0
-                            ? (todayClose - previousDayClose) / previousDayClose * 100m
-                            : 0m;
-
-                        totalChange += change;
-                        processedCount++;
-
-                        if      (change >  0.1m) advancing++;
-                        else if (change < -0.1m) declining++;
-                        else                     unchanged++;
-
-                        // Check if price is above 20DMA
-                        if (closes.Length >= 20)
-                        {
-                            var dma20 = CalculateSMA(closes, 20);
-                            totalStocksWithDMA++;
-                            if (todayClose > dma20)
-                                stocksAbove20DMA++;
-                        }
-                    }
-
-                    if (processedCount == 0) return null;
-
-                    var avgChange = totalChange / processedCount;
-
-                    // Relative strength: fraction of movers that are advancing.
-                    var totalMovers      = advancing + declining;
-                    var relativeStrength = totalMovers > 0
-                        ? (decimal)advancing / totalMovers
-                        : 0.5m;
-
-                    var pctAbove20DMA = totalStocksWithDMA > 0
-                        ? (decimal)stocksAbove20DMA / totalStocksWithDMA * 100m
-                        : 50m;
-
-                    _logger.LogDebug(
-                        "Analyzed sector {SectorName}: {Change:F2}% (A:{A} D:{D} U:{U}) Above20DMA:{Pct:F1}%",
-                        sector.Name, avgChange, advancing, declining, unchanged, pctAbove20DMA);
-
-                    return new
-                    {
-                        Performance = new SectorPerformance
-                        {
-                            SectorName       = sector.Name,
-                            ChangePercent    = avgChange,
-                            StocksAdvancing  = advancing,
-                            StocksDeclining  = declining,
-                            RelativeStrength = relativeStrength
-                        },
-                        PctAbove20DMA = pctAbove20DMA
-                    };
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error analyzing sector {SectorName}", sector.Name);
-                    return null;
-                }
-            });
-
-            var results = (await Task.WhenAll(sectorTasks)).Where(r => r is not null).ToList();
-
-            if (results.Count == 0)
-            {
-                return new SectorAnalysisResult(
-                    new List<SectorPerformance>(), 50m, 0m);
+                if (closes.Length >= 20 && latest > CalculateSMA(closes, 20))
+                    above20++;
             }
 
-            var performances = results.Select(r => r!.Performance).ToList();
-            var pctSectorsAbove20DMA = results.Average(r => r!.PctAbove20DMA);
+            if (count == 0) return;
 
-            // Top vs bottom sector spread
-            var topChange    = performances.Max(s => s.ChangePercent);
-            var bottomChange = performances.Min(s => s.ChangePercent);
-            var topBottomSpread = topChange - bottomChange;
+            lock (locker)
+            {
+                results.Add(new
+                {
+                    Performance = new SectorPerformance
+                    {
+                        SectorName = sector.Name,
+                        ChangePercent = total / count,
+                        StocksAdvancing = adv,
+                        StocksDeclining = dec,
+                        RelativeStrength = (decimal)adv / Math.Max(1, adv + dec)
+                    },
+                    Above20 = (decimal)above20 / count * 100
+                });
+            }
+        });
 
-            return new SectorAnalysisResult(performances, pctSectorsAbove20DMA, topBottomSpread);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting sectors from database");
-            return new SectorAnalysisResult(
-                new List<SectorPerformance>(), 50m, 0m);
-        }
+        if (!results.Any())
+            return new SectorAnalysisResult(new(), 50, 0);
+
+        var performances = results.Select(x => (SectorPerformance)x.Performance).ToList();
+
+        return new SectorAnalysisResult(
+            performances,
+            results.Average(x => (decimal)x.Above20),
+            performances.Max(s => s.ChangePercent) - performances.Min(s => s.ChangePercent)
+        );
     }
 
     /// <summary>
@@ -489,131 +411,140 @@ public class MarketSentimentService : IMarketSentimentService
     /// Computes 20-day rolling A/D ratio, McClellan Oscillator, and 52-week new highs/lows.
     /// </summary>
     private async Task<BreadthAnalysisResult> CalculateMarketBreadthAsync(
-        DateTime istToday, DateTime utcNow, CancellationToken cancellationToken)
+        DateTime istToday, CancellationToken cancellationToken)
     {
         try
         {
-            var activeStocks = await _instrumentRepository.GetListAsync(
-                i => i.InstrumentType == InstrumentType.STOCK && i.IsActive,
-                cancellationToken);
+            await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
 
-            var stocksToAnalyze = activeStocks
+            var activeStocks = await context.Instruments
+                .Where(i => i.InstrumentType == InstrumentType.STOCK && i.IsActive)
                 .OrderByDescending(s => s.MarketCap ?? 0)
                 .Take(BreadthStockLimit)
-                .ToList();
+                .ToListAsync(cancellationToken);
 
-            _logger.LogInformation(
-                "Calculating market breadth for {Count} stocks", stocksToAnalyze.Count);
+            var ids = activeStocks.Select(s => s.Id).ToList();
+            var fromDateUtc = TimeZoneInfo.ConvertTimeToUtc(
+                istToday.AddDays(-BreadthLookbackDays), Ist);
 
-            var fromDate = istToday.AddDays(-BreadthLookbackDays);
+            var toDateUtc = TimeZoneInfo.ConvertTimeToUtc(
+                istToday.AddDays(1), Ist);
 
-            // Fetch all candles concurrently — widest window once per stock.
-            var candleTasks = stocksToAnalyze.Select(async stock =>
+            // 🔥 SINGLE DB HIT
+            var candles = await context.MarketCandles
+                .Where(c => ids.Contains(c.InstrumentId) &&
+                            c.Timestamp >= fromDateUtc &&
+                            c.Timestamp <= toDateUtc)
+                .OrderBy(c => c.Timestamp)
+                .ToListAsync(cancellationToken);
+
+            var map = candles
+                .GroupBy(c => c.InstrumentId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            int todayAdvancing = 0, todayDeclining = 0, todayUnchanged = 0;
+            int newHighs52W = 0, newLows52W = 0;
+
+            var dailyAdDiffs = new Dictionary<DateTime, int>();
+            var lockObj = new object();
+
+            // 🚀 PARALLEL CPU
+            Parallel.ForEach(activeStocks, stock =>
             {
-                try
+                if (!map.TryGetValue(stock.Id, out var c) || c.Count < 2) return;
+
+                var closes = c.Select(x => x.Close).ToArray();
+                var todayClose = closes[^1];
+                var prevClose = closes[^2];
+
+                var localAdv = 0;
+                var localDec = 0;
+                var localUnc = 0;
+                var localHigh = 0;
+                var localLow = 0;
+
+                // ── A/D
+                var change = prevClose != 0
+                    ? (todayClose - prevClose) / prevClose * 100m
+                    : 0m;
+
+                if (change > 0.01m) localAdv++;
+                else if (change < -0.01m) localDec++;
+                else localUnc++;
+
+                // ── 52W
+                decimal high52 = decimal.MinValue;
+                decimal low52 = decimal.MaxValue;
+
+                foreach (var x in c)
                 {
-                    return (Stock: stock, Candles: (await _candleRepository.GetByInstrumentIdAsync(
-                        stock.Id, 1440, fromDate, utcNow, cancellationToken))
-                        .OrderBy(c => c.Timestamp)
-                        .ToList());
+                    if (x.High > high52) high52 = x.High;
+                    if (x.Low < low52) low52 = x.Low;
                 }
-                catch (Exception ex)
+
+                if (todayClose >= high52 * 0.98m) localHigh++;
+                if (todayClose <= low52 * 1.02m) localLow++;
+
+                // ── McClellan input
+                var localDiffs = new Dictionary<DateTime, int>();
+
+                var recent = c.Count > 41 ? c.Skip(c.Count - 41).ToList() : c;
+
+                for (int i = 1; i < recent.Count; i++)
                 {
-                    _logger.LogDebug(ex,
-                        "Error fetching candles for breadth stock {Symbol}", stock.Symbol);
-                    return (Stock: stock, Candles: new List<MarketCandle>());
+                    var prev = recent[i - 1].Close;
+                    var cur = recent[i].Close;
+                    if (prev == 0) continue;
+
+                    var d = TimeZoneInfo.ConvertTime(recent[i].Timestamp, Ist).Date;
+                    var ch = (cur - prev) / prev * 100m;
+
+                    if (!localDiffs.ContainsKey(d)) localDiffs[d] = 0;
+
+                    if (ch > 0.01m) localDiffs[d]++;
+                    else if (ch < -0.01m) localDiffs[d]--;
+                }
+
+                // 🔒 MERGE
+                lock (lockObj)
+                {
+                    todayAdvancing += localAdv;
+                    todayDeclining += localDec;
+                    todayUnchanged += localUnc;
+                    newHighs52W += localHigh;
+                    newLows52W += localLow;
+
+                    foreach (var kv in localDiffs)
+                    {
+                        if (!dailyAdDiffs.ContainsKey(kv.Key))
+                            dailyAdDiffs[kv.Key] = 0;
+
+                        dailyAdDiffs[kv.Key] += kv.Value;
+                    }
                 }
             });
 
-            var allStockData = await Task.WhenAll(candleTasks);
-
-            // ── Today's A/D count ────────────────────────────────────────────
-            var todayAdvancing = 0;
-            var todayDeclining = 0;
-            var todayUnchanged = 0;
-
-            // ── 52-week new highs/lows ───────────────────────────────────────
-            var newHighs52W = 0;
-            var newLows52W  = 0;
-
-            // ── Daily A/D diffs for McClellan (need ~39+ days) ───────────────
-            // We need to compute daily A/D difference for last ~39 trading days.
-            // Collect per-day A/D for the last 40 trading days across all stocks.
-            // Strategy: for each stock, determine daily change for last 40 days,
-            // then aggregate across stocks per day.
-            var dailyAdDiffs = new Dictionary<DateTime, int>(); // date -> (adv - dec) net
-
-            foreach (var (stock, candles) in allStockData)
-            {
-                if (candles is null || candles.Count < 2) continue;
-
-                var closes = candles.Select(c => c.Close).ToArray();
-                var todayClose       = closes[^1];
-                var previousDayClose = closes[^2];
-
-                // Today's A/D
-                var change = previousDayClose != 0
-                    ? (todayClose - previousDayClose) / previousDayClose * 100m
-                    : 0m;
-
-                if      (change >  0.01m) todayAdvancing++;
-                else if (change < -0.01m) todayDeclining++;
-                else                      todayUnchanged++;
-
-                // 52-week high/low — single-pass
-                decimal high52 = decimal.MinValue;
-                decimal low52  = decimal.MaxValue;
-                foreach (var c in candles)
-                {
-                    if (c.High > high52) high52 = c.High;
-                    if (c.Low  < low52)  low52  = c.Low;
-                }
-
-                if (todayClose >= high52 * 0.98m) newHighs52W++;
-                if (todayClose <= low52  * 1.02m) newLows52W++;
-
-                // Daily A/D diffs for McClellan — last 40 trading days
-                var recentCandles = candles.Count > 41
-                    ? candles.Skip(candles.Count - 41).ToList()
-                    : candles;
-
-                for (int i = 1; i < recentCandles.Count; i++)
-                {
-                    var prevClose = recentCandles[i - 1].Close;
-                    var curClose  = recentCandles[i].Close;
-                    if (prevClose == 0) continue;
-
-                    var dayChange = (curClose - prevClose) / prevClose * 100m;
-                    var date = TimeZoneInfo.ConvertTime(recentCandles[i].Timestamp, Ist).Date;
-
-                    if (!dailyAdDiffs.ContainsKey(date))
-                        dailyAdDiffs[date] = 0;
-
-                    if      (dayChange >  0.01m) dailyAdDiffs[date]++;
-                    else if (dayChange < -0.01m) dailyAdDiffs[date]--;
-                }
-            }
-
-            // ── 20-day rolling A/D ratio ─────────────────────────────────────
             decimal breadthRatio = todayDeclining > 0
                 ? (decimal)todayAdvancing / todayDeclining
-                : todayAdvancing > 0 ? 10m : 1.0m;
+                : todayAdvancing > 0 ? 10m : 1m;
 
-            // ── McClellan Oscillator ─────────────────────────────────────────
-            // EMA(19) of daily A/D diff - EMA(39) of daily A/D diff
-            var sortedDays = dailyAdDiffs.OrderBy(kv => kv.Key).Select(kv => (decimal)kv.Value).ToArray();
+            var sorted = dailyAdDiffs
+                .OrderBy(x => x.Key)
+                .Select(x => (decimal)x.Value)
+                .ToArray();
+
             var mclellan = 0m;
-            if (sortedDays.Length >= 39)
+            if (sorted.Length >= 39)
             {
-                var ema19Series = EMA.CalculateSeries(sortedDays, 19);
-                var ema39Series = EMA.CalculateSeries(sortedDays, 39);
-                mclellan = ema19Series[^1] - ema39Series[^1];
+                var ema19 = EMA.CalculateSeries(sorted, 19);
+                var ema39 = EMA.CalculateSeries(sorted, 39);
+                mclellan = ema19[^1] - ema39[^1];
             }
 
             _logger.LogInformation(
-                "Market breadth: A:{A} D:{D} U:{U} Ratio:{R:F2} NewHighs:{NH} NewLows:{NL} McClellan:{MC:F2}",
-                todayAdvancing, todayDeclining, todayUnchanged, breadthRatio,
-                newHighs52W, newLows52W, mclellan);
+                "Market breadth: A:{A} D:{D} U:{U} Ratio:{R:F2} NH:{NH} NL:{NL} McClellan:{MC:F2}",
+                todayAdvancing, todayDeclining, todayUnchanged,
+                breadthRatio, newHighs52W, newLows52W, mclellan);
 
             return new BreadthAnalysisResult(breadthRatio, newHighs52W, newLows52W, mclellan);
         }
@@ -623,66 +554,72 @@ public class MarketSentimentService : IMarketSentimentService
             return new BreadthAnalysisResult(1.0m, 0, 0, 0m);
         }
     }
-
     /// <summary>
     /// Fetches India VIX with 30-day lookback for 20-day SMA comparison.
     /// Returns VIX close, VIX vs 20DMA, and whether VIX is rising.
     /// </summary>
     private async Task<VolatilityResult> GetVolatilityIndexAsync(
-        DateTime istToday, DateTime utcNow, CancellationToken cancellationToken)
+        DateTime istToday, CancellationToken cancellationToken)
     {
         var defaultResult = new VolatilityResult(20m, 0m, false);
 
         try
         {
-            var vixInstruments = await _instrumentRepository.GetListAsync(
-                i => i.Symbol.Contains("VIX")
-                     && i.InstrumentType == InstrumentType.INDEX
-                     && i.IsActive,
-                cancellationToken);
+            await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
 
-            var vix = vixInstruments.FirstOrDefault();
+            var vix = await context.Instruments
+                .FirstOrDefaultAsync(i =>
+                    i.Symbol.Contains("VIX") &&
+                    i.InstrumentType == InstrumentType.INDEX &&
+                    i.IsActive,
+                    cancellationToken);
+
             if (vix is null)
             {
-                _logger.LogWarning("India VIX instrument not found in database");
+                _logger.LogWarning("India VIX instrument not found");
                 return defaultResult;
             }
 
-            var fromDate = istToday.AddDays(-VixLookbackDays);
-            var candles = (await _candleRepository.GetByInstrumentIdAsync(
-                vix.Id, 1440, fromDate, utcNow, cancellationToken))
+            var fromDateUtc = TimeZoneInfo.ConvertTimeToUtc(
+                istToday.AddDays(-VixLookbackDays), Ist);
+
+            var toDateUtc = TimeZoneInfo.ConvertTimeToUtc(
+                istToday.AddDays(1), Ist);
+
+            // 🔥 SINGLE DB HIT
+            var candles = await context.MarketCandles
+                .Where(c => c.InstrumentId == vix.Id &&
+                            c.Timestamp >= fromDateUtc &&
+                            c.Timestamp <= toDateUtc)
                 .OrderBy(c => c.Timestamp)
-                .ToList();
+                .ToListAsync(cancellationToken);
 
             if (candles.Count == 0)
             {
-                _logger.LogWarning("No VIX candles available");
+                _logger.LogWarning("No VIX candles");
                 return defaultResult;
             }
 
             var closes = candles.Select(c => c.Close).ToArray();
-            var latestClose = closes[^1];
+            var latest = closes[^1];
 
-            // VIX 20-day SMA
-            var vix20DMA  = CalculateSMA(closes, 20);
-            var vixVs20DMA = latestClose - vix20DMA;
+            var sma20 = CalculateSMA(closes, 20);
+            var diff = latest - sma20;
 
-            // VIX rising = latest > previous day
-            var vixRising = closes.Length >= 2 && closes[^1] > closes[^2];
+            var rising = closes.Length >= 2 && closes[^1] > closes[^2];
 
             _logger.LogInformation(
-                "India VIX: {VIX:F2} vs 20DMA:{DMA:F2} (diff:{Diff:F2}) Rising:{Rising}",
-                latestClose, vix20DMA, vixVs20DMA, vixRising);
+                "India VIX: {VIX:F2} vs 20DMA:{DMA:F2} diff:{Diff:F2} Rising:{R}",
+                latest, sma20, diff, rising);
 
-            return new VolatilityResult(latestClose, vixVs20DMA, vixRising);
+            return new VolatilityResult(latest, diff, rising);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error getting volatility index");
+            _logger.LogWarning(ex, "Error getting VIX");
             return defaultResult;
         }
     }
-
     // ── Technical Indicator Helpers (reuse existing Indicators library) ──────
 
     /// <summary>

@@ -33,16 +33,13 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
 });
 
-builder.Services.AddDbContext<TradingDbContext>(options =>
-{
-    options.UseNpgsql(
-        builder.Configuration.GetConnectionString("Supabase"),
-        npgsql =>
-        {
-            npgsql.EnableRetryOnFailure();
-        });
-});
+builder.Services.AddDbContext<TradingDbContext>(options => 
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Supabase")));
 
+builder.Services.AddDbContextFactory<TradingDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Supabase")),
+    ServiceLifetime.Scoped);
+    
 // Core Repositories
 builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<>));
 builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
