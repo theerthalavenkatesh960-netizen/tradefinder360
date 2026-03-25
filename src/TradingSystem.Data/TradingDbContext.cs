@@ -323,36 +323,76 @@ public class TradingDbContext : DbContext
         modelBuilder.Entity<MarketSentiment>(entity =>
         {
             entity.ToTable("market_sentiments");
+
+            // Primary Key
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
-            entity.Property(e => e.Timestamp).HasColumnName("timestamp").IsRequired();
-            entity.Property(e => e.Sentiment).HasColumnName("sentiment").IsRequired()
-                .HasConversion<int>(); // Store enum as int
-            entity.Property(e => e.SentimentScore).HasColumnName("sentiment_score").IsRequired()
-                .HasPrecision(18, 2);
-            entity.Property(e => e.VolatilityIndex).HasColumnName("volatility_index").IsRequired()
-                .HasPrecision(18, 2);
-            entity.Property(e => e.MarketBreadth).HasColumnName("market_breadth").IsRequired()
-                .HasPrecision(18, 4);
-            entity.Property(e => e.IndexPerformance).HasColumnName("index_performance").IsRequired()
-                .HasColumnType("nvarchar(max)");
-            entity.Property(e => e.SectorPerformance).HasColumnName("sector_performance").IsRequired()
-                .HasColumnType("nvarchar(max)");
-            entity.Property(e => e.KeyFactors).HasColumnName("key_factors")
-                .HasColumnType("nvarchar(max)")
+
+            entity.Property(e => e.Id)
+                .HasColumnName("id")
+                .ValueGeneratedOnAdd();
+
+            entity.Property(e => e.Timestamp)
+                .HasColumnName("timestamp")
+                .IsRequired();
+
+            // ✅ FIXED: Store enum as STRING (matches VARCHAR in DB)
+            entity.Property(e => e.Sentiment)
+                .HasColumnName("sentiment")
+                .HasConversion<string>()
+                .IsRequired();
+
+            entity.Property(e => e.SentimentScore)
+                .HasColumnName("sentiment_score")
+                .HasPrecision(5, 2)
+                .IsRequired();
+
+            entity.Property(e => e.VolatilityIndex)
+                .HasColumnName("volatility_index")
+                .HasPrecision(5, 2)
+                .IsRequired();
+
+            entity.Property(e => e.MarketBreadth)
+                .HasColumnName("market_breadth")
+                .HasPrecision(10, 4)
+                .IsRequired();
+
+            // ✅ FIXED: JSONB mapping (NO nvarchar)
+            entity.Property(e => e.IndexPerformance)
+                .HasColumnName("index_performance")
+                .HasColumnType("jsonb")
                 .HasConversion(
                     v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
-                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+                    v => JsonSerializer.Deserialize<List<IndexPerformance>>(v, (JsonSerializerOptions?)null)!
                 );
-            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
 
-            entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_market_sentiments_timestamp");
-            entity.HasIndex(e => e.Sentiment).HasDatabaseName("idx_market_sentiments_sentiment");
-            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.SectorPerformance)
+                .HasColumnName("sector_performance")
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                    v => JsonSerializer.Deserialize<List<SectorPerformance>>(v, (JsonSerializerOptions?)null)!
+                );
 
-            entity.HasIndex(e => e.Timestamp).HasDatabaseName("idx_market_sentiments_timestamp");
-            entity.HasIndex(e => e.Sentiment).HasDatabaseName("idx_market_sentiments_sentiment");
-            entity.HasIndex(e => e.CreatedAt).HasDatabaseName("idx_market_sentiments_created_at");
+            // ✅ FIXED: PostgreSQL native array (NO JSON conversion)
+            entity.Property(e => e.KeyFactors)
+                .HasColumnName("key_factors")
+                .HasColumnType("text[]")
+                .IsRequired();
+
+            entity.Property(e => e.CreatedAt)
+                .HasColumnName("created_at")
+                .IsRequired()
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+            // Indexes
+            entity.HasIndex(e => e.Timestamp)
+                .HasDatabaseName("idx_market_sentiments_timestamp");
+
+            entity.HasIndex(e => e.Sentiment)
+                .HasDatabaseName("idx_market_sentiments_sentiment");
+
+            entity.HasIndex(e => e.CreatedAt)
+                .HasDatabaseName("idx_market_sentiments_created_at");
         });
 
         // FeatureStore - ML Feature Storage

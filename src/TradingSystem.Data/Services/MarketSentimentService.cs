@@ -30,15 +30,22 @@ public class MarketSentimentService : IMarketSentimentService
 
     public async Task<MarketContext> GetCurrentMarketContextAsync(CancellationToken cancellationToken = default)
     {
-        var latestSentiment = await _sentimentRepository.GetLatestAsync(cancellationToken);
-
-        if (latestSentiment == null || (DateTimeOffset.UtcNow - latestSentiment.Timestamp).TotalMinutes > 30)
+        try
         {
-            // Data is stale or missing, generate new analysis
-            return await AnalyzeAndUpdateMarketSentimentAsync(cancellationToken);
+            var latestSentiment = await _sentimentRepository.GetLatestAsync(cancellationToken);
+            if (latestSentiment == null || (DateTimeOffset.UtcNow - latestSentiment.Timestamp).TotalMinutes > 30)
+            {
+                // Data is stale or missing, generate new analysis
+                return await AnalyzeAndUpdateMarketSentimentAsync(cancellationToken);
+            }
+            return MapToMarketContext(latestSentiment);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting current market context");
+            throw;
         }
 
-        return MapToMarketContext(latestSentiment);
     }
 
     public async Task<MarketContext> AnalyzeAndUpdateMarketSentimentAsync(CancellationToken cancellationToken = default)
@@ -74,8 +81,8 @@ public class MarketSentimentService : IMarketSentimentService
                 SentimentScore = sentimentScore,
                 VolatilityIndex = volatilityIndex,
                 MarketBreadth = breadth,
-                IndexPerformance = JsonSerializer.Serialize(indexPerformances),
-                SectorPerformance = JsonSerializer.Serialize(sectorPerformances),
+                IndexPerformance = indexPerformances,
+                SectorPerformance = sectorPerformances,
                 KeyFactors = keyFactors,
                 CreatedAt = DateTimeOffset.UtcNow
             };
@@ -493,15 +500,10 @@ public class MarketSentimentService : IMarketSentimentService
 
     private MarketContext MapToMarketContext(MarketSentiment sentiment)
     {
-        var indices = !string.IsNullOrEmpty(sentiment.IndexPerformance)
-            ? JsonSerializer.Deserialize<List<IndexPerformance>>(sentiment.IndexPerformance) ?? new()
-            : new();
-
-        var sectors = !string.IsNullOrEmpty(sentiment.SectorPerformance)
-            ? JsonSerializer.Deserialize<List<SectorPerformance>>(sentiment.SectorPerformance) ?? new()
-            : new();
-
-        var summary = GenerateSummary(sentiment.Sentiment, sentiment.SentimentScore, sentiment.VolatilityIndex);
+        var summary = GenerateSummary(
+            sentiment.Sentiment,
+            sentiment.SentimentScore,
+            sentiment.VolatilityIndex);
 
         return new MarketContext
         {
@@ -510,13 +512,15 @@ public class MarketSentimentService : IMarketSentimentService
             SentimentScore = sentiment.SentimentScore,
             VolatilityIndex = sentiment.VolatilityIndex,
             MarketBreadth = sentiment.MarketBreadth,
-            MajorIndices = indices,
-            Sectors = sectors,
-            KeyFactors = sentiment.KeyFactors,
+
+            // ✅ Direct mapping (no serialization)
+            MajorIndices = sentiment.IndexPerformance ?? new List<IndexPerformance>(),
+            Sectors = sentiment.SectorPerformance ?? new List<SectorPerformance>(),
+
+            KeyFactors = sentiment.KeyFactors ?? new List<string>(),
             Summary = summary
         };
     }
-
     private string GenerateSummary(SentimentType sentiment, decimal score, decimal volatility)
     {
         var sentimentText = sentiment switch

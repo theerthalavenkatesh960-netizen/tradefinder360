@@ -21,8 +21,10 @@ public class MarketSentiment
     public decimal SentimentScore { get; set; } // -100 to +100
     public decimal VolatilityIndex { get; set; } // VIX equivalent
     public decimal MarketBreadth { get; set; } // Advancing vs Declining ratio
-    public string IndexPerformance { get; set; } = string.Empty; // JSON of index changes
-    public string SectorPerformance { get; set; } = string.Empty; // JSON of sector changes
+    // JSONB fields
+    public List<IndexPerformance> IndexPerformance { get; set; } = new();
+    public List<SectorPerformance> SectorPerformance { get; set; } = new();
+    // PostgreSQL array
     public List<string> KeyFactors { get; set; } = new();
     public DateTimeOffset CreatedAt { get; set; }
 }
