@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TradingSystem.AI.Services;
+using TradingSystem.Api.Services;
 using TradingSystem.Core.Events;
 using TradingSystem.Data;
 using TradingSystem.Data.Repositories;
@@ -89,6 +90,9 @@ builder.Services.AddScoped<TradeRecommendationService>();
 builder.Services.AddScoped<StrategyService>();
 builder.Services.AddScoped<BacktestingService>();
 builder.Services.AddScoped<PortfolioOptimizationService>();
+
+// Backtest Runner
+builder.Services.AddScoped<BacktestRunnerService>();
 
 // Event Bus
 builder.Services.AddSingleton<IEventBus, InMemoryEventBus>();
