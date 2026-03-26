@@ -7,7 +7,6 @@ namespace TradingSystem.Api.Controllers;
 
 [ApiController]
 [Route("api/backtest")]
-[Authorize]
 public class BacktestRunController : ControllerBase
 {
     private static readonly HashSet<int> AllowedTimeframes = [1, 5, 15, 30];
