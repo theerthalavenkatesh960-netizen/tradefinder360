@@ -197,7 +197,7 @@ public class InstrumentController : ControllerBase
         string symbol,
         [FromQuery] string priceTimeframe = "1D",
         [FromQuery] int scanTimeframe = 15,
-        [FromQuery] int candleDays = 30)
+        [FromQuery] int candleDays = 1500)
     {
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
         if (instrument == null)
@@ -322,7 +322,7 @@ public class InstrumentController : ControllerBase
     public async Task<ActionResult<List<CandleDto>>> GetCandles(
         string symbol,
         [FromQuery] int timeframe = 15,
-        [FromQuery] int days = 30,
+        [FromQuery] int days = 1500,
         [FromQuery] DateTime? from = null,
         [FromQuery] DateTime? to = null)
     {
@@ -330,12 +330,10 @@ public class InstrumentController : ControllerBase
         if (instrument == null)
             return NotFound($"Instrument '{symbol}' not found.");
 
-        var fromDate = from ?? DateTime.UtcNow.AddDays(-days);
-        var toDate = to ?? DateTime.UtcNow.AddDays(1);
+        var fromDateUtc = IstNow.AddDays(-days);
+        var toDateUtc = IstNow.AddDays(1);
 
-        var candles = await _candleService.GetCandlesAsync(
-            instrument.Id, timeframe, fromDate, toDate);
-
+        var candles = await _candleService.GetCandlesAsync(instrument.Id, timeframe, fromDateUtc, toDateUtc);
         var dtos = candles
             .OrderBy(c => c.Timestamp)
             .Select(c => new CandleDto

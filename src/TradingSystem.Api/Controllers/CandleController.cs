@@ -35,7 +35,7 @@ public class CandleController : ControllerBase
     public async Task<ActionResult<CandleResponseDto>> GetCandlesBySymbol(
         string symbol,
         [FromQuery] int timeframe = 15,
-        [FromQuery] int daysBack = 30)
+        [FromQuery] int daysBack = 1500)
     {
         if (timeframe <= 0)
         {
