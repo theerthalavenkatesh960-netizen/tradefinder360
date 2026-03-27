@@ -9,6 +9,8 @@ namespace TradingSystem.Api.Controllers;
 [Route("api/candles")]
 public class CandleController : ControllerBase
 {
+    private static readonly TimeZoneInfo Ist = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
     private readonly IInstrumentService _instrumentService;
     private readonly ICandleService _candleService;
     private readonly ILogger<CandleController> _logger;
@@ -74,15 +76,7 @@ public class CandleController : ControllerBase
             FromDate = DateTime.Today.AddDays(-daysBack),
             ToDate = DateTime.Today,
             Count = candles.Count,
-            Candles = candles.Select(c => new CandleDto
-            {
-                Timestamp = c.Timestamp,
-                Open = c.Open,
-                High = c.High,
-                Low = c.Low,
-                Close = c.Close,
-                Volume = c.Volume
-            }).ToList()
+            Candles = candles.Select(c => ToCandleDto(c)).ToList()
         };
 
         return Ok(response);
@@ -143,15 +137,7 @@ public class CandleController : ControllerBase
             FromDate = fromDate,
             ToDate = toDate,
             Count = candles.Count,
-            Candles = candles.Select(c => new CandleDto
-            {
-                Timestamp = c.Timestamp,
-                Open = c.Open,
-                High = c.High,
-                Low = c.Low,
-                Close = c.Close,
-                Volume = c.Volume
-            }).ToList()
+            Candles = candles.Select(c => ToCandleDto(c)).ToList()
         };
 
         return Ok(response);
@@ -193,15 +179,7 @@ public class CandleController : ControllerBase
             Symbol = instrument.Symbol,
             Exchange = instrument.Exchange,
             Timeframe = timeframe,
-            Candle = new CandleDto
-            {
-                Timestamp = candle.Timestamp,
-                Open = candle.Open,
-                High = candle.High,
-                Low = candle.Low,
-                Close = candle.Close,
-                Volume = candle.Volume
-            }
+            Candle = ToCandleDto(candle)
         };
 
         return Ok(response);
@@ -237,4 +215,19 @@ public class CandleController : ControllerBase
 
         return Ok(info);
     }
+
+    /// <summary>
+    /// Converts a Candle to CandleDto, converting the UTC timestamp back to IST.
+    /// EF/Npgsql normalizes TIMESTAMPTZ to UTC on read, so a 09:15 IST candle
+    /// arrives as 03:45 UTC. This restores the original IST time for the UI.
+    /// </summary>
+    private static CandleDto ToCandleDto(Candle c) => new()
+    {
+        Timestamp = TimeZoneInfo.ConvertTime(c.Timestamp, Ist),
+        Open = c.Open,
+        High = c.High,
+        Low = c.Low,
+        Close = c.Close,
+        Volume = c.Volume
+    };
 }
