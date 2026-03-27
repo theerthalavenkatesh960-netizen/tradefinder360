@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
+using TradingSystem.Api.Helpers;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
@@ -197,11 +198,14 @@ public class InstrumentController : ControllerBase
         string symbol,
         [FromQuery] string priceTimeframe = "1D",
         [FromQuery] int scanTimeframe = 15,
-        [FromQuery] int candleDays = 1500)
+        [FromQuery] int candleDays = 0)
     {
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
         if (instrument == null)
             return NotFound($"Instrument '{symbol}' not found.");
+
+        if (candleDays <= 0)
+            candleDays = CandleDataLimits.GetDefaultDaysBack(instrument.InstrumentType, scanTimeframe);
 
         var dto = new InstrumentDetailDto
         {
@@ -322,13 +326,16 @@ public class InstrumentController : ControllerBase
     public async Task<ActionResult<List<CandleDto>>> GetCandles(
         string symbol,
         [FromQuery] int timeframe = 15,
-        [FromQuery] int days = 1500,
+        [FromQuery] int days = 0,
         [FromQuery] DateTime? from = null,
         [FromQuery] DateTime? to = null)
     {
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
         if (instrument == null)
             return NotFound($"Instrument '{symbol}' not found.");
+
+        if (days <= 0)
+            days = CandleDataLimits.GetDefaultDaysBack(instrument.InstrumentType, timeframe);
 
         var fromDateUtc = IstNow.AddDays(-days);
         var toDateUtc = IstNow.AddDays(1);

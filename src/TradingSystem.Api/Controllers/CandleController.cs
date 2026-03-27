@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
+using TradingSystem.Api.Helpers;
 using TradingSystem.Data.Services.Interfaces;
 
 namespace TradingSystem.Api.Controllers;
@@ -27,7 +28,7 @@ public class CandleController : ControllerBase
     /// </summary>
     /// <param name="symbol">Instrument symbol (e.g., RELIANCE, INFY)</param>
     /// <param name="timeframe">Timeframe in minutes (1, 5, 15, 30, 60, etc.)</param>
-    /// <param name="daysBack">Number of days to look back (default: 30)</param>
+    /// <param name="daysBack">Number of days to look back (default: auto-determined based on instrument type and timeframe)</param>
     [HttpGet("{symbol}")]
     [ProducesResponseType(typeof(CandleResponseDto), 200)]
     [ProducesResponseType(404)]
@@ -35,22 +36,28 @@ public class CandleController : ControllerBase
     public async Task<ActionResult<CandleResponseDto>> GetCandlesBySymbol(
         string symbol,
         [FromQuery] int timeframe = 15,
-        [FromQuery] int daysBack = 1500)
+        [FromQuery] int daysBack = 0)
     {
         if (timeframe <= 0)
         {
             return BadRequest("Timeframe must be greater than 0");
         }
 
-        if (daysBack <= 0 || daysBack > 1865)
-        {
-            return BadRequest("Days back must be between 1 and 1865");
-        }
-
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
         if (instrument == null)
         {
             return NotFound($"Instrument with symbol '{symbol}' not found");
+        }
+
+        var maxDays = CandleDataLimits.GetMaxDaysBack(instrument.InstrumentType, timeframe);
+
+        if (daysBack <= 0)
+        {
+            daysBack = maxDays;
+        }
+        else if (daysBack > maxDays)
+        {
+            return BadRequest($"Days back must be between 1 and {maxDays} for {instrument.InstrumentType} with {timeframe}-minute timeframe");
         }
 
         var candles = await _candleService.GetRecentCandlesAsync(
@@ -108,15 +115,17 @@ public class CandleController : ControllerBase
             return BadRequest("fromDate must be before toDate");
         }
 
-        if ((toDate - fromDate).TotalDays > 365)
-        {
-            return BadRequest("Date range cannot exceed 365 days");
-        }
-
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
         if (instrument == null)
         {
             return NotFound($"Instrument with symbol '{symbol}' not found");
+        }
+
+        var maxDays = CandleDataLimits.GetMaxDaysBack(instrument.InstrumentType, timeframe);
+
+        if ((toDate - fromDate).TotalDays > maxDays)
+        {
+            return BadRequest($"Date range cannot exceed {maxDays} days for {instrument.InstrumentType} with {timeframe}-minute timeframe");
         }
 
         var candles = await _candleService.GetCandlesAsync(
