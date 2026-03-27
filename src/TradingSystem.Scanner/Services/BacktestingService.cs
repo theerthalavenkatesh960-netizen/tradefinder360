@@ -79,7 +79,7 @@ public class BacktestingService
         var result = SimulateBacktest(config, instrument, strategy, candles.ToList());
 
         _logger.LogInformation(
-            "Backtest completed: {Trades} trades, {WinRate}% win rate, {Return}% return",
+            "Backtest completed: {Trades} trades, {WinRate:F1}% win rate, {Return:F2}% return",
             result.TotalTrades, result.WinRate, result.TotalReturnPercent);
 
         return result;
@@ -107,24 +107,65 @@ public class BacktestingService
         decimal maxDrawdown = 0m;
         BacktestTrade? currentTrade = null;
         int tradeNumber = 0;
+        int entryBarIndex = -1; // [Fix #5] Track entry bar index directly
 
         // Need minimum bars for indicators
         const int minBarsForIndicators = 50;
         if (candles.Count < minBarsForIndicators)
             throw new InvalidOperationException($"Need at least {minBarsForIndicators} bars for backtesting");
 
-        // Simulate each bar
+        // [Fix #1] Reuse IndicatorEngine — feed candles sequentially, compute all indicators
+        // Uses same parameters as EnsureIndicatorsCalculatedAsync in IndicatorService
+        var engine = new IndicatorEngine(
+            emaFastPeriod: 20, emaSlowPeriod: 50,
+            rsiPeriod: 14,
+            macdFast: 12, macdSlow: 26, macdSignal: 9,
+            adxPeriod: 14, atrPeriod: 14,
+            bollingerPeriod: 20, bollingerStdDev: 2.0m);
+
+        // [Fix #12] Pre-map all candles once instead of O(n²) re-mapping per bar
+        var allCandles = candles.Select(MapToCandle).ToList();
+
+        // Warm up the engine on the first minBarsForIndicators candles
+        for (int i = 0; i < minBarsForIndicators; i++)
+        {
+            engine.Calculate(allCandles[i]);
+        }
+
+        // Simulate each bar from the warmup boundary onward
         for (int i = minBarsForIndicators; i < candles.Count; i++)
         {
             var currentBar = candles[i];
-            var historicalCandles = candles.Take(i + 1).Select(MapToCandle).ToList();
-            
-            // Calculate indicators for current bar
-            var indicators = CalculateIndicators(historicalCandles);
+            var currentCandle = allCandles[i];
+
+            // [Fix #1] Calculate full indicators via the engine (MACD, ADX, Bollinger, VWAP, DI±, etc.)
+            var indicators = engine.Calculate(currentCandle);
+
+            // [Fix #12] Build the historical slice as a span view — only needed for strategy.Evaluate
+            var historicalCandles = allCandles.GetRange(0, i + 1);
 
             // Check if we have an open position
             if (currentTrade != null)
             {
+                // [Fix #7 & #8] Track mark-to-market equity for drawdown and equity curve
+                decimal unrealizedPnL = CalculateUnrealizedPnL(currentTrade, currentBar.Close);
+                decimal markToMarketEquity = currentCapital + unrealizedPnL;
+
+                // Update peak and drawdown using mark-to-market
+                if (markToMarketEquity > peakCapital)
+                {
+                    peakCapital = markToMarketEquity;
+                }
+                else
+                {
+                    var drawdown = peakCapital - markToMarketEquity;
+                    if (drawdown > maxDrawdown)
+                    {
+                        maxDrawdown = drawdown;
+                        result.MaxDrawdownDate = currentBar.Timestamp.DateTime;
+                    }
+                }
+
                 // Check exit conditions
                 var exitResult = CheckExitConditions(
                     currentTrade,
@@ -141,39 +182,38 @@ public class BacktestingService
                     currentTrade.ExitTime = currentBar.Timestamp.DateTime;
                     currentTrade.ExitPrice = exitResult.exitPrice;
                     currentTrade.ExitReason = exitResult.exitReason;
-                    currentTrade.BarsHeld = i - candles.FindIndex(c => c.Timestamp == currentTrade.EntryTime);
+                    currentTrade.BarsHeld = i - entryBarIndex; // [Fix #5] Direct subtraction, no FindIndex
 
                     // Calculate P&L
                     decimal grossPnL = currentTrade.Direction == "BUY"
                         ? (currentTrade.ExitPrice - currentTrade.EntryPrice) * currentTrade.Quantity
                         : (currentTrade.EntryPrice - currentTrade.ExitPrice) * currentTrade.Quantity;
 
+                    // [Fix #6] Commission was already deducted from capital on entry.
+                    // Only add exit commission here. PnL = gross - exit commission only.
                     decimal exitCommission = currentTrade.ExitPrice * currentTrade.Quantity * (config.CommissionPercent / 100);
                     currentTrade.Commission += exitCommission;
 
-                    currentTrade.PnL = grossPnL - currentTrade.Commission;
+                    currentTrade.PnL = grossPnL - exitCommission; // [Fix #6] Subtract only exit commission from gross
                     currentTrade.PnLPercent = (currentTrade.PnL / (currentTrade.EntryPrice * currentTrade.Quantity)) * 100;
 
-                    currentCapital += currentTrade.PnL;
+                    currentCapital += currentTrade.PnL; // Net of exit commission; entry commission already deducted
                     result.Trades.Add(currentTrade);
 
-                    // Update peak and drawdown
+                    // Update peak after trade close as well
                     if (currentCapital > peakCapital)
                     {
                         peakCapital = currentCapital;
                     }
-                    else
-                    {
-                        var drawdown = peakCapital - currentCapital;
-                        if (drawdown > maxDrawdown)
-                        {
-                            maxDrawdown = drawdown;
-                            result.MaxDrawdownDate = currentBar.Timestamp.DateTime;
-                        }
-                    }
 
                     currentTrade = null;
+                    entryBarIndex = -1;
                 }
+
+                // [Fix #8] Record mark-to-market equity (includes unrealized P&L during open trades)
+                result.EquityCurve[currentBar.Timestamp.DateTime] = currentTrade != null
+                    ? markToMarketEquity
+                    : currentCapital;
             }
             else
             {
@@ -189,10 +229,24 @@ public class BacktestingService
                     _ => 60
                 })
                 {
-                    // Open new trade
+                    // [Fix #6] Position size based on risk per trade:
+                    // Risk amount = capital * PositionSizePercent / 100
+                    // Risk per share = |entry - stopLoss|
+                    // Quantity = riskAmount / riskPerShare
                     tradeNumber++;
-                    decimal positionSize = currentCapital * (config.PositionSizePercent / 100);
-                    int quantity = (int)(positionSize / signal.EntryPrice);
+                    decimal riskAmount = currentCapital * (config.PositionSizePercent / 100);
+                    decimal riskPerShare = Math.Abs(signal.EntryPrice - signal.StopLoss);
+
+                    int quantity;
+                    if (riskPerShare > 0)
+                    {
+                        quantity = (int)(riskAmount / riskPerShare);
+                    }
+                    else
+                    {
+                        // Fallback: if stop loss equals entry (shouldn't happen), use old method
+                        quantity = (int)(riskAmount / signal.EntryPrice);
+                    }
 
                     if (quantity > 0)
                     {
@@ -210,13 +264,14 @@ public class BacktestingService
                             Commission = entryCommission
                         };
 
-                        currentCapital -= entryCommission;
+                        entryBarIndex = i; // [Fix #5] Store bar index directly
+                        currentCapital -= entryCommission; // Entry commission deducted from capital once
                     }
                 }
-            }
 
-            // Record equity curve
-            result.EquityCurve[currentBar.Timestamp.DateTime] = currentCapital;
+                // Record equity curve (no open position)
+                result.EquityCurve[currentBar.Timestamp.DateTime] = currentCapital;
+            }
         }
 
         // Close any remaining open trade at the end
@@ -226,7 +281,7 @@ public class BacktestingService
             currentTrade.ExitTime = lastBar.Timestamp.DateTime;
             currentTrade.ExitPrice = lastBar.Close;
             currentTrade.ExitReason = "END_OF_PERIOD";
-            currentTrade.BarsHeld = candles.Count - candles.FindIndex(c => c.Timestamp.DateTime == currentTrade.EntryTime);
+            currentTrade.BarsHeld = (candles.Count - 1) - entryBarIndex; // [Fix #5]
 
             decimal grossPnL = currentTrade.Direction == "BUY"
                 ? (currentTrade.ExitPrice - currentTrade.EntryPrice) * currentTrade.Quantity
@@ -234,7 +289,7 @@ public class BacktestingService
 
             decimal exitCommission = currentTrade.ExitPrice * currentTrade.Quantity * (config.CommissionPercent / 100);
             currentTrade.Commission += exitCommission;
-            currentTrade.PnL = grossPnL - currentTrade.Commission;
+            currentTrade.PnL = grossPnL - exitCommission; // [Fix #6] Only exit commission
             currentTrade.PnLPercent = (currentTrade.PnL / (currentTrade.EntryPrice * currentTrade.Quantity)) * 100;
 
             currentCapital += currentTrade.PnL;
@@ -243,9 +298,19 @@ public class BacktestingService
 
         // Calculate final metrics
         result.FinalCapital = currentCapital;
-        CalculatePerformanceMetrics(result, config.InitialCapital, maxDrawdown);
+        CalculatePerformanceMetrics(result, config, maxDrawdown);
 
         return result;
+    }
+
+    /// <summary>
+    /// Calculate unrealized P&L for an open trade at the given market price.
+    /// </summary>
+    private static decimal CalculateUnrealizedPnL(BacktestTrade trade, decimal currentPrice)
+    {
+        return trade.Direction == "BUY"
+            ? (currentPrice - trade.EntryPrice) * trade.Quantity
+            : (trade.EntryPrice - currentPrice) * trade.Quantity;
     }
 
     private (bool shouldExit, decimal exitPrice, string exitReason) CheckExitConditions(
@@ -257,31 +322,54 @@ public class BacktestingService
         List<Candle> historicalCandles,
         IndicatorValues indicators)
     {
-        // Check stop loss
+        // [Fix #4] When both stop-loss and target can be hit on the same bar,
+        // use the candle Open to determine which was likely hit first.
+        bool slHit = false;
+        bool tgtHit = false;
+
         if (config.UseStopLoss)
         {
-            if (trade.Direction == "BUY" && currentBar.Low <= trade.StopLoss)
+            if (trade.Direction == "BUY")
+                slHit = currentBar.Low <= trade.StopLoss;
+            else
+                slHit = currentBar.High >= trade.StopLoss;
+        }
+
+        if (config.UseTarget)
+        {
+            if (trade.Direction == "BUY")
+                tgtHit = currentBar.High >= trade.Target;
+            else
+                tgtHit = currentBar.Low <= trade.Target;
+        }
+
+        if (slHit && tgtHit)
+        {
+            // Both hit on the same bar — use Open to resolve ambiguity
+            if (trade.Direction == "BUY")
             {
-                return (true, trade.StopLoss, "STOP_LOSS");
+                // If open is closer to (or below) stop, stop was likely hit first
+                bool stopFirst = currentBar.Open <= trade.StopLoss ||
+                    Math.Abs(currentBar.Open - trade.StopLoss) < Math.Abs(currentBar.Open - trade.Target);
+                return stopFirst
+                    ? (true, trade.StopLoss, "STOP_LOSS")
+                    : (true, trade.Target, "TARGET_HIT");
             }
-            if (trade.Direction == "SELL" && currentBar.High >= trade.StopLoss)
+            else
             {
-                return (true, trade.StopLoss, "STOP_LOSS");
+                bool stopFirst = currentBar.Open >= trade.StopLoss ||
+                    Math.Abs(currentBar.Open - trade.StopLoss) < Math.Abs(currentBar.Open - trade.Target);
+                return stopFirst
+                    ? (true, trade.StopLoss, "STOP_LOSS")
+                    : (true, trade.Target, "TARGET_HIT");
             }
         }
 
-        // Check target
-        if (config.UseTarget)
-        {
-            if (trade.Direction == "BUY" && currentBar.High >= trade.Target)
-            {
-                return (true, trade.Target, "TARGET_HIT");
-            }
-            if (trade.Direction == "SELL" && currentBar.Low <= trade.Target)
-            {
-                return (true, trade.Target, "TARGET_HIT");
-            }
-        }
+        if (slHit)
+            return (true, trade.StopLoss, "STOP_LOSS");
+
+        if (tgtHit)
+            return (true, trade.Target, "TARGET_HIT");
 
         // Check for signal reversal
         var signal = strategy.Evaluate(instrument, historicalCandles, indicators);
@@ -293,8 +381,11 @@ public class BacktestingService
         return (false, 0, string.Empty);
     }
 
-    private void CalculatePerformanceMetrics(BacktestResult result, decimal initialCapital, decimal maxDrawdown)
+    private void CalculatePerformanceMetrics(
+        BacktestResult result, BacktestConfig config, decimal maxDrawdown)
     {
+        var initialCapital = config.InitialCapital;
+
         result.TotalTrades = result.Trades.Count;
         result.WinningTrades = result.Trades.Count(t => t.PnL > 0);
         result.LosingTrades = result.Trades.Count(t => t.PnL <= 0);
@@ -312,25 +403,57 @@ public class BacktestingService
         result.AverageWinPercent = winningTrades.Any() ? winningTrades.Average(t => t.PnLPercent) : 0;
         result.AverageLossPercent = losingTrades.Any() ? losingTrades.Average(t => t.PnLPercent) : 0;
 
-        // Risk metrics
+        // Risk metrics — [Fix #7] maxDrawdown now includes intra-trade mark-to-market
         result.MaxDrawdown = maxDrawdown;
-        result.MaxDrawdownPercent = initialCapital > 0 ? (maxDrawdown / initialCapital) * 100 : 0;
+        // [Fix #7] MaxDrawdownPercent should be relative to the peak, not initial capital
+        result.MaxDrawdownPercent = maxDrawdown > 0 && initialCapital > 0
+            ? (maxDrawdown / (initialCapital + result.Trades
+                .Where(t => t.PnL > 0)
+                .Select((_, idx) => result.Trades.Take(idx + 1).Sum(tr => tr.PnL))
+                .DefaultIfEmpty(0)
+                .Max())) * 100
+            : 0;
+        // Simplified: use peak capital from equity curve for more accurate calculation
+        if (result.EquityCurve.Count > 0)
+        {
+            var peakFromCurve = result.EquityCurve.Values.Max();
+            result.MaxDrawdownPercent = peakFromCurve > 0 ? (maxDrawdown / peakFromCurve) * 100 : 0;
+        }
 
         decimal grossProfit = winningTrades.Sum(t => t.PnL);
         decimal grossLoss = Math.Abs(losingTrades.Sum(t => t.PnL));
-        result.ProfitFactor = grossLoss > 0 ? grossProfit / grossLoss : 0;
+        // [Fix #9] ProfitFactor should be positive infinity (max decimal) when no losses, not 0
+        result.ProfitFactor = grossLoss > 0
+            ? grossProfit / grossLoss
+            : grossProfit > 0 ? decimal.MaxValue : 0;
 
-        // Sharpe and Sortino ratios
+        // [Fix #10 & #11] Sharpe and Sortino ratios — sample std dev (N-1), annualized
         if (result.Trades.Count > 1)
         {
             var returns = result.Trades.Select(t => t.PnLPercent).ToList();
             var avgReturn = returns.Average();
             var stdDev = CalculateStandardDeviation(returns);
-            result.SharpeRatio = stdDev > 0 ? avgReturn / stdDev : 0;
+
+            // Annualization factor: estimate trades per year from backtest period
+            var tradingDays = (config.EndDate - config.StartDate).TotalDays;
+            decimal tradesPerYear = tradingDays > 0
+                ? (decimal)(result.TotalTrades / tradingDays * 252)
+                : result.TotalTrades;
+            decimal annualizationFactor = tradesPerYear > 0
+                ? (decimal)Math.Sqrt((double)tradesPerYear)
+                : 1;
+
+            result.SharpeRatio = stdDev > 0
+                ? Math.Round(avgReturn / stdDev * annualizationFactor, 4)
+                : 0;
 
             var negativeReturns = returns.Where(r => r < 0).ToList();
-            var downstdDev = negativeReturns.Any() ? CalculateStandardDeviation(negativeReturns) : 0;
-            result.SortinoRatio = downstdDev > 0 ? avgReturn / downstdDev : 0;
+            var downstdDev = negativeReturns.Count >= 2
+                ? CalculateStandardDeviation(negativeReturns)
+                : 0;
+            result.SortinoRatio = downstdDev > 0
+                ? Math.Round(avgReturn / downstdDev * annualizationFactor, 4)
+                : 0;
         }
 
         // Additional metrics
@@ -344,16 +467,19 @@ public class BacktestingService
         result.ConsecutiveLosses = CalculateMaxConsecutive(result.Trades, false);
     }
 
-    private decimal CalculateStandardDeviation(List<decimal> values)
+    /// <summary>
+    /// [Fix #10] Sample standard deviation using (N-1) denominator (Bessel's correction).
+    /// </summary>
+    private static decimal CalculateStandardDeviation(List<decimal> values)
     {
         if (values.Count < 2) return 0;
 
         var avg = values.Average();
         var sumOfSquares = values.Sum(v => (v - avg) * (v - avg));
-        return (decimal)Math.Sqrt((double)(sumOfSquares / values.Count));
+        return (decimal)Math.Sqrt((double)(sumOfSquares / (values.Count - 1)));
     }
 
-    private int CalculateMaxConsecutive(List<BacktestTrade> trades, bool countWins)
+    private static int CalculateMaxConsecutive(List<BacktestTrade> trades, bool countWins)
     {
         int maxConsecutive = 0;
         int currentConsecutive = 0;
@@ -375,83 +501,7 @@ public class BacktestingService
         return maxConsecutive;
     }
 
-    private IndicatorValues CalculateIndicators(List<Candle> candles)
-    {
-        // Calculate indicators on the fly for backtesting
-        var closes = candles.Select(c => c.Close).ToList();
-        var highs = candles.Select(c => c.High).ToList();
-        var lows = candles.Select(c => c.Low).ToList();
-        var volumes = candles.Select(c => c.Volume).ToList();
-
-        return new IndicatorValues
-        {
-            EMAFast = CalculateEMA(closes, 12),
-            EMASlow = CalculateEMA(closes, 26),
-            RSI = CalculateRSI(closes, 14),
-            ATR = CalculateATR(highs, lows, closes, 14),
-            // Add other indicators as needed
-        };
-    }
-
-    private decimal CalculateEMA(List<decimal> prices, int period)
-    {
-        if (prices.Count < period) return prices.LastOrDefault();
-        
-        decimal multiplier = 2m / (period + 1);
-        decimal ema = prices.Take(period).Average();
-
-        foreach (var price in prices.Skip(period))
-        {
-            ema = (price - ema) * multiplier + ema;
-        }
-
-        return ema;
-    }
-
-    private decimal CalculateRSI(List<decimal> prices, int period)
-    {
-        if (prices.Count < period + 1) return 50m;
-
-        var gains = new List<decimal>();
-        var losses = new List<decimal>();
-
-        for (int i = 1; i < prices.Count; i++)
-        {
-            var change = prices[i] - prices[i - 1];
-            gains.Add(change > 0 ? change : 0);
-            losses.Add(change < 0 ? Math.Abs(change) : 0);
-        }
-
-        var avgGain = gains.TakeLast(period).Average();
-        var avgLoss = losses.TakeLast(period).Average();
-
-        if (avgLoss == 0) return 100m;
-
-        var rs = avgGain / avgLoss;
-        return 100m - (100m / (1m + rs));
-    }
-
-    private decimal CalculateATR(List<decimal> highs, List<decimal> lows, List<decimal> closes, int period)
-    {
-        if (highs.Count < period + 1) return 0;
-
-        var trueRanges = new List<decimal>();
-        for (int i = 1; i < highs.Count; i++)
-        {
-            var tr = Math.Max(
-                highs[i] - lows[i],
-                Math.Max(
-                    Math.Abs(highs[i] - closes[i - 1]),
-                    Math.Abs(lows[i] - closes[i - 1])
-                )
-            );
-            trueRanges.Add(tr);
-        }
-
-        return trueRanges.TakeLast(period).Average();
-    }
-
-    private Candle MapToCandle(MarketCandle mc)
+    private static Candle MapToCandle(MarketCandle mc)
     {
         return new Candle
         {
@@ -460,7 +510,8 @@ public class BacktestingService
             High = mc.High,
             Low = mc.Low,
             Close = mc.Close,
-            Volume = mc.Volume
+            Volume = mc.Volume,
+            TimeframeMinutes = mc.TimeframeMinutes
         };
     }
 
