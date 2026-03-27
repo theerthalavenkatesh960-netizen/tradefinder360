@@ -1,4 +1,4 @@
-using TradingSystem.Api.DTOs;
+﻿using TradingSystem.Api.DTOs;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Indicators;
@@ -11,6 +11,12 @@ public class BacktestRunnerService
     private static readonly TimeOnly MarketOpen = new(9, 15);
     private static readonly TimeOnly MarketClose = new(15, 30);
     private static readonly TimeOnly NoCutoff = new(14, 0);
+
+    /// <summary>Slippage per side as a fraction of price (0.0005 = 0.05%).</summary>
+    private const double SlippageFraction = 0.0005;
+
+    /// <summary>Brokerage + STT + stamp as a fraction of turnover per side.</summary>
+    private const double CommissionFraction = 0.0003;
 
     private readonly ICandleService _candleService;
     private readonly IInstrumentService _instrumentService;
@@ -44,11 +50,16 @@ public class BacktestRunnerService
         var orderedCandles = candles.OrderBy(c => c.Timestamp).ToList();
         var indicators = ComputeIndicators(orderedCandles, request.Strategy.Params);
 
+        // [Fix #14] Pre-compute IST timestamps once for all candles
+        var istTimes = orderedCandles
+            .Select(c => TimeZoneInfo.ConvertTime(c.Timestamp, Ist))
+            .ToArray();
+
         var trades = request.Strategy.Name.ToUpperInvariant() switch
         {
-            "ORB" => RunORB(orderedCandles, indicators, request.Strategy.Params, initialCapital),
-            "RSI_REVERSAL" => RunRsiReversal(orderedCandles, indicators, request.Strategy.Params, initialCapital),
-            "EMA_CROSSOVER" => RunEmaCrossover(orderedCandles, indicators, request.Strategy.Params, initialCapital),
+            "ORB" => RunORB(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+            "RSI_REVERSAL" => RunRsiReversal(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+            "EMA_CROSSOVER" => RunEmaCrossover(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
             _ => throw new ArgumentException($"Unknown strategy: {request.Strategy.Name}")
         };
 
@@ -78,11 +89,12 @@ public class BacktestRunnerService
         return candles.Select(c => engine.Calculate(c)).ToArray();
     }
 
-    // ???????????????????????????????????????????????????????????????
+    // ─────────────────────────────────────────────────────────
     // STRATEGY A: Opening Range Breakout
-    // ???????????????????????????????????????????????????????????????
+    // ─────────────────────────────────────────────────────────
     private List<BacktestTradeResult> RunORB(
-        List<Candle> candles, IndicatorValues[] indicators, StrategyParams p, double capital)
+        List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
+        StrategyParams p, double initialCapital)
     {
         var trades = new List<BacktestTradeResult>();
         var timeframe = p.Timeframe;
@@ -94,11 +106,14 @@ public class BacktestRunnerService
             _ => 1
         };
 
-        // Group candles by trading day in IST
+        // [Fix #14] Group candles by trading day using pre-computed IST times
         var dayGroups = candles
-            .Select((c, i) => (Candle: c, Index: i, Indicator: indicators[i]))
-            .GroupBy(x => TimeZoneInfo.ConvertTime(x.Candle.Timestamp, Ist).Date)
+            .Select((c, i) => (Candle: c, Index: i, Indicator: indicators[i], IstTime: istTimes[i]))
+            .GroupBy(x => x.IstTime.Date)
             .OrderBy(g => g.Key);
+
+        // [Fix #1] Track running capital for compounding position size
+        double runningCapital = initialCapital;
 
         foreach (var dayGroup in dayGroups)
         {
@@ -113,16 +128,19 @@ public class BacktestRunnerService
 
             BacktestTradeResult? openTrade = null;
             double trailStop = 0;
+            // [Fix #7] Cooldown: skip re-entry for N candles after a loss within the same day
+            int cooldownUntilJ = -1;
 
             for (int j = orbCandleCount; j < dayCandles.Count; j++)
             {
-                var (candle, globalIdx, ind) = dayCandles[j];
-                var istTime = TimeZoneInfo.ConvertTime(candle.Timestamp, Ist);
+                var (candle, globalIdx, ind, istTime) = dayCandles[j];
 
                 // Force close at end of day
                 if (j == dayCandles.Count - 1 && openTrade != null)
                 {
-                    trades.Add(CloseTrade(openTrade, candle.Timestamp.UtcDateTime, (double)candle.Close));
+                    var closed = CloseTradeWithCosts(openTrade, candle.Timestamp.UtcDateTime, (double)candle.Close);
+                    runningCapital += closed.Pnl;
+                    trades.Add(closed);
                     openTrade = null;
                     break;
                 }
@@ -133,7 +151,12 @@ public class BacktestRunnerService
                     var exitResult = CheckExit(openTrade, candle, (double)ind.ATR, p, ref trailStop);
                     if (exitResult != null)
                     {
-                        trades.Add(exitResult);
+                        var closed = ApplyCosts(exitResult);
+                        runningCapital += closed.Pnl;
+                        trades.Add(closed);
+                        // [Fix #7] After a loss, cooldown for 3 candles before re-entry
+                        if (closed.Pnl < 0)
+                            cooldownUntilJ = j + 3;
                         openTrade = null;
                     }
                     continue;
@@ -143,27 +166,43 @@ public class BacktestRunnerService
                 if (TimeOnly.FromDateTime(istTime.DateTime) >= NoCutoff)
                     continue;
 
+                // [Fix #7] Respect cooldown
+                if (j <= cooldownUntilJ)
+                    continue;
+
                 // Entry signals
                 var atr = (double)ind.ATR;
                 if (atr <= 0) continue;
 
                 if ((double)candle.Close > openingHigh)
                 {
-                    // LONG breakout � enter at next candle open
+                    // LONG breakout — enter at next candle open
                     if (j + 1 < dayCandles.Count)
                     {
                         var nextCandle = dayCandles[j + 1].Candle;
-                        var entryPrice = (double)nextCandle.Open;
-                        var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High);
+                        var rawEntry = (double)nextCandle.Open;
+                        var entryPrice = ApplySlippage(rawEntry, true); // [Fix #13] slippage on entry
+                        var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High, true);
                         var sl = entryPrice - slDistance;
                         var target = CalcTarget(p, entryPrice, slDistance, atr, true);
-                        var qty = CalcQuantity(capital, p.RiskPercent, slDistance);
+                        var qty = CalcQuantity(runningCapital, p.RiskPercent, slDistance); // [Fix #1]
 
                         openTrade = new BacktestTradeResult(
                             Guid.NewGuid().ToString(),
                             nextCandle.Timestamp.UtcDateTime, entryPrice,
                             default, 0, sl, target, qty, 0, 0, "LONG");
                         trailStop = sl;
+
+                        // [Fix #3] Check if the entry candle itself breaches SL/target
+                        var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                        if (entryBarExit != null)
+                        {
+                            var closed = ApplyCosts(entryBarExit);
+                            runningCapital += closed.Pnl;
+                            trades.Add(closed);
+                            if (closed.Pnl < 0) cooldownUntilJ = j + 3;
+                            openTrade = null;
+                        }
                         j++; // skip the entry candle
                     }
                 }
@@ -173,17 +212,29 @@ public class BacktestRunnerService
                     if (j + 1 < dayCandles.Count)
                     {
                         var nextCandle = dayCandles[j + 1].Candle;
-                        var entryPrice = (double)nextCandle.Open;
-                        var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High);
+                        var rawEntry = (double)nextCandle.Open;
+                        var entryPrice = ApplySlippage(rawEntry, false); // [Fix #13]
+                        var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High, false);
                         var sl = entryPrice + slDistance;
                         var target = CalcTarget(p, entryPrice, slDistance, atr, false);
-                        var qty = CalcQuantity(capital, p.RiskPercent, slDistance);
+                        var qty = CalcQuantity(runningCapital, p.RiskPercent, slDistance); // [Fix #1]
 
                         openTrade = new BacktestTradeResult(
                             Guid.NewGuid().ToString(),
                             nextCandle.Timestamp.UtcDateTime, entryPrice,
                             default, 0, sl, target, qty, 0, 0, "SHORT");
                         trailStop = sl;
+
+                        // [Fix #3] Check if entry candle breaches SL/target
+                        var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                        if (entryBarExit != null)
+                        {
+                            var closed = ApplyCosts(entryBarExit);
+                            runningCapital += closed.Pnl;
+                            trades.Add(closed);
+                            if (closed.Pnl < 0) cooldownUntilJ = j + 3;
+                            openTrade = null;
+                        }
                         j++;
                     }
                 }
@@ -193,22 +244,28 @@ public class BacktestRunnerService
             if (openTrade != null)
             {
                 var lastCandle = dayCandles[^1].Candle;
-                trades.Add(CloseTrade(openTrade, lastCandle.Timestamp.UtcDateTime, (double)lastCandle.Close));
+                var closed = CloseTradeWithCosts(openTrade, lastCandle.Timestamp.UtcDateTime, (double)lastCandle.Close);
+                runningCapital += closed.Pnl;
+                trades.Add(closed);
             }
         }
 
         return trades;
     }
 
-    // ???????????????????????????????????????????????????????????????
+    // ─────────────────────────────────────────────────────────
     // STRATEGY B: RSI Reversal
-    // ???????????????????????????????????????????????????????????????
+    // ─────────────────────────────────────────────────────────
     private List<BacktestTradeResult> RunRsiReversal(
-        List<Candle> candles, IndicatorValues[] indicators, StrategyParams p, double capital)
+        List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
+        StrategyParams p, double initialCapital)
     {
         var trades = new List<BacktestTradeResult>();
         var oversold = p.RsiOversold ?? 30;
         var overbought = p.RsiOverbought ?? 70;
+
+        // [Fix #1] Track running capital
+        double runningCapital = initialCapital;
 
         BacktestTradeResult? openTrade = null;
         double trailStop = 0;
@@ -228,25 +285,36 @@ public class BacktestRunnerService
                 var exitResult = CheckExit(openTrade, candle, (double)ind.ATR, p, ref trailStop);
                 if (exitResult != null)
                 {
-                    // Cooling-off logic: if loss, skip 2 candles in same direction
-                    if (exitResult.Pnl < 0)
+                    var closed = ApplyCosts(exitResult);
+                    runningCapital += closed.Pnl;
+                    // [Fix #15] Cooling-off: skip 5 candles (was 2) in same direction after a loss
+                    if (closed.Pnl < 0)
                     {
-                        cooldownDirection = exitResult.TradeType;
-                        cooldownUntilIndex = i + 2;
+                        cooldownDirection = closed.TradeType;
+                        cooldownUntilIndex = i + 5;
                     }
-                    trades.Add(exitResult);
+                    trades.Add(closed);
                     openTrade = null;
                 }
-                continue;
+                // [Fix #4] Don't continue here — allow force-close check below
+                else
+                {
+                    continue;
+                }
             }
 
-            // Force close on last candle
+            // [Fix #4] Force close on second-to-last candle (now reachable)
             if (i == candles.Count - 2 && openTrade != null)
             {
-                trades.Add(CloseTrade(openTrade, candle.Timestamp.UtcDateTime, (double)candle.Close));
+                var closed = CloseTradeWithCosts(openTrade, candle.Timestamp.UtcDateTime, (double)candle.Close);
+                runningCapital += closed.Pnl;
+                trades.Add(closed);
                 openTrade = null;
                 continue;
             }
+
+            // Skip entry logic if we still have an open trade (exit didn't trigger above)
+            if (openTrade != null) continue;
 
             var atr = (double)ind.ATR;
             if (atr <= 0) continue;
@@ -254,31 +322,53 @@ public class BacktestRunnerService
             var rsiNow = (double)ind.RSI;
             var rsiNext = (double)nextInd.RSI;
 
-            // LONG: RSI crosses back up from oversold, price > VWAP
-            if (rsiNow < oversold && rsiNext > oversold && (double)candle.Close > (double)ind.VWAP)
+            // [Fix #5] Use indicators at i+2 for VWAP confirmation, not stale ones from i
+            // LONG: RSI crosses back up from oversold
+            if (rsiNow < oversold && rsiNext > oversold)
             {
                 if (cooldownDirection == "LONG" && i <= cooldownUntilIndex)
                     continue;
 
                 if (i + 2 < candles.Count)
                 {
-                    var entryCandle = candles[i + 2]; // enter at candle after next
-                    var entryPrice = (double)entryCandle.Open;
-                    var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High);
+                    var entryCandle = candles[i + 2];
+                    var entryInd = indicators[i + 2]; // [Fix #5] Use entry-bar indicators
+
+                    // Confirm price is above VWAP at entry time, not signal time
+                    if ((double)entryCandle.Open <= (double)entryInd.VWAP && entryInd.VWAP > 0)
+                    {
+                        i += 2; // skip ahead but don't enter
+                        continue;
+                    }
+
+                    var rawEntry = (double)entryCandle.Open;
+                    var entryPrice = ApplySlippage(rawEntry, true); // [Fix #13]
+                    var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High, true);
                     var sl = entryPrice - slDistance;
                     var target = CalcTarget(p, entryPrice, slDistance, atr, true);
-                    var qty = CalcQuantity(capital, p.RiskPercent, slDistance);
+                    var qty = CalcQuantity(runningCapital, p.RiskPercent, slDistance); // [Fix #1]
 
                     openTrade = new BacktestTradeResult(
                         Guid.NewGuid().ToString(),
                         entryCandle.Timestamp.UtcDateTime, entryPrice,
                         default, 0, sl, target, qty, 0, 0, "LONG");
                     trailStop = sl;
+
+                    // [Fix #3] Check if entry candle breaches SL/target
+                    var entryBarExit = CheckExit(openTrade, entryCandle, atr, p, ref trailStop);
+                    if (entryBarExit != null)
+                    {
+                        var closed = ApplyCosts(entryBarExit);
+                        runningCapital += closed.Pnl;
+                        trades.Add(closed);
+                        if (closed.Pnl < 0) { cooldownDirection = "LONG"; cooldownUntilIndex = i + 5; }
+                        openTrade = null;
+                    }
                     i += 2;
                 }
             }
-            // SHORT: RSI crosses back down from overbought, price < VWAP
-            else if (rsiNow > overbought && rsiNext < overbought && (double)candle.Close < (double)ind.VWAP)
+            // SHORT: RSI crosses back down from overbought
+            else if (rsiNow > overbought && rsiNext < overbought)
             {
                 if (cooldownDirection == "SHORT" && i <= cooldownUntilIndex)
                     continue;
@@ -286,17 +376,38 @@ public class BacktestRunnerService
                 if (i + 2 < candles.Count)
                 {
                     var entryCandle = candles[i + 2];
-                    var entryPrice = (double)entryCandle.Open;
-                    var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High);
+                    var entryInd = indicators[i + 2]; // [Fix #5]
+
+                    // Confirm price is below VWAP at entry time
+                    if ((double)entryCandle.Open >= (double)entryInd.VWAP && entryInd.VWAP > 0)
+                    {
+                        i += 2;
+                        continue;
+                    }
+
+                    var rawEntry = (double)entryCandle.Open;
+                    var entryPrice = ApplySlippage(rawEntry, false); // [Fix #13]
+                    var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High, false);
                     var sl = entryPrice + slDistance;
                     var target = CalcTarget(p, entryPrice, slDistance, atr, false);
-                    var qty = CalcQuantity(capital, p.RiskPercent, slDistance);
+                    var qty = CalcQuantity(runningCapital, p.RiskPercent, slDistance); // [Fix #1]
 
                     openTrade = new BacktestTradeResult(
                         Guid.NewGuid().ToString(),
                         entryCandle.Timestamp.UtcDateTime, entryPrice,
                         default, 0, sl, target, qty, 0, 0, "SHORT");
                     trailStop = sl;
+
+                    // [Fix #3] Check if entry candle breaches SL/target
+                    var entryBarExit = CheckExit(openTrade, entryCandle, atr, p, ref trailStop);
+                    if (entryBarExit != null)
+                    {
+                        var closed = ApplyCosts(entryBarExit);
+                        runningCapital += closed.Pnl;
+                        trades.Add(closed);
+                        if (closed.Pnl < 0) { cooldownDirection = "SHORT"; cooldownUntilIndex = i + 5; }
+                        openTrade = null;
+                    }
                     i += 2;
                 }
             }
@@ -306,19 +417,25 @@ public class BacktestRunnerService
         if (openTrade != null && candles.Count > 0)
         {
             var last = candles[^1];
-            trades.Add(CloseTrade(openTrade, last.Timestamp.UtcDateTime, (double)last.Close));
+            var closed = CloseTradeWithCosts(openTrade, last.Timestamp.UtcDateTime, (double)last.Close);
+            runningCapital += closed.Pnl;
+            trades.Add(closed);
         }
 
         return trades;
     }
 
-    // ???????????????????????????????????????????????????????????????
+    // ─────────────────────────────────────────────────────────
     // STRATEGY C: EMA Crossover
-    // ???????????????????????????????????????????????????????????????
+    // ─────────────────────────────────────────────────────────
     private List<BacktestTradeResult> RunEmaCrossover(
-        List<Candle> candles, IndicatorValues[] indicators, StrategyParams p, double capital)
+        List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
+        StrategyParams p, double initialCapital)
     {
         var trades = new List<BacktestTradeResult>();
+
+        // [Fix #1] Track running capital
+        double runningCapital = initialCapital;
 
         BacktestTradeResult? openTrade = null;
         double trailStop = 0;
@@ -343,7 +460,9 @@ public class BacktestRunnerService
 
                 if (oppositeSignal)
                 {
-                    trades.Add(CloseTrade(openTrade, candle.Timestamp.UtcDateTime, (double)candle.Close));
+                    var closed = CloseTradeWithCosts(openTrade, candle.Timestamp.UtcDateTime, (double)candle.Close);
+                    runningCapital += closed.Pnl;
+                    trades.Add(closed);
                     openTrade = null;
                     // Fall through to check for new entry on this candle
                 }
@@ -352,7 +471,9 @@ public class BacktestRunnerService
                     var exitResult = CheckExit(openTrade, candle, atr, p, ref trailStop);
                     if (exitResult != null)
                     {
-                        trades.Add(exitResult);
+                        var closed = ApplyCosts(exitResult);
+                        runningCapital += closed.Pnl;
+                        trades.Add(closed);
                         openTrade = null;
                     }
                     continue;
@@ -367,34 +488,56 @@ public class BacktestRunnerService
             if (bullishCross && i + 1 < candles.Count)
             {
                 var nextCandle = candles[i + 1];
-                var entryPrice = (double)nextCandle.Open;
-                var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High);
+                var rawEntry = (double)nextCandle.Open;
+                var entryPrice = ApplySlippage(rawEntry, true); // [Fix #13]
+                var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High, true);
                 var sl = entryPrice - slDistance;
                 var target = CalcTarget(p, entryPrice, slDistance, atr, true);
-                var qty = CalcQuantity(capital, p.RiskPercent, slDistance);
+                var qty = CalcQuantity(runningCapital, p.RiskPercent, slDistance); // [Fix #1]
 
                 openTrade = new BacktestTradeResult(
                     Guid.NewGuid().ToString(),
                     nextCandle.Timestamp.UtcDateTime, entryPrice,
                     default, 0, sl, target, qty, 0, 0, "LONG");
                 trailStop = sl;
+
+                // [Fix #3] Check entry candle for immediate exit
+                var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                if (entryBarExit != null)
+                {
+                    var closed = ApplyCosts(entryBarExit);
+                    runningCapital += closed.Pnl;
+                    trades.Add(closed);
+                    openTrade = null;
+                }
                 i++;
             }
             // Bearish crossover
             else if (bearishCross && i + 1 < candles.Count)
             {
                 var nextCandle = candles[i + 1];
-                var entryPrice = (double)nextCandle.Open;
-                var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High);
+                var rawEntry = (double)nextCandle.Open;
+                var entryPrice = ApplySlippage(rawEntry, false); // [Fix #13]
+                var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High, false);
                 var sl = entryPrice + slDistance;
                 var target = CalcTarget(p, entryPrice, slDistance, atr, false);
-                var qty = CalcQuantity(capital, p.RiskPercent, slDistance);
+                var qty = CalcQuantity(runningCapital, p.RiskPercent, slDistance); // [Fix #1]
 
                 openTrade = new BacktestTradeResult(
                     Guid.NewGuid().ToString(),
                     nextCandle.Timestamp.UtcDateTime, entryPrice,
                     default, 0, sl, target, qty, 0, 0, "SHORT");
                 trailStop = sl;
+
+                // [Fix #3] Check entry candle for immediate exit
+                var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                if (entryBarExit != null)
+                {
+                    var closed = ApplyCosts(entryBarExit);
+                    runningCapital += closed.Pnl;
+                    trades.Add(closed);
+                    openTrade = null;
+                }
                 i++;
             }
         }
@@ -403,25 +546,48 @@ public class BacktestRunnerService
         if (openTrade != null && candles.Count > 0)
         {
             var last = candles[^1];
-            trades.Add(CloseTrade(openTrade, last.Timestamp.UtcDateTime, (double)last.Close));
+            var closed = CloseTradeWithCosts(openTrade, last.Timestamp.UtcDateTime, (double)last.Close);
+            runningCapital += closed.Pnl;
+            trades.Add(closed);
         }
 
         return trades;
     }
 
-    // ???????????????????????????????????????????????????????????????
+    // ─────────────────────────────────────────────────────────
     // SHARED HELPERS
-    // ???????????????????????????????????????????????????????????????
+    // ─────────────────────────────────────────────────────────
 
-    private static double CalcStopLossDistance(StrategyParams p, double entryPrice, double atr, double candleLow, double candleHigh)
+    /// <summary>
+    /// [Fix #13] Apply slippage to entry price.
+    /// LONG entries slip up (worse fill), SHORT entries slip down.
+    /// </summary>
+    private static double ApplySlippage(double price, bool isLong)
     {
-        return p.StopLossType.ToUpperInvariant() switch
+        return isLong
+            ? price * (1 + SlippageFraction)
+            : price * (1 - SlippageFraction);
+    }
+
+    /// <summary>
+    /// [Fix #12] Direction-aware stop-loss distance.
+    /// LONG uses entry-to-low, SHORT uses high-to-entry for CANDLE mode.
+    /// </summary>
+    private static double CalcStopLossDistance(
+        StrategyParams p, double entryPrice, double atr, double candleLow, double candleHigh, bool isLong)
+    {
+        var distance = p.StopLossType.ToUpperInvariant() switch
         {
             "ATR" => atr * 1.5,
             "FIXED_PERCENT" => entryPrice * ((p.SlPercent ?? 1.0) / 100.0),
-            "CANDLE" => Math.Max(entryPrice - candleLow, candleHigh - entryPrice),
+            "CANDLE" => isLong
+                ? Math.Max(entryPrice - candleLow, atr * 0.5) // [Fix #12] LONG: distance to candle low
+                : Math.Max(candleHigh - entryPrice, atr * 0.5), // SHORT: distance from candle high
             _ => atr * 1.5
         };
+
+        // Guard: ensure stop distance is at least 0.25 × ATR to avoid absurdly tight stops
+        return Math.Max(distance, atr * 0.25);
     }
 
     private static double CalcTarget(StrategyParams p, double entryPrice, double slDistance, double atr, bool isLong)
@@ -432,7 +598,7 @@ public class BacktestRunnerService
             return isLong ? entryPrice + targetDistance : entryPrice - targetDistance;
         }
 
-        // TRAILING � initial target set far away; trailing stop handles the exit
+        // TRAILING — initial target set far away; trailing stop handles the exit
         var farDistance = slDistance * 10;
         return isLong ? entryPrice + farDistance : entryPrice - farDistance;
     }
@@ -445,45 +611,83 @@ public class BacktestRunnerService
         return Math.Max(qty, 1);
     }
 
+    /// <summary>
+    /// [Fix #2 & #6] Exit check with same-bar ambiguity resolution.
+    /// When both SL and target are hit on the same bar, uses Open proximity to decide.
+    /// [Fix #6] In trailing mode, updates stop using previous bar's extreme (caller provides
+    /// current candle — the trailStop was set from prior bars, only breach is checked here
+    /// after a conservative update).
+    /// </summary>
     private static BacktestTradeResult? CheckExit(
         BacktestTradeResult trade, Candle candle, double atr, StrategyParams p, ref double trailStop)
     {
         bool isLong = trade.TradeType == "LONG";
         double high = (double)candle.High;
         double low = (double)candle.Low;
+        double open = (double)candle.Open;
 
         if (p.TargetType.Equals("TRAILING", StringComparison.OrdinalIgnoreCase))
         {
+            // [Fix #6] For trailing mode, the trailStop should tighten based on
+            // the previous bar's extreme. Since we process bar-by-bar, we update
+            // trailStop conservatively: use (high - 1×ATR) for LONG, (low + 1×ATR) for SHORT.
+            // The key fix: check breach BEFORE tightening with current bar data.
             if (isLong)
             {
-                trailStop = Math.Max(trailStop, high - atr);
                 if (low <= trailStop)
                     return CloseTrade(trade, candle.Timestamp.UtcDateTime, trailStop);
+                // Only tighten after confirming no breach on this bar
+                trailStop = Math.Max(trailStop, high - atr);
             }
             else
             {
-                trailStop = Math.Min(trailStop, low + atr);
                 if (high >= trailStop)
                     return CloseTrade(trade, candle.Timestamp.UtcDateTime, trailStop);
+                trailStop = Math.Min(trailStop, low + atr);
             }
             return null;
         }
 
-        // RR_RATIO mode: check SL then target
+        // [Fix #2] RR_RATIO mode: detect if both SL and target are hit on same bar
+        bool slHit, tgtHit;
         if (isLong)
         {
-            if (low <= trade.StopLoss)
-                return CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.StopLoss);
-            if (high >= trade.Target)
-                return CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.Target);
+            slHit = low <= trade.StopLoss;
+            tgtHit = high >= trade.Target;
         }
         else
         {
-            if (high >= trade.StopLoss)
-                return CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.StopLoss);
-            if (low <= trade.Target)
-                return CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.Target);
+            slHit = high >= trade.StopLoss;
+            tgtHit = low <= trade.Target;
         }
+
+        if (slHit && tgtHit)
+        {
+            // Use Open to determine which was likely hit first
+            var distToSl = Math.Abs(open - trade.StopLoss);
+            var distToTgt = Math.Abs(open - trade.Target);
+
+            if (isLong)
+            {
+                // If open is at or below SL, stop hit first
+                bool stopFirst = open <= trade.StopLoss || distToSl < distToTgt;
+                return stopFirst
+                    ? CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.StopLoss)
+                    : CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.Target);
+            }
+            else
+            {
+                bool stopFirst = open >= trade.StopLoss || distToSl < distToTgt;
+                return stopFirst
+                    ? CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.StopLoss)
+                    : CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.Target);
+            }
+        }
+
+        if (slHit)
+            return CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.StopLoss);
+        if (tgtHit)
+            return CloseTrade(trade, candle.Timestamp.UtcDateTime, trade.Target);
 
         return null;
     }
@@ -507,17 +711,47 @@ public class BacktestRunnerService
         };
     }
 
-    // ???????????????????????????????????????????????????????????????
-    // METRICS
-    // ???????????????????????????????????????????????????????????????
+    /// <summary>
+    /// [Fix #13] Apply commission costs to a closed trade.
+    /// Deducts round-trip commission from PnL.
+    /// </summary>
+    private static BacktestTradeResult ApplyCosts(BacktestTradeResult closed)
+    {
+        var turnover = (closed.EntryPrice + closed.ExitPrice) * closed.Quantity;
+        var totalCommission = turnover * CommissionFraction;
+        var adjustedPnl = closed.Pnl - totalCommission;
+        var adjustedPct = closed.EntryPrice != 0 && closed.Quantity > 0
+            ? (adjustedPnl / (closed.EntryPrice * closed.Quantity)) * 100.0
+            : 0;
 
-    private static BacktestMetrics CalculateMetrics(List<BacktestTradeResult> trades, double initialCapital, List<Candle> candles)
+        return closed with
+        {
+            Pnl = Math.Round(adjustedPnl, 2),
+            PnlPercent = Math.Round(adjustedPct, 2)
+        };
+    }
+
+    /// <summary>
+    /// Close a trade and apply costs in one step (for force-close scenarios).
+    /// </summary>
+    private static BacktestTradeResult CloseTradeWithCosts(BacktestTradeResult open, DateTime exitTime, double exitPrice)
+    {
+        var closed = CloseTrade(open, exitTime, exitPrice);
+        return ApplyCosts(closed);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // METRICS
+    // ─────────────────────────────────────────────────────────
+
+    private static BacktestMetrics CalculateMetrics(
+        List<BacktestTradeResult> trades, double initialCapital, List<Candle> candles)
     {
         if (trades.Count == 0)
             return EmptyMetrics(initialCapital, candles.Count > 0 ? candles[0].Timestamp.UtcDateTime : DateTime.UtcNow);
 
         int totalTrades = trades.Count;
-        int winningTrades = trades.Count(t => t.Pnl >= 0);
+        int winningTrades = trades.Count(t => t.Pnl > 0); // [Fix #10] Strict > 0
         int losingTrades = trades.Count(t => t.Pnl < 0);
         double winRate = (double)winningTrades / totalTrades;
         double totalPnl = trades.Sum(t => t.Pnl);
@@ -525,16 +759,24 @@ public class BacktestRunnerService
 
         double grossProfit = trades.Where(t => t.Pnl > 0).Sum(t => t.Pnl);
         double grossLoss = Math.Abs(trades.Where(t => t.Pnl < 0).Sum(t => t.Pnl));
-        double profitFactor = grossLoss > 0 ? grossProfit / grossLoss : 0;
+        // [Fix #9] ProfitFactor: when no losses, use a large number instead of 0
+        double profitFactor = grossLoss > 0
+            ? grossProfit / grossLoss
+            : grossProfit > 0 ? 9999.0 : 0;
 
-        // Avg RR per trade
+        // [Fix #11] Avg RR per trade — signed: positive for wins, negative for losses
         double avgRR = trades.Average(t =>
         {
             var risk = Math.Abs(t.EntryPrice - t.StopLoss);
-            return risk > 0 ? Math.Abs(t.ExitPrice - t.EntryPrice) / risk : 0;
+            if (risk <= 0) return 0;
+            bool isLong = t.TradeType == "LONG";
+            var signedMove = isLong
+                ? t.ExitPrice - t.EntryPrice
+                : t.EntryPrice - t.ExitPrice;
+            return signedMove / risk;
         });
 
-        // Equity curve and max drawdown
+        // [Fix #8] Equity curve with intra-trade mark-to-market points
         var equityCurve = new List<EquityPoint>();
         double equity = initialCapital;
         double peak = initialCapital;
@@ -544,15 +786,58 @@ public class BacktestRunnerService
         if (candles.Count > 0)
             equityCurve.Add(new EquityPoint(candles[0].Timestamp.UtcDateTime, initialCapital));
 
-        foreach (var trade in trades.OrderBy(t => t.ExitTime))
+        // Build a lookup of trade entry/exit times for mark-to-market
+        var orderedTrades = trades.OrderBy(t => t.EntryTime).ToList();
+        int tradeIdx = 0;
+        BacktestTradeResult? activeTrade = null;
+
+        foreach (var candle in candles)
         {
-            equity += trade.Pnl;
-            equityCurve.Add(new EquityPoint(trade.ExitTime, Math.Round(equity, 2)));
+            var candleTime = candle.Timestamp.UtcDateTime;
 
-            if (equity > peak)
-                peak = equity;
+            // Check if a new trade opened on this candle
+            while (tradeIdx < orderedTrades.Count && orderedTrades[tradeIdx].EntryTime <= candleTime)
+            {
+                var t = orderedTrades[tradeIdx];
+                if (t.ExitTime <= candleTime)
+                {
+                    // Trade opened and closed before/on this candle
+                    equity += t.Pnl;
+                    tradeIdx++;
+                }
+                else
+                {
+                    // Trade is open during this candle
+                    activeTrade = t;
+                    tradeIdx++;
+                    break;
+                }
+            }
 
-            var drawdown = peak - equity;
+            // Check if active trade closed on this candle
+            if (activeTrade != null && activeTrade.ExitTime <= candleTime)
+            {
+                equity += activeTrade.Pnl;
+                activeTrade = null;
+            }
+
+            // Mark-to-market: include unrealized P&L
+            double mtmEquity = equity;
+            if (activeTrade != null)
+            {
+                double currentPrice = (double)candle.Close;
+                double unrealized = activeTrade.TradeType == "LONG"
+                    ? (currentPrice - activeTrade.EntryPrice) * activeTrade.Quantity
+                    : (activeTrade.EntryPrice - currentPrice) * activeTrade.Quantity;
+                mtmEquity += unrealized;
+            }
+
+            equityCurve.Add(new EquityPoint(candleTime, Math.Round(mtmEquity, 2)));
+
+            if (mtmEquity > peak)
+                peak = mtmEquity;
+
+            var drawdown = peak - mtmEquity;
             if (drawdown > maxDrawdown)
                 maxDrawdown = drawdown;
         }
