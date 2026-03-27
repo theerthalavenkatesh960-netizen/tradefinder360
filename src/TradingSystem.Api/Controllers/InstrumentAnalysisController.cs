@@ -203,40 +203,46 @@ public class InstrumentAnalysisController : ControllerBase
         var fromDate = IstToday.AddDays(-daysBack);
         var toDate = IstToday.AddDays(1);
 
-        // Ensure indicators are calculated for all available candle data
-        var allIndicators = await _indicatorService.EnsureIndicatorsCalculatedAsync(
-            instrument.Id, timeframe, fromDate, toDate);
-
-        if (allIndicators.Count == 0)
-            return NotFound($"No indicator history found for '{symbol}'.");
-
-        // Take the most recent 'limit' snapshots
-        var snapshots = allIndicators
-            .OrderByDescending(s => s.Timestamp)
-            .Take(limit)
-            .OrderBy(s => s.Timestamp)
-            .ToList();
-
-        var dtos = snapshots.Select(s => new IndicatorSnapshotDto
+        try
         {
-            EMAFast = s.EMAFast,
-            EMASlow = s.EMASlow,
-            RSI = s.RSI,
-            MacdLine = s.MacdLine,
-            MacdSignal = s.MacdSignal,
-            MacdHistogram = s.MacdHistogram,
-            ADX = s.ADX,
-            PlusDI = s.PlusDI,
-            MinusDI = s.MinusDI,
-            ATR = s.ATR,
-            BollingerUpper = s.BollingerUpper,
-            BollingerMiddle = s.BollingerMiddle,
-            BollingerLower = s.BollingerLower,
-            VWAP = s.VWAP,
-            Timestamp = s.Timestamp
-        }).ToList();
+            // Ensure indicators are calculated for all available candle data
+            var allIndicators = await _indicatorService.EnsureIndicatorsCalculatedAsync(
+                instrument.Id, timeframe, fromDate, toDate);
 
-        return Ok(dtos);
+            if (allIndicators.Count == 0)
+                return NotFound($"No indicator history found for '{symbol}'.");
+
+            // Take the most recent 'limit' snapshots
+            var snapshots = allIndicators
+                .OrderByDescending(s => s.Timestamp)
+                .OrderBy(s => s.Timestamp)
+                .ToList();
+
+            var dtos = snapshots.Select(s => new IndicatorSnapshotDto
+            {
+                EMAFast = s.EMAFast,
+                EMASlow = s.EMASlow,
+                RSI = s.RSI,
+                MacdLine = s.MacdLine,
+                MacdSignal = s.MacdSignal,
+                MacdHistogram = s.MacdHistogram,
+                ADX = s.ADX,
+                PlusDI = s.PlusDI,
+                MinusDI = s.MinusDI,
+                ATR = s.ATR,
+                BollingerUpper = s.BollingerUpper,
+                BollingerMiddle = s.BollingerMiddle,
+                BollingerLower = s.BollingerLower,
+                VWAP = s.VWAP,
+                Timestamp = s.Timestamp
+            }).ToList();
+
+            return Ok(dtos);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Error retrieving indicator history: {ex.Message}");
+        }
     }
 
     [HttpPost("{symbol}/recommend")]
