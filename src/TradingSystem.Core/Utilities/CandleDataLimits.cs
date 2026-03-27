@@ -21,22 +21,22 @@ public static class CandleDataLimits
         {
             InstrumentType.INDEX => timeframeMinutes switch
             {
-                >= 375 or 1440 => 1500,  // 1D candles — from 2021
-                >= 15          => 730,   // 15m and above intraday — ~2 years
-                _              => 548    // 1m, 5m — ~1.5 years
+                >= 375 or 1440 => 1500,  // 1D candles ï¿½ from 2021
+                >= 15          => 730,   // 15m and above intraday ï¿½ ~2 years
+                _              => 548    // 1m, 5m ï¿½ ~1.5 years
             },
             _ => timeframeMinutes switch  // STOCK (default)
             {
-                >= 375 or 1440 => 1500,  // 1D candles — from 2021
-                >= 15          => 180,   // 15m and above intraday — ~6 months
-                _              => 90     // 1m, 5m — ~3 months
+                >= 375 or 1440 => 1500,  // 1D candles ï¿½ from 2021
+                >= 15          => 210,   // 15m and above intraday ï¿½ ~6 months
+                _              => 120     // 1m, 5m ï¿½ ~3 months
             }
         };
     }
 
     /// <summary>
     /// Returns the maximum allowed daysBack for validation purposes.
-    /// Same as the default — callers should not request more than what is stored.
+    /// Same as the default ï¿½ callers should not request more than what is stored.
     /// </summary>
     public static int GetMaxDaysBack(InstrumentType instrumentType, int timeframeMinutes)
     {
