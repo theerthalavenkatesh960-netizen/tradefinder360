@@ -349,3 +349,8 @@ This strategy should produce:
 Avoid overtrading.
 
 Focus on precision.
+
+
+Cannot write DateTimeOffset with Offset=05:30:00 
+to PostgreSQL type 'timestamp with time zone'
+only offset 0 (UTC) is supported
