@@ -1,4 +1,5 @@
 using TradingSystem.Core.Models;
+using TradingSystem.Core.Utilities;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Indicators;
 using TradingSystem.Scanner.Models;
@@ -62,7 +63,8 @@ public class MarketScannerService
             return MapSnapshotToResult(lastScan);
         }
 
-        var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes);
+        var daysBack = CandleDataLimits.GetDefaultDaysBack(instrument.InstrumentType, timeframeMinutes);
+        var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes, daysBack);
 
         if (candles.Count < 50)
             return null;

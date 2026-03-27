@@ -161,8 +161,9 @@ public class IndicatorSnapshotsUpdateJob : IJob
         }
         else
         {
-            // First run — go back 3 months + warmup buffer
-            fetchFrom = IstToday.AddMonths(-3).AddDays(-(MinCandlesRequired / 25));
+            // First run — use CandleDataLimits to determine how far back to go
+            var daysBack = CandleDataLimits.GetDefaultDaysBack(instrument.InstrumentType, TimeframeMinutes);
+            fetchFrom = IstToday.AddDays(-daysBack);
         }
  
         // FIX: IstToday not DateTime.Today (server local != IST)

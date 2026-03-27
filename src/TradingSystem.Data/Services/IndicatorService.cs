@@ -1,5 +1,6 @@
  
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Indicators;
@@ -8,11 +9,23 @@ namespace TradingSystem.Data.Services;
  
 public class IndicatorService : IIndicatorService
 {
+    private const int MinCandlesForWarmup = 100;
+
+    private static readonly TimeZoneInfo Ist =
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
     private readonly TradingDbContext _db;
+    private readonly ICandleService _candleService;
+    private readonly ILogger<IndicatorService> _logger;
  
-    public IndicatorService(TradingDbContext db)
+    public IndicatorService(
+        TradingDbContext db,
+        ICandleService candleService,
+        ILogger<IndicatorService> logger)
     {
         _db = db;
+        _candleService = candleService;
+        _logger = logger;
     }
  
     /// <summary>
@@ -134,5 +147,140 @@ public class IndicatorService : IIndicatorService
             .OrderBy(s => s.Timestamp)
             .AsNoTracking()
             .ToListAsync();
+
+    public async Task<List<IndicatorSnapshot>> GetByDateRangeAsync(
+        int instrumentId, int timeframeMinutes,
+        DateTimeOffset fromUtc, DateTimeOffset toUtc,
+        CancellationToken cancellationToken = default)
+        => await _db.IndicatorSnapshots
+            .Where(s => s.InstrumentId == instrumentId
+                     && s.TimeframeMinutes == timeframeMinutes
+                     && s.Timestamp >= fromUtc
+                     && s.Timestamp <= toUtc)
+            .OrderBy(s => s.Timestamp)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+    public async Task<List<IndicatorSnapshot>> EnsureIndicatorsCalculatedAsync(
+        int instrumentId, int timeframeMinutes,
+        DateTime fromDate, DateTime toDate,
+        CancellationToken cancellationToken = default)
+    {
+        // Convert IST boundaries → UTC for DB comparison
+        var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
+        var toUtc   = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
+
+        // 1. Get existing snapshots in the requested range
+        var existingSnapshots = await GetByDateRangeAsync(
+            instrumentId, timeframeMinutes, fromUtc, toUtc, cancellationToken);
+
+        // 2. Get candles already in the DB — NO Upstox API calls
+        var candles = await _candleService.GetCandlesFromDbAsync(
+            instrumentId, timeframeMinutes, fromDate, toDate);
+
+        if (candles.Count == 0)
+            return existingSnapshots;
+
+        // 3. Build a HashSet of existing indicator timestamps (UTC) for O(1) lookup
+        var existingTimestamps = existingSnapshots
+            .Select(s => s.Timestamp.ToUniversalTime())
+            .ToHashSet();
+
+        // 4. Find candle timestamps that have no corresponding indicator snapshot
+        var candlesWithoutIndicators = candles
+            .Where(c => !existingTimestamps.Contains(c.Timestamp.ToUniversalTime()))
+            .ToList();
+
+        if (candlesWithoutIndicators.Count == 0)
+            return existingSnapshots; // Everything is already calculated
+
+        _logger.LogInformation(
+            "Instrument {Id} {TF}m — {Missing} candles missing indicators out of {Total}. Backfilling...",
+            instrumentId, timeframeMinutes,
+            candlesWithoutIndicators.Count, candles.Count);
+
+        // 5. Fetch full candle history including warmup buffer — DB only, no API calls
+        var warmupFrom = fromDate.AddMinutes(-(MinCandlesForWarmup * timeframeMinutes));
+        var allCandles = await _candleService.GetCandlesFromDbAsync(
+            instrumentId, timeframeMinutes, warmupFrom, toDate);
+
+        if (allCandles.Count < MinCandlesForWarmup)
+        {
+            _logger.LogDebug(
+                "Instrument {Id} {TF}m — insufficient candles for warmup ({Count}/{Min})",
+                instrumentId, timeframeMinutes, allCandles.Count, MinCandlesForWarmup);
+            return existingSnapshots;
+        }
+
+        var orderedCandles = allCandles.OrderBy(c => c.Timestamp).ToList();
+
+        // 6. Build a set of timestamps that need calculation
+        var missingTimestamps = candlesWithoutIndicators
+            .Select(c => c.Timestamp.ToUniversalTime())
+            .ToHashSet();
+
+        // 7. Run indicator engine over ALL candles (warmup + data range)
+        //    but only save snapshots for the missing ones
+        var engine = new IndicatorEngine(
+            emaFastPeriod: 20, emaSlowPeriod: 50,
+            rsiPeriod: 14,
+            macdFast: 12, macdSlow: 26, macdSignal: 9,
+            adxPeriod: 14, atrPeriod: 14,
+            bollingerPeriod: 20, bollingerStdDev: 2.0m);
+
+        var newSnapshots = new List<IndicatorSnapshot>();
+
+        foreach (var candle in orderedCandles)
+        {
+            var indicators = engine.Calculate(candle);
+
+            // Only save if this timestamp is one of the missing ones
+            if (!missingTimestamps.Contains(candle.Timestamp.ToUniversalTime()))
+                continue;
+
+            // Skip warmup-phase values (indicators not yet stable)
+            if (indicators.EMASlow == 0 || indicators.ADX == 0 ||
+                indicators.ATR == 0 || indicators.BollingerMiddle == 0)
+                continue;
+
+            newSnapshots.Add(new IndicatorSnapshot
+            {
+                InstrumentId     = instrumentId,
+                TimeframeMinutes = timeframeMinutes,
+                Timestamp        = candle.Timestamp,
+                EMAFast          = Math.Round(indicators.EMAFast,         4, MidpointRounding.AwayFromZero),
+                EMASlow          = Math.Round(indicators.EMASlow,         4, MidpointRounding.AwayFromZero),
+                RSI              = Math.Round(indicators.RSI,             4, MidpointRounding.AwayFromZero),
+                MacdLine         = Math.Round(indicators.MacdLine,        4, MidpointRounding.AwayFromZero),
+                MacdSignal       = Math.Round(indicators.MacdSignal,      4, MidpointRounding.AwayFromZero),
+                MacdHistogram    = Math.Round(indicators.MacdHistogram,   4, MidpointRounding.AwayFromZero),
+                ADX              = Math.Round(indicators.ADX,             4, MidpointRounding.AwayFromZero),
+                PlusDI           = Math.Round(indicators.PlusDI,          4, MidpointRounding.AwayFromZero),
+                MinusDI          = Math.Round(indicators.MinusDI,         4, MidpointRounding.AwayFromZero),
+                ATR              = Math.Round(indicators.ATR,             4, MidpointRounding.AwayFromZero),
+                BollingerUpper   = Math.Round(indicators.BollingerUpper,  4, MidpointRounding.AwayFromZero),
+                BollingerMiddle  = Math.Round(indicators.BollingerMiddle, 4, MidpointRounding.AwayFromZero),
+                BollingerLower   = Math.Round(indicators.BollingerLower,  4, MidpointRounding.AwayFromZero),
+                VWAP             = Math.Round(indicators.VWAP,            4, MidpointRounding.AwayFromZero),
+            });
+        }
+
+        // 8. Persist new snapshots
+        if (newSnapshots.Count > 0)
+        {
+            await BulkSaveAsync(newSnapshots, cancellationToken);
+
+            _logger.LogInformation(
+                "Instrument {Id} {TF}m — backfilled {Count} indicator snapshots",
+                instrumentId, timeframeMinutes, newSnapshots.Count);
+        }
+
+        // 9. Return the complete set (existing + newly calculated)
+        var allSnapshots = existingSnapshots
+            .Concat(newSnapshots)
+            .OrderBy(s => s.Timestamp)
+            .ToList();
+
+        return allSnapshots;
+    }
 }
- 

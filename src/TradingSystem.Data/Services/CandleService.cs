@@ -248,6 +248,17 @@ public class CandleService : ICandleService
         return await GetCandlesAsync(instrumentId, timeframeMinutes, fromDate, toDate);
     }
 
+    public async Task<List<Candle>> GetCandlesFromDbAsync(int instrumentId, int timeframeMinutes, DateTime fromDate, DateTime toDate)
+    {
+        var marketCandles = await _candleRepository.GetByInstrumentIdAsync(
+            instrumentId,
+            timeframeMinutes,
+            fromDate,
+            toDate);
+
+        return marketCandles.Select(c => c.ToCandle()).ToList();
+    }
+
     public async Task<Candle?> GetLatestCandleAsync(int instrumentId, int timeframeMinutes)
     {
         var marketCandle = await _candleRepository.GetLatestCandleAsync(instrumentId, timeframeMinutes);

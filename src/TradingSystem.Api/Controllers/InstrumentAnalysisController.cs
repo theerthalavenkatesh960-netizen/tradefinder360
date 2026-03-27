@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Core.Models;
+using TradingSystem.Core.Utilities;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
@@ -13,6 +14,12 @@ namespace TradingSystem.Api.Controllers;
 [Route("api/instrumentAnalysis")]
 public class InstrumentAnalysisController : ControllerBase
 {
+    private static readonly TimeZoneInfo Ist =
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
+    private static DateTime IstToday =>
+        TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist).Date;
+
     private readonly IInstrumentService _instrumentService;
     private readonly IIndicatorService _indicatorService;
     private readonly MarketScannerService _scanner;
@@ -43,14 +50,22 @@ public class InstrumentAnalysisController : ControllerBase
         if (instrument == null || !instrument.IsActive)
             return NotFound($"Instrument '{symbol}' not found.");
 
-        var latestIndicator = await _indicatorService.GetLatestAsync(instrument.Id, timeframe);
+        // Ensure indicators are calculated for the appropriate date range
+        var daysBack = CandleDataLimits.GetDefaultDaysBack(instrument.InstrumentType, timeframe);
+        var fromDate = IstToday.AddDays(-daysBack);
+        var toDate = IstToday.AddDays(1);
+
+        var allIndicators = await _indicatorService.EnsureIndicatorsCalculatedAsync(
+            instrument.Id, timeframe, fromDate, toDate);
+
+        var latestIndicator = allIndicators.LastOrDefault();
 
         if (latestIndicator == null)
-            return NotFound($"No indicator data found for '{symbol}'. Ensure data has been fetched.");
+            return NotFound($"No indicator data found for '{symbol}'. Ensure candle data has been fetched.");
 
         var scanResult = await _scanner.ScanInstrumentAsync(instrument, timeframe);
 
-        // ✅ FIXED: Run gate validation to explain WHY no recommendation exists
+        // ...existing recommendation/gate logic...
         var recommendation = await _recommender.GetLatestForInstrumentAsync(instrument.Id);
         EntryGuidanceDto? guidance = null;
         string explanation;
@@ -76,7 +91,6 @@ public class InstrumentAnalysisController : ControllerBase
         }
         else
         {
-            // ✅ ADDED: Explain gate failure instead of generic message
             var indicators = new IndicatorValues
             {
                 ADX = latestIndicator.ADX,
@@ -184,10 +198,24 @@ public class InstrumentAnalysisController : ControllerBase
         if (instrument == null)
             return NotFound($"Instrument '{symbol}' not found.");
 
-        var snapshots = await _indicatorService.GetRecentAsync(instrument.Id, timeframe, limit);
+        // Use the appropriate date range based on instrument type + timeframe
+        var daysBack = CandleDataLimits.GetDefaultDaysBack(instrument.InstrumentType, timeframe);
+        var fromDate = IstToday.AddDays(-daysBack);
+        var toDate = IstToday.AddDays(1);
 
-        if (!snapshots.Any())
+        // Ensure indicators are calculated for all available candle data
+        var allIndicators = await _indicatorService.EnsureIndicatorsCalculatedAsync(
+            instrument.Id, timeframe, fromDate, toDate);
+
+        if (allIndicators.Count == 0)
             return NotFound($"No indicator history found for '{symbol}'.");
+
+        // Take the most recent 'limit' snapshots
+        var snapshots = allIndicators
+            .OrderByDescending(s => s.Timestamp)
+            .Take(limit)
+            .OrderBy(s => s.Timestamp)
+            .ToList();
 
         var dtos = snapshots.Select(s => new IndicatorSnapshotDto
         {
