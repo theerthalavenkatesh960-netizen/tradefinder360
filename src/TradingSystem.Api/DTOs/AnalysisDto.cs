@@ -9,6 +9,14 @@ public class AnalysisDto
     public IndicatorSnapshotDto Indicators { get; set; } = new();
     public TrendStateDto TrendState { get; set; } = new();
     public EntryGuidanceDto? EntryGuidance { get; set; }
+
+    // New context sections
+    public NoTradeContextDto? NoTradeContext { get; set; }
+    public VolumeContextDto? VolumeContext { get; set; }
+    public StructureLevelsDto? StructureLevels { get; set; }
+    public SignalTimingDto? SignalTiming { get; set; }
+    public MarketRegimeDto? MarketRegime { get; set; }
+
     public int Confidence { get; set; }
     public string Explanation { get; set; } = string.Empty;
     public List<string> ReasoningPoints { get; set; } = new();
@@ -63,4 +71,70 @@ public class EntryGuidanceDto
     public decimal RiskRewardRatio { get; set; }
     public string? OptionType { get; set; }
     public decimal? OptionStrike { get; set; }
+
+    // New confidence breakdown
+    public ConfidenceBreakdownDto? ConfidenceBreakdown { get; set; }
+    public int? ExpectedHoldingMinutes { get; set; }
+    public decimal? MaxAdverseExcursionPct { get; set; }
+    public decimal? MaxFavorableExcursionPct { get; set; }
+}
+
+// ?? New DTOs ?????????????????????????????????????????????????
+
+public class NoTradeContextDto
+{
+    public string WhyNoTradeCode { get; set; } = string.Empty;
+    public string WhyNoTradeMessage { get; set; } = string.Empty;
+    public decimal? NextTriggerPrice { get; set; }
+    public string? NextTriggerCondition { get; set; }
+    public int? EstimatedRecheckMinutes { get; set; }
+    public DateTimeOffset? InvalidatesAt { get; set; }
+}
+
+public class VolumeContextDto
+{
+    public long CurrentVolume { get; set; }
+    public long Volume20Avg { get; set; }
+    public decimal RelativeVolume { get; set; }
+    public decimal? DeliveryVolumeRatio { get; set; }
+    public bool IsAboveAverage { get; set; }
+}
+
+public class StructureLevelsDto
+{
+    public decimal? SessionHigh { get; set; }
+    public decimal? SessionLow { get; set; }
+    public decimal? PreviousDayHigh { get; set; }
+    public decimal? PreviousDayLow { get; set; }
+    public decimal? NearestSupport { get; set; }
+    public decimal? NearestResistance { get; set; }
+    public decimal? Pivot { get; set; }
+    public decimal? R1 { get; set; }
+    public decimal? S1 { get; set; }
+}
+
+public class SignalTimingDto
+{
+    public int? SignalAgeBars { get; set; }
+    public int? BarsSinceMacdCross { get; set; }
+    public int? BarsSinceRsiZoneExit { get; set; }
+    public int SignalFreshnessScore { get; set; }
+}
+
+public class MarketRegimeDto
+{
+    public string VolatilityRegime { get; set; } = string.Empty;
+    public int TrendStrengthScore { get; set; }
+    public int RangeCompressionScore { get; set; }
+    public int MomentumQualityScore { get; set; }
+}
+
+public class ConfidenceBreakdownDto
+{
+    public int Trend { get; set; }
+    public int Momentum { get; set; }
+    public int Volume { get; set; }
+    public int Structure { get; set; }
+    public int Volatility { get; set; }
+    public int Total { get; set; }
 }

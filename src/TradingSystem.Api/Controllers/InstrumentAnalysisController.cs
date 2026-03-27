@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
+using TradingSystem.Api.Helpers;
 using TradingSystem.Core.Models;
-using TradingSystem.Core.Utilities;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
@@ -22,6 +22,7 @@ public class InstrumentAnalysisController : ControllerBase
 
     private readonly IInstrumentService _instrumentService;
     private readonly IIndicatorService _indicatorService;
+    private readonly ICandleService _candleService;
     private readonly MarketScannerService _scanner;
     private readonly TradeRecommendationService _recommender;
     private readonly IInstrumentPriceRepository _priceRepository;
@@ -29,12 +30,14 @@ public class InstrumentAnalysisController : ControllerBase
     public InstrumentAnalysisController(
         IInstrumentService instrumentService,
         IIndicatorService indicatorService,
+        ICandleService candleService,
         MarketScannerService scanner,
         TradeRecommendationService recommender,
         IInstrumentPriceRepository priceRepository)
     {
         _instrumentService = instrumentService;
         _indicatorService = indicatorService;
+        _candleService = candleService;
         _scanner = scanner;
         _recommender = recommender;
         _priceRepository = priceRepository;
@@ -63,11 +66,38 @@ public class InstrumentAnalysisController : ControllerBase
         if (latestIndicator == null)
             return NotFound($"No indicator data found for '{symbol}'. Ensure candle data has been fetched.");
 
+        // Fetch recent candles for context calculations (DB only, no API)
+        var candles = await _candleService.GetCandlesFromDbAsync(
+            instrument.Id, timeframe, IstToday.AddDays(-30), toDate);
+
         var scanResult = await _scanner.ScanInstrumentAsync(instrument, timeframe);
 
-        // ...existing recommendation/gate logic...
+        // Build indicator values for helper calculations
+        var indicatorValues = new IndicatorValues
+        {
+            EMAFast = latestIndicator.EMAFast,
+            EMASlow = latestIndicator.EMASlow,
+            RSI = latestIndicator.RSI,
+            MacdLine = latestIndicator.MacdLine,
+            MacdSignal = latestIndicator.MacdSignal,
+            MacdHistogram = latestIndicator.MacdHistogram,
+            ADX = latestIndicator.ADX,
+            PlusDI = latestIndicator.PlusDI,
+            MinusDI = latestIndicator.MinusDI,
+            ATR = latestIndicator.ATR,
+            BollingerUpper = latestIndicator.BollingerUpper,
+            BollingerMiddle = latestIndicator.BollingerMiddle,
+            BollingerLower = latestIndicator.BollingerLower,
+            VWAP = latestIndicator.VWAP,
+            Timestamp = latestIndicator.Timestamp
+        };
+
+        var lastClose = scanResult?.LastClose ?? candles.LastOrDefault()?.Close ?? 0;
+
+        // Recommendation / entry guidance
         var recommendation = await _recommender.GetLatestForInstrumentAsync(instrument.Id);
         EntryGuidanceDto? guidance = null;
+        NoTradeContextDto? noTradeContext = null;
         string explanation;
         List<string> reasoningPoints;
         int confidence;
@@ -85,28 +115,47 @@ public class InstrumentAnalysisController : ControllerBase
                 OptionType = recommendation.OptionType,
                 OptionStrike = recommendation.OptionStrike
             };
+
+            // Enrich with confidence breakdown and excursion estimates
+            if (scanResult != null)
+            {
+                guidance.ConfidenceBreakdown = AnalysisContextBuilder.BuildConfidenceBreakdown(
+                    scanResult, indicatorValues, candles);
+            }
+
+            guidance.ExpectedHoldingMinutes = AnalysisContextBuilder.EstimateHoldingMinutes(
+                recommendation.EntryPrice, recommendation.Target, indicatorValues.ATR, timeframe);
+
+            var (mae, mfe) = AnalysisContextBuilder.EstimateExcursion(
+                recommendation.EntryPrice, indicatorValues.ATR);
+            guidance.MaxAdverseExcursionPct = mae;
+            guidance.MaxFavorableExcursionPct = mfe;
+
             explanation = recommendation.ExplanationText;
             reasoningPoints = recommendation.ReasoningPoints;
             confidence = recommendation.Confidence;
         }
         else
         {
-            var indicators = new IndicatorValues
-            {
-                ADX = latestIndicator.ADX,
-                VWAP = latestIndicator.VWAP,
-                EMAFast = latestIndicator.EMAFast,
-                EMASlow = latestIndicator.EMASlow,
-            };
-            var lastClose = scanResult?.LastClose ?? 0;
             var direction = scanResult?.Bias == ScanBias.BULLISH ? "BUY" : "SELL";
 
             explanation = scanResult != null
-                ? $"No active recommendation — {BuildGateExplanation(scanResult, indicators, lastClose, direction)}"
+                ? $"No active recommendation — {BuildGateExplanation(scanResult, indicatorValues, lastClose, direction)}"
                 : "No recommendation generated for current market conditions.";
             reasoningPoints = scanResult?.Reasons ?? [];
             confidence = scanResult?.SetupScore ?? 0;
+
+            // Build no-trade diagnostics
+            noTradeContext = AnalysisContextBuilder.BuildNoTradeContext(
+                scanResult, indicatorValues, lastClose, candles, timeframe);
         }
+
+        // Build enriched context sections (always present)
+        var recentIndicators = allIndicators
+            .OrderByDescending(s => s.Timestamp)
+            .Take(50)
+            .OrderBy(s => s.Timestamp)
+            .ToList();
 
         var dto = new AnalysisDto
         {
@@ -149,10 +198,15 @@ public class InstrumentAnalysisController : ControllerBase
                 }
             } : new TrendStateDto { State = "UNKNOWN" },
             EntryGuidance = guidance,
+            NoTradeContext = noTradeContext,
+            VolumeContext = AnalysisContextBuilder.BuildVolumeContext(candles),
+            StructureLevels = AnalysisContextBuilder.BuildStructureLevels(candles),
+            SignalTiming = AnalysisContextBuilder.BuildSignalTiming(recentIndicators),
+            MarketRegime = AnalysisContextBuilder.BuildMarketRegime(indicatorValues, candles),
             Confidence = confidence,
             Explanation = explanation,
             ReasoningPoints = reasoningPoints,
-            AnalysedAt = DateTime.UtcNow
+            AnalysedAt = DateTimeOffset.UtcNow
         };
 
         return Ok(dto);
