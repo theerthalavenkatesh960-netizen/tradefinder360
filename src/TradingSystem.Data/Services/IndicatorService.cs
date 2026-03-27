@@ -150,13 +150,13 @@ public class IndicatorService : IIndicatorService
 
     public async Task<List<IndicatorSnapshot>> GetByDateRangeAsync(
         int instrumentId, int timeframeMinutes,
-        DateTimeOffset fromUtc, DateTimeOffset toUtc,
+        DateTimeOffset fromDate, DateTimeOffset toDate,
         CancellationToken cancellationToken = default)
         => await _db.IndicatorSnapshots
             .Where(s => s.InstrumentId == instrumentId
                      && s.TimeframeMinutes == timeframeMinutes
-                     && s.Timestamp >= fromUtc
-                     && s.Timestamp <= toUtc)
+                     && s.Timestamp >= fromDate
+                     && s.Timestamp <= toDate)
             .OrderBy(s => s.Timestamp)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
@@ -167,12 +167,15 @@ public class IndicatorService : IIndicatorService
         CancellationToken cancellationToken = default)
     {
         // Convert IST boundaries → UTC for DB comparison
+        // var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
+        // var toUtc   = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
+
         var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
-        var toUtc   = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
+        var toUtc = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
 
         // 1. Get existing snapshots in the requested range
         var existingSnapshots = await GetByDateRangeAsync(
-            instrumentId, timeframeMinutes, fromUtc, toUtc, cancellationToken);
+            instrumentId, timeframeMinutes, fromDate, toDate, cancellationToken);
 
         // 2. Get candles already in the DB — NO Upstox API calls
         var candles = await _candleService.GetCandlesFromDbAsync(

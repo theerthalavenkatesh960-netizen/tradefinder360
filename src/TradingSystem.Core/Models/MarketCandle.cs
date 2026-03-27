@@ -2,6 +2,7 @@ namespace TradingSystem.Core.Models;
 
 public class MarketCandle
 {
+    private static readonly TimeZoneInfo Ist = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
     public long Id { get; set; }
     public int InstrumentId { get; set; }
     public int TimeframeMinutes { get; set; }
@@ -16,7 +17,7 @@ public class MarketCandle
     public TradingInstrument? Instrument { get; set; }
     public Candle ToCandle() => new Candle
     {
-        Timestamp = Timestamp,
+        Timestamp = TimeZoneInfo.ConvertTime(Timestamp, Ist),
         Open = Open,
         High = High,
         Low = Low,

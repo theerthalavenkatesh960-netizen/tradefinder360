@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Api.Helpers;
+using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 
 namespace TradingSystem.Api.Controllers;
