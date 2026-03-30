@@ -1,0 +1,356 @@
+You are a senior quantitative developer working on an existing .NET backtesting engine.
+
+I already have a method called RunORB that implements a basic Opening Range Breakout strategy.
+
+Your task is to IMPROVE this method without changing its structure drastically.
+
+---------------------------------------
+
+GOAL
+
+Upgrade the ORB strategy from a naive breakout system to a more realistic, professional-grade intraday strategy.
+
+Do NOT rewrite everything.
+
+Enhance logic inside existing flow.
+
+---------------------------------------
+
+CURRENT LOGIC ISSUES
+
+- Direct breakout entries (no confirmation)
+- No trend filter
+- Weak volume validation
+- Too many false breakouts
+- No volatility filtering beyond ATR
+- No retest logic
+
+---------------------------------------
+
+REQUIRED IMPROVEMENTS
+
+1) BREAKOUT VALIDATION
+
+- Only consider CLOSE breakout (already present)
+- Add buffer:
+    breakout must exceed openingHigh/Low by at least 0.05%
+
+---------------------------------------
+
+2) RETEST ENTRY (IMPORTANT)
+
+Do NOT enter immediately on breakout.
+
+Instead:
+
+- Wait for price to RETEST breakout level
+- Enter only if price holds above (bullish) or below (bearish)
+
+---------------------------------------
+
+3) VOLUME CONFIRMATION
+
+Enhance existing volume logic:
+
+- Breakout candle volume must be > 1.5x average of last 10 candles
+
+---------------------------------------
+
+4) TREND FILTER (15-min logic approximation)
+
+Add lightweight trend filter using existing indicators:
+
+- Use EMA(20)
+
+Rules:
+
+Bullish:
+    price > EMA20
+    EMA slope upward
+
+Bearish:
+    price < EMA20
+    EMA slope downward
+
+---------------------------------------
+
+5) VOLATILITY FILTER
+
+Skip day if:
+
+- Opening range < 0.3% of price (low volatility)
+- Opening range > 2.5% (extreme volatility)
+
+---------------------------------------
+
+6) TIME FILTER
+
+Allow trades only:
+
+- 09:20 to 10:30 IST
+
+Stop new entries after cutoff.
+
+---------------------------------------
+
+7) FALSE BREAKOUT PROTECTION
+
+Ignore breakout if:
+
+- Next candle immediately reverses fully inside range
+
+---------------------------------------
+
+8) RISK MANAGEMENT
+
+Keep existing logic but ensure:
+
+- Minimum RR = 2.5
+- Prefer 3:1
+
+---------------------------------------
+
+9) TRADE LIMIT
+
+- Max 1–2 trades per day
+
+---------------------------------------
+
+10) CLEAN CODE
+
+- Do NOT break method signature
+- Add helper methods where needed
+- Keep it readable
+
+---------------------------------------
+
+OUTPUT
+
+Return improved RunORB method with:
+
+- Comments explaining each improvement
+- Minimal structural disruption
+- Production-quality logic
+
+---------------------------------------
+
+GOAL
+
+Reduce overtrading and false signals.
+
+Focus on high-quality trades.
+
+
+
+
+
+
+
+
+
+
+
+You are a senior .NET quantitative developer.
+
+I have an existing backtesting engine with a method RunORB.
+
+Your task is to create a NEW strategy method:
+
+RunOrbFvgStrategy
+
+This should integrate cleanly into the existing system.
+
+---------------------------------------
+
+GOAL
+
+Implement a high-quality intraday strategy based on:
+
+- Opening Range Breakout (ORB)
+- Fair Value Gap (FVG)
+- Retracement
+- Engulfing confirmation
+
+This is a multi-step strategy.
+
+---------------------------------------
+
+STRATEGY LOGIC
+
+STEP 1: OPENING RANGE
+
+- Use first 5 candles (1-min) → 09:15–09:20
+- Define:
+    openingHigh
+    openingLow
+
+---------------------------------------
+
+STEP 2: BREAKOUT DETECTION
+
+After 09:20:
+
+Bullish:
+    close > openingHigh
+
+Bearish:
+    close < openingLow
+
+IMPORTANT:
+
+- Only CLOSE breakout
+- Ignore wicks
+
+---------------------------------------
+
+STEP 3: STATE MACHINE (VERY IMPORTANT)
+
+Implement a state-based flow:
+
+States:
+
+- WaitingForBreakout
+- WaitingForFvg
+- WaitingForRetrace
+- WaitingForEngulfing
+- TradeTriggered
+
+---------------------------------------
+
+STEP 4: FVG DETECTION
+
+Use 3-candle structure:
+
+Bullish:
+    candle1.high < candle3.low
+
+Bearish:
+    candle1.low > candle3.high
+
+Rules:
+
+- Must form AFTER breakout
+- Ignore small gaps:
+    minimum gap = 0.1% price
+
+---------------------------------------
+
+STEP 5: RETRACE INTO FVG
+
+- Wait for price to come back into FVG zone
+- No chasing breakout
+
+---------------------------------------
+
+STEP 6: ENGULFING CONFIRMATION
+
+Bullish:
+
+- Current candle engulfs previous
+- Close > previous high
+
+Bearish:
+
+- Current candle engulfs previous
+- Close < previous low
+
+---------------------------------------
+
+STEP 7: TREND FILTER
+
+Use EMA(20):
+
+Bullish:
+    price > EMA
+    EMA rising
+
+Bearish:
+    price < EMA
+    EMA falling
+
+---------------------------------------
+
+STEP 8: VOLUME FILTER
+
+- Engulfing candle volume > average last 10 candles
+
+---------------------------------------
+
+STEP 9: ENTRY
+
+- Entry at next candle OPEN
+
+---------------------------------------
+
+STEP 10: STOP LOSS
+
+Bullish:
+    below FVG low
+
+Bearish:
+    above FVG high
+
+---------------------------------------
+
+STEP 11: TARGET
+
+- Risk:Reward = 3:1
+
+---------------------------------------
+
+STEP 12: TIME FILTER
+
+- Trade only between 09:20–10:30 IST
+
+---------------------------------------
+
+STEP 13: RISK CONTROL
+
+- Max 1 trade per day
+- Skip low volatility days
+
+---------------------------------------
+
+STEP 14: OUTPUT
+
+Return List<BacktestTradeResult>
+
+Use existing:
+
+- cost functions
+- slippage
+- quantity logic
+
+---------------------------------------
+
+STEP 15: CODE REQUIREMENTS
+
+- Clean C#
+- Reuse existing utilities
+- Add helper methods:
+
+    DetectFvg()
+    IsEngulfing()
+    IsTrendValid()
+
+- Use clear variable names
+- Comment each step
+
+---------------------------------------
+
+GOAL
+
+This strategy should produce:
+
+- Fewer trades
+- Higher accuracy
+- Better RR trades
+
+Avoid overtrading.
+
+Focus on precision.
+
+
+Cannot write DateTimeOffset with Offset=05:30:00 
+to PostgreSQL type 'timestamp with time zone'
+only offset 0 (UTC) is supported

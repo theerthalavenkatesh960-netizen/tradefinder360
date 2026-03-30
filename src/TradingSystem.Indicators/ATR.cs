@@ -3,8 +3,9 @@ namespace TradingSystem.Indicators;
 public class ATR
 {
     private readonly int _period;
-    private readonly EMA _ema;
     private decimal? _previousClose;
+    private decimal? _smoothedATR;
+    private readonly Queue<decimal> _trSeed;
 
     public ATR(int period)
     {
@@ -12,7 +13,7 @@ public class ATR
             throw new ArgumentException("Period must be greater than 0", nameof(period));
 
         _period = period;
-        _ema = new EMA(period);
+        _trSeed = new Queue<decimal>(period);
     }
 
     public decimal Calculate(decimal high, decimal low, decimal close)
@@ -22,18 +23,34 @@ public class ATR
         if (_previousClose == null)
         {
             trueRange = high - low;
-        }
-        else
-        {
-            var highLow = high - low;
-            var highClose = Math.Abs(high - _previousClose.Value);
-            var lowClose = Math.Abs(low - _previousClose.Value);
-
-            trueRange = Math.Max(highLow, Math.Max(highClose, lowClose));
+            _previousClose = close;
+            return 0m; // Return 0 until seeded
         }
 
+        // TrueRange = max(High-Low, abs(High-PrevClose), abs(Low-PrevClose))
+        var highLow = high - low;
+        var highClose = Abs(high - _previousClose.Value);
+        var lowClose = Abs(low - _previousClose.Value);
+        trueRange = Max(highLow, Max(highClose, lowClose));
         _previousClose = close;
-        return _ema.Calculate(trueRange);
+
+        // Seed with simple average of first 14 TrueRange values
+        if (_smoothedATR == null)
+        {
+            _trSeed.Enqueue(trueRange);
+
+            if (_trSeed.Count < _period)
+            {
+                return 0m; // Return 0 until seed complete
+            }
+
+            _smoothedATR = _trSeed.Average();
+            return _smoothedATR.Value;
+        }
+
+        // Wilder's smoothing: ATR = ((PrevATR × 13) + CurrentTR) / 14
+        _smoothedATR = ((_smoothedATR.Value * (_period - 1)) + trueRange) / _period;
+        return _smoothedATR.Value;
     }
 
     public static decimal[] CalculateSeries(decimal[] highs, decimal[] lows, decimal[] closes, int period)
@@ -54,4 +71,8 @@ public class ATR
 
         return results;
     }
+
+    private static decimal Abs(decimal value) => value < 0 ? -value : value;
+
+    private static decimal Max(decimal a, decimal b) => a > b ? a : b;
 }

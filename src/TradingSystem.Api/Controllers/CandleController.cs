@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
+using TradingSystem.Api.Helpers;
+using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 
 namespace TradingSystem.Api.Controllers;
@@ -8,6 +10,8 @@ namespace TradingSystem.Api.Controllers;
 [Route("api/candles")]
 public class CandleController : ControllerBase
 {
+    private static readonly TimeZoneInfo Ist = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
     private readonly IInstrumentService _instrumentService;
     private readonly ICandleService _candleService;
     private readonly ILogger<CandleController> _logger;
@@ -27,7 +31,7 @@ public class CandleController : ControllerBase
     /// </summary>
     /// <param name="symbol">Instrument symbol (e.g., RELIANCE, INFY)</param>
     /// <param name="timeframe">Timeframe in minutes (1, 5, 15, 30, 60, etc.)</param>
-    /// <param name="daysBack">Number of days to look back (default: 30)</param>
+    /// <param name="daysBack">Number of days to look back (default: auto-determined based on instrument type and timeframe)</param>
     [HttpGet("{symbol}")]
     [ProducesResponseType(typeof(CandleResponseDto), 200)]
     [ProducesResponseType(404)]
@@ -35,22 +39,28 @@ public class CandleController : ControllerBase
     public async Task<ActionResult<CandleResponseDto>> GetCandlesBySymbol(
         string symbol,
         [FromQuery] int timeframe = 15,
-        [FromQuery] int daysBack = 30)
+        [FromQuery] int daysBack = 0)
     {
         if (timeframe <= 0)
         {
             return BadRequest("Timeframe must be greater than 0");
         }
 
-        if (daysBack <= 0 || daysBack > 365)
-        {
-            return BadRequest("Days back must be between 1 and 365");
-        }
-
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
         if (instrument == null)
         {
             return NotFound($"Instrument with symbol '{symbol}' not found");
+        }
+
+        var maxDays = CandleDataLimits.GetMaxDaysBack(instrument.InstrumentType, timeframe);
+
+        if (daysBack <= 0)
+        {
+            daysBack = maxDays;
+        }
+        else if (daysBack > maxDays)
+        {
+            return BadRequest($"Days back must be between 1 and {maxDays} for {instrument.InstrumentType} with {timeframe}-minute timeframe");
         }
 
         var candles = await _candleService.GetRecentCandlesAsync(
@@ -67,15 +77,7 @@ public class CandleController : ControllerBase
             FromDate = DateTime.Today.AddDays(-daysBack),
             ToDate = DateTime.Today,
             Count = candles.Count,
-            Candles = candles.Select(c => new CandleDto
-            {
-                Timestamp = c.Timestamp,
-                Open = c.Open,
-                High = c.High,
-                Low = c.Low,
-                Close = c.Close,
-                Volume = c.Volume
-            }).ToList()
+            Candles = candles.Select(c => ToCandleDto(c)).ToList()
         };
 
         return Ok(response);
@@ -108,15 +110,17 @@ public class CandleController : ControllerBase
             return BadRequest("fromDate must be before toDate");
         }
 
-        if ((toDate - fromDate).TotalDays > 365)
-        {
-            return BadRequest("Date range cannot exceed 365 days");
-        }
-
         var instrument = await _instrumentService.GetBySymbolAsync(symbol);
         if (instrument == null)
         {
             return NotFound($"Instrument with symbol '{symbol}' not found");
+        }
+
+        var maxDays = CandleDataLimits.GetMaxDaysBack(instrument.InstrumentType, timeframe);
+
+        if ((toDate - fromDate).TotalDays > maxDays)
+        {
+            return BadRequest($"Date range cannot exceed {maxDays} days for {instrument.InstrumentType} with {timeframe}-minute timeframe");
         }
 
         var candles = await _candleService.GetCandlesAsync(
@@ -134,15 +138,7 @@ public class CandleController : ControllerBase
             FromDate = fromDate,
             ToDate = toDate,
             Count = candles.Count,
-            Candles = candles.Select(c => new CandleDto
-            {
-                Timestamp = c.Timestamp,
-                Open = c.Open,
-                High = c.High,
-                Low = c.Low,
-                Close = c.Close,
-                Volume = c.Volume
-            }).ToList()
+            Candles = candles.Select(c => ToCandleDto(c)).ToList()
         };
 
         return Ok(response);
@@ -184,15 +180,7 @@ public class CandleController : ControllerBase
             Symbol = instrument.Symbol,
             Exchange = instrument.Exchange,
             Timeframe = timeframe,
-            Candle = new CandleDto
-            {
-                Timestamp = candle.Timestamp,
-                Open = candle.Open,
-                High = candle.High,
-                Low = candle.Low,
-                Close = candle.Close,
-                Volume = candle.Volume
-            }
+            Candle = ToCandleDto(candle)
         };
 
         return Ok(response);
@@ -228,4 +216,19 @@ public class CandleController : ControllerBase
 
         return Ok(info);
     }
+
+    /// <summary>
+    /// Converts a Candle to CandleDto, converting the UTC timestamp back to IST.
+    /// EF/Npgsql normalizes TIMESTAMPTZ to UTC on read, so a 09:15 IST candle
+    /// arrives as 03:45 UTC. This restores the original IST time for the UI.
+    /// </summary>
+    private static CandleDto ToCandleDto(Candle c) => new()
+    {
+        Timestamp = TimeZoneInfo.ConvertTime(c.Timestamp, Ist),
+        Open = c.Open,
+        High = c.High,
+        Low = c.Low,
+        Close = c.Close,
+        Volume = c.Volume
+    };
 }

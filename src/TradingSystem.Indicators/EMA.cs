@@ -5,6 +5,8 @@ public class EMA
     private readonly int _period;
     private readonly decimal _multiplier;
     private decimal? _previousEma;
+    private readonly Queue<decimal> _seedPrices;
+    private bool _isSeeded;
 
     public EMA(int period)
     {
@@ -13,17 +15,29 @@ public class EMA
 
         _period = period;
         _multiplier = 2m / (period + 1);
+        _seedPrices = new Queue<decimal>(period);
+        _isSeeded = false;
     }
 
     public decimal Calculate(decimal price)
     {
-        if (_previousEma == null)
+        if (!_isSeeded)
         {
-            _previousEma = price;
-            return price;
+            _seedPrices.Enqueue(price);
+
+            if (_seedPrices.Count < _period)
+            {
+                return 0m; // Return 0 until seed is complete
+            }
+
+            // Seed complete: calculate simple average
+            _previousEma = _seedPrices.Average();
+            _isSeeded = true;
+            return _previousEma.Value;
         }
 
-        var ema = (price - _previousEma.Value) * _multiplier + _previousEma.Value;
+        // Standard EMA formula: EMA = (Close × k) + (PrevEMA × (1 - k))
+        var ema = (price * _multiplier) + (_previousEma.Value * (1 - _multiplier));
         _previousEma = ema;
         return ema;
     }
@@ -47,5 +61,7 @@ public class EMA
     public void Reset()
     {
         _previousEma = null;
+        _seedPrices.Clear();
+        _isSeeded = false;
     }
 }

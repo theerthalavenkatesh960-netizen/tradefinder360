@@ -16,14 +16,14 @@ public enum TradeState
 
 public class Trade
 {
-    public Guid Id { get; set; }
+    public long Id { get; set; }
     public DateTime EntryTime { get; set; }
     public DateTime? ExitTime { get; set; }
     public TradeDirection Direction { get; set; }
     public TradeState State { get; set; }
 
-    public decimal SpotEntryPrice { get; set; }
-    public decimal? SpotExitPrice { get; set; }
+    public decimal EntryPrice { get; set; }  // was SpotEntryPrice
+    public decimal? ExitPrice { get; set; }  // was SpotExitPrice
 
     public string OptionSymbol { get; set; } = string.Empty;
     public decimal OptionStrike { get; set; }

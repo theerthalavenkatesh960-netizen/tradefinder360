@@ -22,8 +22,8 @@ public class TradeService : ITradeService
             TradeType = !string.IsNullOrEmpty(trade.OptionSymbol) ? "OPTIONS" : "SPOT",
             EntryTime = trade.EntryTime,
             ExitTime = trade.ExitTime,
-            EntryPrice = trade.SpotEntryPrice,
-            ExitPrice = trade.SpotExitPrice,
+            EntryPrice = trade.EntryPrice,
+            ExitPrice = trade.ExitPrice,
             Quantity = trade.Quantity,
             StopLoss = trade.StopLoss,
             Target = trade.Target,
@@ -67,6 +67,6 @@ public class TradeService : ITradeService
             .ToListAsync();
     }
 
-    public async Task<TradeRecord?> GetByIdAsync(Guid id)
+    public async Task<TradeRecord?> GetByIdAsync(long id)
         => await _db.Trades.FindAsync(id);
 }

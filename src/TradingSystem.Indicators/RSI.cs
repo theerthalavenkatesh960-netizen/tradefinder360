@@ -1,4 +1,4 @@
-namespace TradingSystem.Indicators;
+﻿namespace TradingSystem.Indicators;
 
 public class RSI
 {
@@ -24,7 +24,7 @@ public class RSI
         if (_previousPrice == null)
         {
             _previousPrice = price;
-            return 50m;
+            return 0m; // Return 0 until valid (was 50m)
         }
 
         var change = price - _previousPrice.Value;
@@ -34,11 +34,12 @@ public class RSI
         if (_prices.Count <= _period)
         {
             _previousPrice = price;
-            return 50m;
+            return 0m; // Return 0 until valid (was 50m)
         }
 
         if (_previousGain == null || _previousLoss == null)
         {
+            // First RSI: simple average of gains and losses over first 14 periods
             var initialGains = new List<decimal>();
             var initialLosses = new List<decimal>();
 
@@ -54,12 +55,14 @@ public class RSI
         }
         else
         {
+            // Wilder's smoothing: AvgGain = ((PrevAvgGain × 13) + CurrentGain) / 14
             _previousGain = (_previousGain.Value * (_period - 1) + gain) / _period;
             _previousLoss = (_previousLoss.Value * (_period - 1) + loss) / _period;
         }
 
         _previousPrice = price;
 
+        // Edge case: if AvgLoss = 0 → RSI must be exactly 100
         if (_previousLoss.Value == 0)
             return 100m;
 

@@ -4,7 +4,7 @@ namespace TradingSystem.Data.Services.Interfaces;
 
 public interface IInstrumentService
 {
-    Task<TradingInstrument> GetByIdAsync(int id);
+    Task<TradingInstrument?> GetByIdAsync(int id);
     Task<TradingInstrument?> GetByKeyAsync(string instrumentKey);
     Task<TradingInstrument?> GetBySymbolAsync(string symbol);
     Task<List<TradingInstrument>> GetActiveAsync();

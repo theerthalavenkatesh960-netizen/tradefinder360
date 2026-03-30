@@ -17,6 +17,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <ProjectReference Include="..\TradingSystem.AI\TradingSystem.AI.csproj" />
 	  <ProjectReference Include="..\TradingSystem.Core\TradingSystem.Core.csproj" />
 	  <ProjectReference Include="..\TradingSystem.Data\TradingSystem.Data.csproj" />
 	  <ProjectReference Include="..\TradingSystem.Upstox\TradingSystem.Upstox.csproj" />
@@ -32,6 +33,10 @@
 	  <None Update="Data\stocks.csv">
 	    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
 	  </None>
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Folder Include="Configuration\" />
 	</ItemGroup>
 
 </Project>

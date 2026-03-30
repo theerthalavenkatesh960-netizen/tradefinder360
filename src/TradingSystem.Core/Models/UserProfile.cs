@@ -2,7 +2,7 @@ namespace TradingSystem.Core.Models;
 
 public class UserProfile
 {
-    public Guid Id { get; set; }
+    public long Id { get; set; }
     public string UserId { get; set; } = string.Empty;
     public string? UpstoxAccessToken { get; set; }
     public string? UpstoxRefreshToken { get; set; }

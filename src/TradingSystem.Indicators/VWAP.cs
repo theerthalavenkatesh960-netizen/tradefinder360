@@ -2,6 +2,7 @@ namespace TradingSystem.Indicators;
 
 public class VWAP
 {
+    private static readonly TimeZoneInfo IstTimeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
     private decimal _cumulativeTPV;
     private long _cumulativeVolume;
     private DateTime? _currentDate;
@@ -10,22 +11,26 @@ public class VWAP
 
     public void Calculate(decimal typical, long volume, DateTimeOffset timestamp)
     {
-        var date = timestamp.Date;
+        // Convert to IST timezone for date boundary detection
+        var istTime = TimeZoneInfo.ConvertTime(timestamp, IstTimeZone);
+        var istDate = istTime.Date;
 
-        if (_currentDate == null || date != _currentDate.Value)
+        // Reset at start of each trading day in IST
+        if (_currentDate == null || istDate != _currentDate.Value)
         {
             _cumulativeTPV = 0;
             _cumulativeVolume = 0;
-            _currentDate = date;
+            _currentDate = istDate;
         }
 
         _cumulativeTPV += typical * volume;
         _cumulativeVolume += volume;
 
+        // Handle zero volume edge case
         Value = _cumulativeVolume > 0 ? _cumulativeTPV / _cumulativeVolume : typical;
     }
 
-    public static decimal[] CalculateSeries(decimal[] typicalPrices, long[] volumes, DateTime[] timestamps)
+    public static decimal[] CalculateSeries(decimal[] typicalPrices, long[] volumes, DateTimeOffset[] timestamps)
     {
         if (typicalPrices.Length == 0 || volumes.Length == 0 || timestamps.Length == 0)
             return Array.Empty<decimal>();

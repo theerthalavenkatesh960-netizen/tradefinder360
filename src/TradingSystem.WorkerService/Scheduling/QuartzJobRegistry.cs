@@ -16,31 +16,56 @@ namespace TradingSystem.WorkerService.Scheduling
 
                 new JobSchedule(
                     typeof(DailyPriceUpdateJob),
-                    "0 30 16 ? * MON-FRI",        // Every 2 minutes
-                    TimeZoneInfo.Utc
-                ),
-
-                new JobSchedule(
-                    typeof(MarketCandlesUpdateJob),
-                    "0 */2 * 1 * ?",        // Every 4 minutes
-                    TimeZoneInfo.Utc
-                ),
-
-                new JobSchedule(
-                    typeof(IndicatorSnapshotsUpdateJob),
-                    "0 */10 * 1 * ?",       // Every 10 minutes (after candles are loaded)
-                    TimeZoneInfo.Utc
-                ),
-
-                new JobSchedule(
-                    typeof(PartitionMaintenanceJob),
-                    "0 0 2 28 * ?",         // 2:00 AM on the 28th of every month
+                    "0 */2 * 1 * ?",        // Every 2 minutes
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 ),
 
                 new JobSchedule(
+                    typeof(MarketCandlesUpdateJob),
+                    "0 */5 * 1 * ?",        // Every 4 minutes
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                //new JobSchedule(
+                //    typeof(IntradayCandleUpdateJob),
+                //    "0 * 9-15 ? * MON-FRI", // Every minute during market hours (9 AM-3 PM IST, Mon-Fri)
+                //    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                //),
+
+                new JobSchedule(
+                    typeof(IndicatorSnapshotsUpdateJob),
+                    "0 */3 * 1 * ?",       // Every 10 minutes (after candles are loaded)
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                new JobSchedule(
+                    typeof(PartitionMaintenanceJob),
+                    "0 15 13 * * ?",         // 2:00 AM on the 28th of every month
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                new JobSchedule(
+                    typeof(PartitionRetentionJob),
+                    "0 0 13 1 * ?",         // 2:00 AM on the 28th of every month
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                // Historical Backfill Job - Run on-demand or uncomment for scheduled execution
+                // new JobSchedule(
+                //     typeof(HistoricalCandleBackfillJob),
+                //     "0 0 3 ? * SUN",      // 3:00 AM every Sunday (for incremental backfill)
+                //     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                // ),
+
+                new JobSchedule(
                     typeof(MarketSentimentUpdateJob),
                     "0 */15 9-15 ? * MON-FRI", // Every 15 min, 9 AM-3 PM, Mon-Fri
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                new JobSchedule(
+                    typeof(AIModelRetrainingJob),
+                    "0 0 15 ? * SUN",
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 )
             };

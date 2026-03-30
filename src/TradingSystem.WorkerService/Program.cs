@@ -21,14 +21,37 @@ builder.Configuration
     .AddEnvironmentVariables();
 
 var connectionString = builder.Configuration.GetConnectionString("Supabase");
+
+// CRITICAL FIX: Configure DbContext with proper pooling for high concurrency
+builder.Services.AddDbContextPool<TradingDbContext>(options =>
+{
+    options.UseNpgsql(
+        connectionString,
+        npgsql =>
+        {
+            npgsql.EnableRetryOnFailure(
+                maxRetryCount: 3,
+                maxRetryDelay: TimeSpan.FromSeconds(5),
+                errorCodesToAdd: null);
+            npgsql.CommandTimeout(120); // 2 min timeout for bulk operations
+            npgsql.MaxBatchSize(100); // Optimize batch inserts
+        })
+        .EnableSensitiveDataLogging(builder.Environment.IsDevelopment())
+        .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking); // Performance boost
+}, poolSize: 128); // Support up to 128 concurrent contexts
+
+// Keep factory for jobs that need multiple contexts
 builder.Services.AddDbContextFactory<TradingDbContext>(options =>
 {
     options.UseNpgsql(
         connectionString,
         npgsql =>
         {
-            npgsql.EnableRetryOnFailure();
-        });
+            npgsql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(5), null);
+            npgsql.CommandTimeout(120);
+            npgsql.MaxBatchSize(100);
+        })
+        .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
 });
 
 builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<>));
@@ -39,6 +62,7 @@ builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
 builder.Services.AddScoped<IIndicatorService, IndicatorService>();
 builder.Services.AddScoped<IMarketSentimentRepository, MarketSentimentRepository>();
 builder.Services.AddScoped<IMarketSentimentService, MarketSentimentService>();
+builder.Services.AddScoped<ICandleService, CandleService>();
 
 builder.Services.AddScoped<CsvSeedService>();
 

@@ -44,7 +44,7 @@ public class TradeManager
 
             _currentTrade.State = TradeState.EXITED;
             _currentTrade.ExitTime = DateTime.Now;
-            _currentTrade.SpotExitPrice = spotExitPrice;
+            _currentTrade.ExitPrice = spotExitPrice;
             _currentTrade.OptionExitPrice = optionExitPrice;
             _currentTrade.ExitReason = exitReason;
             _currentTrade.ExitIndicators = exitIndicators;

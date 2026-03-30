@@ -8,5 +8,5 @@ public interface ITradeService
     Task UpdateAsync(TradeRecord tradeRecord);
     Task<List<TradeRecord>> GetByInstrumentAsync(int instrumentId, DateTime? startDate = null, DateTime? endDate = null);
     Task<List<TradeRecord>> GetTodayAsync(int instrumentId);
-    Task<TradeRecord?> GetByIdAsync(Guid id);
+    Task<TradeRecord?> GetByIdAsync(long id);
 }

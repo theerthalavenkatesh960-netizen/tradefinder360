@@ -42,7 +42,7 @@ public class TradingLogger
     public void LogTradeEntry(Trade trade, string reason)
     {
         _logger.Information("TRADE ENTRY: {Direction} | Spot: {SpotPrice} | Option: {OptionSymbol} @ {OptionPrice} | SL: {StopLoss} | Target: {Target} | Reason: {Reason}",
-            trade.Direction, trade.SpotEntryPrice, trade.OptionSymbol, trade.OptionEntryPrice,
+            trade.Direction, trade.EntryPrice, trade.OptionSymbol, trade.OptionEntryPrice,
             trade.StopLoss, trade.Target, reason);
     }
 

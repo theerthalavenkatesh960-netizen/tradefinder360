@@ -1,8 +1,11 @@
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json;
+
 namespace TradingSystem.Core.Models;
 
 public class TradeRecord
 {
-    public Guid Id { get; set; }
+    public long Id { get; set; }
     public int InstrumentId { get; set; }
     public string TradeType { get; set; } = string.Empty;
     public DateTime EntryTime { get; set; }
@@ -26,4 +29,19 @@ public class TradeRecord
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
     public TradingInstrument? Instrument { get; set; }
+
+    // Store indicators as JSON
+    public string? EntryIndicatorsJson { get; set; }
+    public string? ExitIndicatorsJson { get; set; }
+
+    [NotMapped]
+    public Dictionary<string, decimal>? EntryIndicators
+    {
+        get => string.IsNullOrEmpty(EntryIndicatorsJson)
+            ? null
+            : JsonSerializer.Deserialize<Dictionary<string, decimal>>(EntryIndicatorsJson);
+        set => EntryIndicatorsJson = value == null
+            ? null
+            : JsonSerializer.Serialize(value);
+    }
 }

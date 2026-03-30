@@ -1,4 +1,4 @@
-namespace TradingSystem.Indicators;
+﻿namespace TradingSystem.Indicators;
 
 public class BollingerBands
 {
@@ -30,17 +30,20 @@ public class BollingerBands
 
         if (_priceWindow.Count < _period)
         {
-            MiddleBand = price;
-            UpperBand = price;
-            LowerBand = price;
+            MiddleBand = 0;
+            UpperBand = 0;
+            LowerBand = 0;
             BandWidth = 0;
             return;
         }
 
+        // MiddleBand = SMA(20) - simple moving average
         MiddleBand = _priceWindow.Average();
 
+        // ✅ FIXED: Pure decimal standard deviation using decimal Sqrt
+        // Population standard deviation (divide by N, not N-1)
         var variance = _priceWindow.Sum(p => (p - MiddleBand) * (p - MiddleBand)) / _period;
-        var stdDev = (decimal)Math.Sqrt((double)variance);
+        var stdDev = Sqrt(variance);  // Pure decimal sqrt
 
         UpperBand = MiddleBand + (_stdDevMultiplier * stdDev);
         LowerBand = MiddleBand - (_stdDevMultiplier * stdDev);
@@ -69,5 +72,24 @@ public class BollingerBands
         }
 
         return (middle, upper, lower, bandwidth);
+    }
+
+    // ✅ ADDED: Decimal square root via Newton-Raphson
+    private static decimal Sqrt(decimal value)
+    {
+        if (value < 0) throw new ArgumentException("Cannot sqrt negative value");
+        if (value == 0) return 0;
+        
+        // Initial estimate using double (one-time conversion for seed only)
+        var x = (decimal)Math.Sqrt((double)value);
+        var lastX = 0m;
+        
+        // Refine using pure decimal Newton-Raphson
+        while (x != lastX)
+        {
+            lastX = x;
+            x = (x + value / x) / 2m;
+        }
+        return x;
     }
 }

@@ -55,6 +55,7 @@ public class DailyPriceUpdateJob : IJob
             _logger.LogInformation("Received {Count} quotes from Upstox", allQuotes.Count);
 
             var pricesToUpsert = new List<Core.Models.InstrumentPrice>();
+            var now = DateTimeOffset.UtcNow;
 
             foreach (var (instrumentKey, quote) in allQuotes)
             {
@@ -64,20 +65,40 @@ public class DailyPriceUpdateJob : IJob
                     continue;
                 }
 
+                // Validate timestamp
+                if (quote.Timestamp == default || quote.Timestamp.Year < 2000)
+                {
+                    _logger.LogWarning(
+                        "Invalid timestamp for instrument {InstrumentKey}: {Timestamp}. Skipping this quote.", 
+                        instrumentKey, quote.Timestamp);
+                    continue;
+                }
+
+                // Ensure timestamp is in UTC
+                quote.Timestamp = quote.Timestamp.ToUniversalTime();
                 quote.InstrumentId = instrumentId;
                 quote.Timeframe = "1D";
-                quote.CreatedAt = DateTime.UtcNow;
-                quote.UpdatedAt = DateTime.UtcNow;
+                quote.CreatedAt = now;
+                quote.UpdatedAt = now;
 
                 pricesToUpsert.Add(quote);
+
+                _logger.LogDebug(
+                    "Prepared quote for {InstrumentKey}: Timestamp={Timestamp}, Close={Close}", 
+                    instrumentKey, quote.Timestamp, quote.Close);
             }
 
             if (pricesToUpsert.Any())
             {
                 try
                 {
+                    _logger.LogInformation("Upserting {Count} price records to database", pricesToUpsert.Count);
+                    
                     var totalSaved = await _priceRepository.BulkUpsertAsync(pricesToUpsert, context.CancellationToken);
-                    _logger.LogInformation("Daily price update job completed. Total records saved: {Count}", totalSaved);
+                    
+                    _logger.LogInformation(
+                        "Daily price update job completed. Total records saved: {Count}", 
+                        totalSaved);
                 }
                 catch (Exception ex)
                 {
@@ -87,7 +108,7 @@ public class DailyPriceUpdateJob : IJob
             }
             else
             {
-                _logger.LogWarning("No prices to save");
+                _logger.LogWarning("No valid prices to save after filtering");
             }
         }
         catch (Exception ex)

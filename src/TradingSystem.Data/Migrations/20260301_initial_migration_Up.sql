@@ -5,7 +5,7 @@
 
 - instruments (extended fields included)
 - sectors
-- market_candles (PARTITIONED by timestamp - monthly)
+- market_candles (PARTITIONED by timestamp - monthly, resolution-based)
 - instrument_prices (NORMAL table, NOT partitioned)
 - indicator_snapshots
 - trades
@@ -18,8 +18,13 @@ Includes:
 - All RLS policies
 - All triggers
 - All helper functions
-- All partition helpers (for market_candles ONLY)
+- TIERED PARTITION HELPERS with retention policies (for market_candles ONLY)
 - PROPER FOREIGN KEY CONSTRAINTS using instrument_id
+
+TIERED STORAGE ARCHITECTURE:
+- 1m candles: 3 months retention
+- 15m candles: 9 months retention
+- 1d candles: 4+ years (no auto-deletion)
 
 =========================================================
 */
@@ -122,111 +127,408 @@ VALUES
 ON CONFLICT (instrument_key) DO NOTHING;
 
 ------------------------------------------------------------
--- 3. MARKET_CANDLES (PARTITIONED) - USING instrument_id FK
+-- 3. MARKET_CANDLES (TIERED PARTITIONED) - USING instrument_id FK
 ------------------------------------------------------------
+------------------------------------------------------------
+-- MARKET CANDLES ROOT TABLE
+------------------------------------------------------------
+
+
+-- ============================================================
+-- MARKET CANDLES PARTITIONED STORAGE
+-- ============================================================
+
+
+-- ============================================================
+-- MAIN TABLE
+-- ============================================================
 
 CREATE TABLE IF NOT EXISTS market_candles (
     id BIGSERIAL,
     instrument_id INTEGER NOT NULL,
     timeframe_minutes INTEGER NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
+
     open NUMERIC(18,4) NOT NULL,
     high NUMERIC(18,4) NOT NULL,
     low NUMERIC(18,4) NOT NULL,
     close NUMERIC(18,4) NOT NULL,
+
     volume BIGINT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id, timestamp),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id, timeframe_minutes, timestamp),
+
     CONSTRAINT fk_market_candles_instrument
         FOREIGN KEY (instrument_id)
         REFERENCES instruments(id)
-        ON DELETE CASCADE
-) PARTITION BY RANGE (timestamp);
+        ON DELETE CASCADE,
 
-CREATE INDEX IF NOT EXISTS idx_market_candles_lookup
-  ON market_candles(instrument_id, timeframe_minutes, timestamp DESC);
+    CONSTRAINT chk_market_candles_timeframe
+        CHECK (timeframe_minutes IN (1,15,1440))
+
+) PARTITION BY LIST (timeframe_minutes);
+
+
+
+-- ============================================================
+-- TIMEFRAME PARTITIONS
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS market_candles_1m
+PARTITION OF market_candles
+FOR VALUES IN (1)
+PARTITION BY RANGE (timestamp);
+
+
+CREATE TABLE IF NOT EXISTS market_candles_15m
+PARTITION OF market_candles
+FOR VALUES IN (15)
+PARTITION BY RANGE (timestamp);
+
+
+CREATE TABLE IF NOT EXISTS market_candles_1d
+PARTITION OF market_candles
+FOR VALUES IN (1440)
+PARTITION BY RANGE (timestamp);
+
+
+
+-- ============================================================
+-- GLOBAL INDEXES
+-- ============================================================
+
+CREATE INDEX IF NOT EXISTS idx_market_candles_chart_query
+ON market_candles(instrument_id, timeframe_minutes, timestamp DESC);
+
 
 CREATE INDEX IF NOT EXISTS idx_market_candles_instrument
-  ON market_candles(instrument_id);
+ON market_candles(instrument_id);
 
-------------------------------------------------------------
--- MARKET_CANDLES PARTITION HELPERS
-------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION create_market_candles_monthly_partition(
+
+-- ============================================================
+-- PARTITION CREATION FUNCTION
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION create_market_candle_month_partition(
+    tf INTEGER,
     partition_year INTEGER,
     partition_month INTEGER
-) RETURNS TEXT AS $$
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
 DECLARE
-    partition_name TEXT;
     start_date DATE;
     end_date DATE;
+
+    parent_table TEXT;
+    partition_table TEXT;
+
+    tf_suffix TEXT;
 BEGIN
+
     start_date := make_date(partition_year, partition_month, 1);
     end_date := start_date + INTERVAL '1 month';
 
-    partition_name := 'market_candles_' 
-                      || partition_year 
-                      || '_' 
-                      || LPAD(partition_month::TEXT, 2, '0');
+    CASE tf
+        WHEN 1 THEN
+            parent_table := 'market_candles_1m';
+            tf_suffix := '1m';
+
+        WHEN 15 THEN
+            parent_table := 'market_candles_15m';
+            tf_suffix := '15m';
+
+        WHEN 1440 THEN
+            parent_table := 'market_candles_1d';
+            tf_suffix := '1d';
+
+        ELSE
+            RAISE EXCEPTION 'Invalid timeframe';
+    END CASE;
+
+    partition_table :=
+        'market_candles_' || tf_suffix || '_' ||
+        partition_year || '_' ||
+        lpad(partition_month::text,2,'0');
 
     IF EXISTS (
-        SELECT 1 
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relname = partition_name
-        AND n.nspname = 'public'
+        SELECT 1
+        FROM pg_class
+        WHERE relname = partition_table
     ) THEN
-        RETURN 'Partition ' || partition_name || ' already exists';
+        RETURN 'Partition exists: ' || partition_table;
     END IF;
 
     EXECUTE format(
-        'CREATE TABLE IF NOT EXISTS %I PARTITION OF market_candles
+        'CREATE TABLE %I PARTITION OF %I
          FOR VALUES FROM (%L) TO (%L)',
-        partition_name,
+        partition_table,
+        parent_table,
         start_date,
         end_date
     );
 
-    RETURN 'Created partition: ' 
-           || partition_name 
-           || ' for date range [' 
-           || start_date 
-           || ', ' 
-           || end_date 
-           || ')';
-END;
-$$ LANGUAGE plpgsql;
+    RETURN 'Created partition: ' || partition_table;
 
-CREATE OR REPLACE FUNCTION create_next_n_months_market_candles_partitions(
-    months_ahead INTEGER DEFAULT 2
+END;
+$$;
+
+
+
+-- ============================================================
+-- FUTURE PARTITION CREATOR
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION create_future_market_candle_partitions(
+    months_ahead INTEGER DEFAULT 3
 )
-RETURNS TABLE(result TEXT) AS $$
+RETURNS TABLE(result TEXT)
+LANGUAGE plpgsql
+AS $$
 DECLARE
-    current_month_start DATE;
-    target_year INTEGER;
-    target_month INTEGER;
-    i INTEGER;
-    partition_result TEXT;
+    base_date DATE;
+    target_year INT;
+    target_month INT;
+
+    i INT;
+    tf INT;
+
+    timeframes INT[] := ARRAY[1,15,1440];
 BEGIN
-    current_month_start := date_trunc('month', CURRENT_DATE)::DATE;
+
+    base_date := date_trunc('month', CURRENT_DATE);
 
     FOR i IN 0..months_ahead LOOP
-        target_year := EXTRACT(YEAR FROM current_month_start + (i || ' months')::INTERVAL)::INTEGER;
-        target_month := EXTRACT(MONTH FROM current_month_start + (i || ' months')::INTERVAL)::INTEGER;
 
-        SELECT create_market_candles_monthly_partition(target_year, target_month)
-        INTO partition_result;
+        target_year :=
+            EXTRACT(YEAR FROM base_date + (i || ' months')::interval);
 
-        result := partition_result;
-        RETURN NEXT;
+        target_month :=
+            EXTRACT(MONTH FROM base_date + (i || ' months')::interval);
+
+        FOREACH tf IN ARRAY timeframes LOOP
+
+            RETURN QUERY
+            SELECT create_market_candle_month_partition(
+                tf,
+                target_year,
+                target_month
+            );
+
+        END LOOP;
+
     END LOOP;
 
-    RETURN;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
-SELECT create_next_n_months_market_candles_partitions(3);
+
+
+-- ============================================================
+-- PAST PARTITION CREATOR
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION create_past_market_candle_partitions(
+    years_back INTEGER DEFAULT 5
+)
+RETURNS TABLE(result TEXT)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    base_date DATE;
+    target_year INT;
+    target_month INT;
+
+    i INT;
+    tf INT;
+
+    months_total INT;
+
+    timeframes INT[] := ARRAY[1,15,1440];
+BEGIN
+
+    months_total := years_back * 12;
+    base_date := date_trunc('month', CURRENT_DATE);
+
+    FOR i IN 1..months_total LOOP
+
+        target_year :=
+            EXTRACT(YEAR FROM base_date - (i || ' months')::interval);
+
+        target_month :=
+            EXTRACT(MONTH FROM base_date - (i || ' months')::interval);
+
+        FOREACH tf IN ARRAY timeframes LOOP
+
+            RETURN QUERY
+            SELECT create_market_candle_month_partition(
+                tf,
+                target_year,
+                target_month
+            );
+
+        END LOOP;
+
+    END LOOP;
+
+END;
+$$;
+
+
+
+-- ============================================================
+-- RETENTION CLEANUP
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION cleanup_market_candle_retention()
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    cutoff_1m DATE;
+    cutoff_15m DATE;
+
+    r RECORD;
+    partition_date DATE;
+BEGIN
+
+    cutoff_1m := date_trunc('month', CURRENT_DATE - INTERVAL '3 months');
+    cutoff_15m := date_trunc('month', CURRENT_DATE - INTERVAL '9 months');
+
+    FOR r IN
+        SELECT relname
+        FROM pg_class
+        WHERE relname LIKE 'market_candles_1m_%'
+    LOOP
+
+        partition_date :=
+            to_date(substring(r.relname FROM '(\d{4}_\d{2})'),'YYYY_MM');
+
+        IF partition_date < cutoff_1m THEN
+            EXECUTE format('DROP TABLE IF EXISTS %I', r.relname);
+        END IF;
+
+    END LOOP;
+
+    FOR r IN
+        SELECT relname
+        FROM pg_class
+        WHERE relname LIKE 'market_candles_15m_%'
+    LOOP
+
+        partition_date :=
+            to_date(substring(r.relname FROM '(\d{4}_\d{2})'),'YYYY_MM');
+
+        IF partition_date < cutoff_15m THEN
+            EXECUTE format('DROP TABLE IF EXISTS %I', r.relname);
+        END IF;
+
+    END LOOP;
+
+    RETURN 'Cleanup completed';
+
+END;
+$$;
+
+
+
+-- ============================================================
+-- INITIAL PARTITIONS
+-- ============================================================
+
+SELECT * FROM create_past_market_candle_partitions(5);
+SELECT * FROM create_future_market_candle_partitions(6);------------------------------------------------------------
+-- EXAMPLE QUERIES AND INGESTION
+------------------------------------------------------------
+
+/*
+=======================================================
+OPTIMIZED UI CHART QUERY (with partition pruning)
+=======================================================
+
+-- Load last 200 15-minute candles for instrument_id=123
+SELECT 
+    timestamp,
+    open,
+    high,
+    low,
+    close,
+    volume
+FROM market_candles
+WHERE 
+    instrument_id = 123
+    AND timeframe_minutes = 15
+    AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+ORDER BY timestamp DESC
+LIMIT 200;
+
+-- Query Plan Benefits:
+-- 1. Partition pruning: Only scans recent month partitions
+-- 2. Index-only scan on: idx_market_candles_chart_query
+-- 3. Avoids full table scan across 70M+ rows
+
+=======================================================
+SAFE INGESTION WITH UPSERT (prevents duplicates)
+=======================================================
+
+INSERT INTO market_candles (
+    instrument_id,
+    timeframe_minutes,
+    timestamp,
+    open,
+    high,
+    low,
+    close,
+    volume
+)
+VALUES 
+    (123, 1, '2026-03-14 09:15:00+00', 18500.25, 18505.00, 18498.50, 18502.75, 15000),
+    (123, 15, '2026-03-14 09:15:00+00', 18500.00, 18520.00, 18495.00, 18515.00, 250000),
+    (123, 1440, '2026-03-14 00:00:00+00', 18400.00, 18600.00, 18350.00, 18502.75, 5000000)
+ON CONFLICT (instrument_id, timeframe_minutes, timestamp) 
+DO UPDATE SET
+    open = EXCLUDED.open,
+    high = EXCLUDED.high,
+    low = EXCLUDED.low,
+    close = EXCLUDED.close,
+    volume = EXCLUDED.volume,
+    created_at = CURRENT_TIMESTAMP;
+
+-- Auto-routing: PostgreSQL routes rows to correct partition based on:
+-- 1. timestamp (range partition)
+-- 2. timeframe_minutes (list sub-partition)
+
+=======================================================
+BULK QUERY FOR INDICATOR CALCULATION
+=======================================================
+
+-- Fetch 100 candles for RSI/EMA calculation
+SELECT 
+    timestamp,
+    close,
+    volume
+FROM market_candles
+WHERE 
+    instrument_id = 456
+    AND timeframe_minutes = 15
+    AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '2 days'
+ORDER BY timestamp ASC
+LIMIT 100;
+
+=======================================================
+RETENTION MANAGEMENT
+=======================================================
+
+-- Daily cleanup job (run via cron or pg_cron)
+SELECT * FROM cleanup_market_candle_retention();
+
+-- Pre-create partitions quarterly
+SELECT * FROM create_future_market_candle_partitions(6);
+
+*/
 
 ------------------------------------------------------------
 -- 4. INSTRUMENT_PRICES
@@ -330,9 +632,8 @@ CREATE INDEX IF NOT EXISTS idx_indicator_snapshots_instrument
 ------------------------------------------------------------
 -- 6. TRADES - USING instrument_id FK
 ------------------------------------------------------------
-
 CREATE TABLE IF NOT EXISTS trades (
-    id UUID PRIMARY KEY,
+    id INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
     instrument_id INTEGER NOT NULL,
     trade_type VARCHAR(20) NOT NULL,
     entry_time TIMESTAMPTZ NOT NULL,
@@ -355,15 +656,21 @@ CREATE TABLE IF NOT EXISTS trades (
     pnl_percent NUMERIC(18,4) DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ,
+
     CONSTRAINT fk_trades_instrument
         FOREIGN KEY (instrument_id)
         REFERENCES instruments(id)
         ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_trades_instrument ON trades(instrument_id);
-CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time DESC);
-CREATE INDEX IF NOT EXISTS idx_trades_state ON trades(state);
+CREATE INDEX IF NOT EXISTS idx_trades_instrument 
+ON trades(instrument_id);
+
+CREATE INDEX IF NOT EXISTS idx_trades_entry_time 
+ON trades(entry_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_trades_state 
+ON trades(state);
 
 ------------------------------------------------------------
 -- 7. SCAN_SNAPSHOTS - USING instrument_id FK
@@ -405,22 +712,30 @@ CREATE INDEX IF NOT EXISTS idx_scan_snapshots_instrument
 ------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS recommendations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
     instrument_id INTEGER NOT NULL,
     timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
     direction VARCHAR(10) NOT NULL,
     entry_price NUMERIC(18,4) NOT NULL,
     stop_loss NUMERIC(18,4) NOT NULL,
     target NUMERIC(18,4) NOT NULL,
+
     risk_reward_ratio NUMERIC(8,2) DEFAULT 0,
     confidence INTEGER DEFAULT 0,
+
     option_type VARCHAR(10),
     option_strike NUMERIC(18,4),
+
     explanation_text TEXT DEFAULT '',
     reasoning_points JSONB DEFAULT '[]',
+
     is_active BOOLEAN DEFAULT true,
+
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMPTZ,
+
     CONSTRAINT fk_recommendations_instrument
         FOREIGN KEY (instrument_id)
         REFERENCES instruments(id)
@@ -428,29 +743,34 @@ CREATE TABLE IF NOT EXISTS recommendations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_recommendations_instrument
-  ON recommendations(instrument_id, timestamp DESC);
+ON recommendations(instrument_id, timestamp DESC);
 
 CREATE INDEX IF NOT EXISTS idx_recommendations_active
-  ON recommendations(is_active, timestamp DESC);
+ON recommendations(is_active, timestamp DESC);
 
 CREATE INDEX IF NOT EXISTS idx_recommendations_confidence
-  ON recommendations(confidence DESC, timestamp DESC);
+ON recommendations(confidence DESC, timestamp DESC);
 
 ------------------------------------------------------------
 -- 9. USER_PROFILES
 ------------------------------------------------------------
-
 CREATE TABLE IF NOT EXISTS user_profiles (
-    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    id BIGINT GENERATED ALWAYS AS IDENTITY NOT NULL,
+
     user_id VARCHAR(100) NOT NULL,
     upstox_access_token TEXT NULL,
     upstox_refresh_token TEXT NULL,
     token_issued_at TIMESTAMPTZ NULL,
+
     created_on TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_on TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+
     CONSTRAINT user_profiles_pkey PRIMARY KEY (id),
     CONSTRAINT user_profiles_user_id_key UNIQUE (user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_on ON user_profiles(updated_on DESC);
-CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_on
+ON user_profiles(updated_on DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id
+ON user_profiles(user_id);
