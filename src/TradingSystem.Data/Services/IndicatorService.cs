@@ -1,4 +1,3 @@
- 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TradingSystem.Core.Models;
@@ -167,15 +166,12 @@ public class IndicatorService : IIndicatorService
         CancellationToken cancellationToken = default)
     {
         // Convert IST boundaries → UTC for DB comparison
-        // var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
-        // var toUtc   = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
-
         var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
         var toUtc = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
 
         // 1. Get existing snapshots in the requested range
         var existingSnapshots = await GetByDateRangeAsync(
-            instrumentId, timeframeMinutes, fromDate, toDate, cancellationToken);
+            instrumentId, timeframeMinutes, fromUtc, toUtc, cancellationToken);
 
         // 2. Get candles already in the DB — NO Upstox API calls
         var candles = await _candleService.GetCandlesFromDbAsync(
@@ -250,7 +246,7 @@ public class IndicatorService : IIndicatorService
             {
                 InstrumentId     = instrumentId,
                 TimeframeMinutes = timeframeMinutes,
-                Timestamp        = candle.Timestamp,
+                Timestamp        = candle.Timestamp.ToUniversalTime(),
                 EMAFast          = Math.Round(indicators.EMAFast,         4, MidpointRounding.AwayFromZero),
                 EMASlow          = Math.Round(indicators.EMASlow,         4, MidpointRounding.AwayFromZero),
                 RSI              = Math.Round(indicators.RSI,             4, MidpointRounding.AwayFromZero),
