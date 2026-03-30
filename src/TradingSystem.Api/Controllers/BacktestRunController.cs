@@ -10,7 +10,7 @@ namespace TradingSystem.Api.Controllers;
 public class BacktestRunController : ControllerBase
 {
     private static readonly HashSet<int> AllowedTimeframes = [1, 5, 15, 30];
-    private static readonly HashSet<string> AllowedStrategies = ["ORB", "RSI_REVERSAL", "EMA_CROSSOVER"];
+    private static readonly HashSet<string> AllowedStrategies = ["ORB", "RSI_REVERSAL", "EMA_CROSSOVER", "EMA_PULLBACK"];
 
     private readonly BacktestRunnerService _backtestService;
     private readonly ILogger<BacktestRunController> _logger;
@@ -45,7 +45,7 @@ public class BacktestRunController : ControllerBase
 
         var strategyName = request.Strategy.Name?.ToUpperInvariant() ?? "";
         if (!AllowedStrategies.Contains(strategyName))
-            return BadRequest("Strategy name must be one of: ORB, RSI_REVERSAL, EMA_CROSSOVER");
+            return BadRequest("Strategy name must be one of: ORB, RSI_REVERSAL, EMA_CROSSOVER, EMA_PULLBACK");
 
         if (request.Strategy.Params.RiskPercent < 0.1 || request.Strategy.Params.RiskPercent > 10)
             return BadRequest("RiskPercent must be between 0.1 and 10");

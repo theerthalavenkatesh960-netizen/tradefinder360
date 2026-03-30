@@ -1,115 +1,356 @@
+You are a senior quantitative developer working on an existing .NET backtesting engine.
 
-CONTEXT:
-I have a MarketSentimentService.cs in a C# .NET trading system. The service currently calculates market sentiment using only today's candles, which is fundamentally wrong. I need it rebuilt with proper multi-period historical analysis.
+I already have a method called RunORB that implements a basic Opening Range Breakout strategy.
 
-CRITICAL BUG TO FIX FIRST:
-The daily % change calculation is wrong everywhere in the file:
-csharp// WRONG (current code)
-var changePercent = (latestCandle.Close - firstCandle.Open) / firstCandle.Open * 100m;
+Your task is to IMPROVE this method without changing its structure drastically.
 
-// CORRECT — always use previous day's close as the base
-var changePercent = (todayClose - previousDayClose) / previousDayClose * 100m;
-Fix this in AnalyzeIndicesAsync, AnalyzeSectorsAsync, and CalculateMarketBreadthAsync.
+---------------------------------------
 
-DATA FETCHING CHANGES:
-The repository method signature is:
-csharpTask<List<MarketCandle>> GetByInstrumentIdAsync(
-    Guid instrumentId, int intervalMinutes, DateTime from, DateTime to, CancellationToken ct);
-```
+GOAL
 
-Fetch the following windows (all dates in IST, pass `utcNow` as the `to` parameter):
+Upgrade the ORB strategy from a naive breakout system to a more realistic, professional-grade intraday strategy.
 
-| Purpose | From | Interval |
-|---|---|---|
-| Daily change (need prev close) | `istToday.AddDays(-3)` | 1 day (1440 min) |
-| RSI-14 | `istToday.AddDays(-21)` | 1 day |
-| MACD (26 EMA + 9 signal) | `istToday.AddDays(-60)` | 1 day |
-| 20DMA / breadth trend | `istToday.AddDays(-30)` | 1 day |
-| 50DMA | `istToday.AddDays(-75)` | 1 day |
-| VIX trend (20-day avg) | `istToday.AddDays(-30)` | 1 day |
-| 52-week high/low | `istToday.AddDays(-365)` | 1 day |
+Do NOT rewrite everything.
 
-Fetch the **widest window needed per instrument once** and slice it for each indicator — do not make multiple repository calls per instrument.
+Enhance logic inside existing flow.
 
----
+---------------------------------------
 
-**INDICATORS TO COMPUTE:**
+CURRENT LOGIC ISSUES
 
-**1. RSI-14** (per index, per sector avg, and market-wide)
-```
-RS = AvgGain(14) / AvgLoss(14)
-RSI = 100 - (100 / (1 + RS))
-```
-- Use Wilder's smoothing (not simple average)
-- RSI > 70 → overbought, RSI < 30 → oversold
+- Direct breakout entries (no confirmation)
+- No trend filter
+- Weak volume validation
+- Too many false breakouts
+- No volatility filtering beyond ATR
+- No retest logic
 
-**2. MACD** (per index)
-```
-MACD Line   = EMA(12) - EMA(26)
-Signal Line = EMA(9) of MACD Line
-Histogram   = MACD Line - Signal Line
-```
-- Histogram > 0 and rising → bullish momentum
-- Histogram < 0 and falling → bearish momentum
+---------------------------------------
 
-**3. Moving Average Trend**
-```
-Price vs 20DMA → short-term trend
-Price vs 50DMA → medium-term trend
-20DMA vs 50DMA → golden cross / death cross
-```
+REQUIRED IMPROVEMENTS
 
-**4. Market Breadth (rolling, not single-day)**
-- Compute A/D ratio as a **20-day rolling average**, not just today
-- Add 52-week new highs count vs new lows count across the stock universe
-- McClellan Oscillator = EMA(19) of daily A/D diff - EMA(39) of daily A/D diff
+1) BREAKOUT VALIDATION
 
-**5. VIX Trend**
-```
-VIX vs its own 20-day SMA:
-  VIX > 20DMA and rising → fear increasing → bearish signal
-  VIX < 20DMA and falling → complacency → neutral/bullish
+- Only consider CLOSE breakout (already present)
+- Add buffer:
+    breakout must exceed openingHigh/Low by at least 0.05%
 
-REVISED SENTIMENT SCORE (total = 100 pts):
-ComponentWeightSignalIndex trend (MA + price)25 ptsPrice vs 20DMA/50DMA, golden/death crossIndex momentum (RSI + MACD)20 ptsRSI zone + MACD histogram directionSector rotation breadth20 pts% sectors above 20DMA, top vs bottom sector spreadMarket breadth (rolling A/D + 52wk H/L)20 ptsMcClellan oscillator + new highs/lows ratioVIX trend15 ptsVIX vs its 20DMA, direction of change
-Score range: -100 to +100
+---------------------------------------
 
-Score > 30 → BULLISH
-Score > 60 → STRONGLY_BULLISH
-Score < -30 → BEARISH
-Score < -60 → STRONGLY_BEARISH
-Otherwise → NEUTRAL
+2) RETEST ENTRY (IMPORTANT)
+
+Do NOT enter immediately on breakout.
+
+Instead:
+
+- Wait for price to RETEST breakout level
+- Enter only if price holds above (bullish) or below (bearish)
+
+---------------------------------------
+
+3) VOLUME CONFIRMATION
+
+Enhance existing volume logic:
+
+- Breakout candle volume must be > 1.5x average of last 10 candles
+
+---------------------------------------
+
+4) TREND FILTER (15-min logic approximation)
+
+Add lightweight trend filter using existing indicators:
+
+- Use EMA(20)
+
+Rules:
+
+Bullish:
+    price > EMA20
+    EMA slope upward
+
+Bearish:
+    price < EMA20
+    EMA slope downward
+
+---------------------------------------
+
+5) VOLATILITY FILTER
+
+Skip day if:
+
+- Opening range < 0.3% of price (low volatility)
+- Opening range > 2.5% (extreme volatility)
+
+---------------------------------------
+
+6) TIME FILTER
+
+Allow trades only:
+
+- 09:20 to 10:30 IST
+
+Stop new entries after cutoff.
+
+---------------------------------------
+
+7) FALSE BREAKOUT PROTECTION
+
+Ignore breakout if:
+
+- Next candle immediately reverses fully inside range
+
+---------------------------------------
+
+8) RISK MANAGEMENT
+
+Keep existing logic but ensure:
+
+- Minimum RR = 2.5
+- Prefer 3:1
+
+---------------------------------------
+
+9) TRADE LIMIT
+
+- Max 1–2 trades per day
+
+---------------------------------------
+
+10) CLEAN CODE
+
+- Do NOT break method signature
+- Add helper methods where needed
+- Keep it readable
+
+---------------------------------------
+
+OUTPUT
+
+Return improved RunORB method with:
+
+- Comments explaining each improvement
+- Minimal structural disruption
+- Production-quality logic
+
+---------------------------------------
+
+GOAL
+
+Reduce overtrading and false signals.
+
+Focus on high-quality trades.
 
 
-PERFORMANCE REQUIREMENTS:
-
-Fetch the widest needed candle window once per instrument, slice locally for each indicator
-All instruments within a phase (indices, sectors, breadth) must be fetched with Task.WhenAll
-All four analysis phases (AnalyzeIndicesAsync, AnalyzeSectorsAsync, CalculateMarketBreadthAsync, GetVolatilityIndexAsync) must run concurrently with Task.WhenAll at the top level
-Pass a single istToday and utcNow snapshot into every helper — no DateTime.Now or DateTime.Today calls inside helpers
-Single-pass min/max — no multiple .OrderBy().First() on the same list
 
 
-NEW/UPDATED MODEL FIELDS NEEDED:
-Add these to MarketContext and MarketSentiment if not present:
-csharpdecimal RSI { get; set; }                  // market-wide average RSI
-decimal MacdHistogram { get; set; }        // average MACD histogram across major indices
-decimal PriceVs20DMA { get; set; }         // % above/below 20DMA (index average)
-decimal PriceVs50DMA { get; set; }         // % above/below 50DMA
-int NewHighs52W { get; set; }              // count of stocks at 52-week highs today
-int NewLows52W { get; set; }               // count of stocks at 52-week lows today
-decimal MclellanOscillator { get; set; }   // rolling breadth oscillator
-decimal VixVs20DMA { get; set; }           // VIX minus its 20-day SMA
-
-DO NOT CHANGE:
-
-Repository interface signatures
-IMarketSentimentService interface
-Dependency injection constructor
-GetHistoryAsync method
-AdjustConfidenceForMarketSentiment method
-Logging patterns already in place
 
 
-OUTPUT:
-Produce the complete updated MarketSentimentService.cs with all changes applied. Include private static helper methods for CalculateRSI, CalculateEMA, CalculateMACD — these should be pure functions taking List<decimal> (closing prices) and returning the indicator value.
+
+
+
+
+
+You are a senior .NET quantitative developer.
+
+I have an existing backtesting engine with a method RunORB.
+
+Your task is to create a NEW strategy method:
+
+RunOrbFvgStrategy
+
+This should integrate cleanly into the existing system.
+
+---------------------------------------
+
+GOAL
+
+Implement a high-quality intraday strategy based on:
+
+- Opening Range Breakout (ORB)
+- Fair Value Gap (FVG)
+- Retracement
+- Engulfing confirmation
+
+This is a multi-step strategy.
+
+---------------------------------------
+
+STRATEGY LOGIC
+
+STEP 1: OPENING RANGE
+
+- Use first 5 candles (1-min) → 09:15–09:20
+- Define:
+    openingHigh
+    openingLow
+
+---------------------------------------
+
+STEP 2: BREAKOUT DETECTION
+
+After 09:20:
+
+Bullish:
+    close > openingHigh
+
+Bearish:
+    close < openingLow
+
+IMPORTANT:
+
+- Only CLOSE breakout
+- Ignore wicks
+
+---------------------------------------
+
+STEP 3: STATE MACHINE (VERY IMPORTANT)
+
+Implement a state-based flow:
+
+States:
+
+- WaitingForBreakout
+- WaitingForFvg
+- WaitingForRetrace
+- WaitingForEngulfing
+- TradeTriggered
+
+---------------------------------------
+
+STEP 4: FVG DETECTION
+
+Use 3-candle structure:
+
+Bullish:
+    candle1.high < candle3.low
+
+Bearish:
+    candle1.low > candle3.high
+
+Rules:
+
+- Must form AFTER breakout
+- Ignore small gaps:
+    minimum gap = 0.1% price
+
+---------------------------------------
+
+STEP 5: RETRACE INTO FVG
+
+- Wait for price to come back into FVG zone
+- No chasing breakout
+
+---------------------------------------
+
+STEP 6: ENGULFING CONFIRMATION
+
+Bullish:
+
+- Current candle engulfs previous
+- Close > previous high
+
+Bearish:
+
+- Current candle engulfs previous
+- Close < previous low
+
+---------------------------------------
+
+STEP 7: TREND FILTER
+
+Use EMA(20):
+
+Bullish:
+    price > EMA
+    EMA rising
+
+Bearish:
+    price < EMA
+    EMA falling
+
+---------------------------------------
+
+STEP 8: VOLUME FILTER
+
+- Engulfing candle volume > average last 10 candles
+
+---------------------------------------
+
+STEP 9: ENTRY
+
+- Entry at next candle OPEN
+
+---------------------------------------
+
+STEP 10: STOP LOSS
+
+Bullish:
+    below FVG low
+
+Bearish:
+    above FVG high
+
+---------------------------------------
+
+STEP 11: TARGET
+
+- Risk:Reward = 3:1
+
+---------------------------------------
+
+STEP 12: TIME FILTER
+
+- Trade only between 09:20–10:30 IST
+
+---------------------------------------
+
+STEP 13: RISK CONTROL
+
+- Max 1 trade per day
+- Skip low volatility days
+
+---------------------------------------
+
+STEP 14: OUTPUT
+
+Return List<BacktestTradeResult>
+
+Use existing:
+
+- cost functions
+- slippage
+- quantity logic
+
+---------------------------------------
+
+STEP 15: CODE REQUIREMENTS
+
+- Clean C#
+- Reuse existing utilities
+- Add helper methods:
+
+    DetectFvg()
+    IsEngulfing()
+    IsTrendValid()
+
+- Use clear variable names
+- Comment each step
+
+---------------------------------------
+
+GOAL
+
+This strategy should produce:
+
+- Fewer trades
+- Higher accuracy
+- Better RR trades
+
+Avoid overtrading.
+
+Focus on precision.
+
+
+Cannot write DateTimeOffset with Offset=05:30:00 
+to PostgreSQL type 'timestamp with time zone'
+only offset 0 (UTC) is supported

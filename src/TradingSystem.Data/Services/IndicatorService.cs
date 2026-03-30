@@ -1,4 +1,3 @@
- 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TradingSystem.Core.Models;
@@ -150,13 +149,13 @@ public class IndicatorService : IIndicatorService
 
     public async Task<List<IndicatorSnapshot>> GetByDateRangeAsync(
         int instrumentId, int timeframeMinutes,
-        DateTimeOffset fromUtc, DateTimeOffset toUtc,
+        DateTimeOffset fromDate, DateTimeOffset toDate,
         CancellationToken cancellationToken = default)
         => await _db.IndicatorSnapshots
             .Where(s => s.InstrumentId == instrumentId
                      && s.TimeframeMinutes == timeframeMinutes
-                     && s.Timestamp >= fromUtc
-                     && s.Timestamp <= toUtc)
+                     && s.Timestamp >= fromDate
+                     && s.Timestamp <= toDate)
             .OrderBy(s => s.Timestamp)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
@@ -168,7 +167,7 @@ public class IndicatorService : IIndicatorService
     {
         // Convert IST boundaries → UTC for DB comparison
         var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
-        var toUtc   = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
+        var toUtc = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
 
         // 1. Get existing snapshots in the requested range
         var existingSnapshots = await GetByDateRangeAsync(
@@ -247,7 +246,7 @@ public class IndicatorService : IIndicatorService
             {
                 InstrumentId     = instrumentId,
                 TimeframeMinutes = timeframeMinutes,
-                Timestamp        = candle.Timestamp,
+                Timestamp        = candle.Timestamp.ToUniversalTime(),
                 EMAFast          = Math.Round(indicators.EMAFast,         4, MidpointRounding.AwayFromZero),
                 EMASlow          = Math.Round(indicators.EMASlow,         4, MidpointRounding.AwayFromZero),
                 RSI              = Math.Round(indicators.RSI,             4, MidpointRounding.AwayFromZero),

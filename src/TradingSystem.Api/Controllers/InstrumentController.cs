@@ -304,15 +304,7 @@ public class InstrumentController : ControllerBase
 
         dto.Candles = candles
             .OrderBy(c => c.Timestamp)
-            .Select(c => new CandleDto
-            {
-                Timestamp = c.Timestamp,
-                Open = c.Open,
-                High = c.High,
-                Low = c.Low,
-                Close = c.Close,
-                Volume = c.Volume
-            })
+            .Select(c => ToCandleDto(c))
             .ToList();
 
         return Ok(dto);
@@ -343,15 +335,7 @@ public class InstrumentController : ControllerBase
         var candles = await _candleService.GetCandlesAsync(instrument.Id, timeframe, fromDateUtc, toDateUtc);
         var dtos = candles
             .OrderBy(c => c.Timestamp)
-            .Select(c => new CandleDto
-            {
-                Timestamp = c.Timestamp,
-                Open = c.Open,
-                High = c.High,
-                Low = c.Low,
-                Close = c.Close,
-                Volume = c.Volume
-            })
+            .Select(c => ToCandleDto(c))
             .ToList();
 
         return Ok(dtos);
@@ -588,4 +572,14 @@ public class InstrumentController : ControllerBase
                 (rec.Target - rec.EntryPrice) / rec.EntryPrice * 100, 2);
         }
     }
+
+    private static CandleDto ToCandleDto(Candle c) => new()
+    {
+        Timestamp = TimeZoneInfo.ConvertTime(c.Timestamp, Ist),
+        Open = c.Open,
+        High = c.High,
+        Low = c.Low,
+        Close = c.Close,
+        Volume = c.Volume
+    };
 }
