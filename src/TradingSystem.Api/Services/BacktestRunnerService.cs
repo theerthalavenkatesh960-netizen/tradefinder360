@@ -82,6 +82,7 @@ public class BacktestRunnerService
             "RSI_REVERSAL" => RunRsiReversal(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
             "EMA_CROSSOVER" => RunEmaCrossover(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
             "EMA_PULLBACK" => RunEmaPullback(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+            "SMC_FVG" => RunSmcFvg(instrument.Id, request.From, request.To, request.Strategy.Params, initialCapital),
             _ => throw new ArgumentException($"Unknown strategy: {request.Strategy.Name}")
         };
 
@@ -1072,6 +1073,328 @@ public class BacktestRunnerService
 
         return trades;
     }
+
+    // ─────────────────────────────────────────────────────────
+    // STRATEGY: SMC FVG + Order Block (Intraday)
+    // ─────────────────────────────────────────────────────────
+    // Sessions: Morning 09:15–11:30 IST, Afternoon 13:00–15:30 IST
+    // Max 2 completed trades per day, one open position at a time
+    // Bias: 15m EMA-based gate, FVG+OB on 5m, Entry on 1m rejection
+    private List<BacktestTradeResult> RunSmcFvg(
+        long instrumentId, DateTime from, DateTime to, StrategyParams p, double initialCapital)
+    {
+        // Fetch 15m, 5m, 1m candles (sequential; process as live/streaming)
+        var candles15m = _candleService.GetCandlesAsync(instrumentId, 15, from, to).GetAwaiter().GetResult();
+        var candles5m = _candleService.GetCandlesAsync(instrumentId, 5, from, to).GetAwaiter().GetResult();
+        var candles1m = _candleService.GetCandlesAsync(instrumentId, 1, from, to).GetAwaiter().GetResult();
+
+        if (candles15m.Count == 0 || candles5m.Count == 0 || candles1m.Count == 0)
+            return [];
+
+        var ordered15m = candles15m.OrderBy(c => c.Timestamp).ToList();
+        var ordered5m = candles5m.OrderBy(c => c.Timestamp).ToList();
+        var ordered1m = candles1m.OrderBy(c => c.Timestamp).ToList();
+
+        var indicators15m = ComputeIndicators(ordered15m, p);
+        var indicators5m = ComputeIndicators(ordered5m, p);
+        var indicators1m = ComputeIndicators(ordered1m, p);
+
+        var istTimes15m = ordered15m.Select(c => TimeZoneInfo.ConvertTime(c.Timestamp, Ist)).ToArray();
+        var istTimes5m = ordered5m.Select(c => TimeZoneInfo.ConvertTime(c.Timestamp, Ist)).ToArray();
+        var istTimes1m = ordered1m.Select(c => TimeZoneInfo.ConvertTime(c.Timestamp, Ist)).ToArray();
+
+        var trades = new List<BacktestTradeResult>();
+        var dayStates = new Dictionary<DateTime, DaySmcState>();
+        var sessionStates = new Dictionary<(DateTime date, string session), SessionSmcState>();
+        double runningCapital = initialCapital;
+
+        // Session boundaries (IST)
+        var morningStart = new TimeSpan(9, 15, 0);
+        var morningEnd = new TimeSpan(11, 30, 0);
+        var afternoonStart = new TimeSpan(13, 0, 0);
+        var afternoonEnd = new TimeSpan(15, 30, 0);
+        var entryWindowStart = new TimeSpan(9, 20, 0);
+        var entryWindowEnd = new TimeSpan(10, 30, 0);
+        var noEntryFinalMinute = new TimeSpan(15, 29, 0);
+
+        BacktestTradeResult? openTrade = null;
+        double trailStop = 0;
+        bool movedToBreakeven = false;
+        FvgState? activeFvg = null;
+
+        // ─── Main Sequential Loop (1m Candles) ───
+        for (int idx1m = 0; idx1m < ordered1m.Count; idx1m++)
+        {
+            var candle1m = ordered1m[idx1m];
+            var time1m = istTimes1m[idx1m];
+            var timeOfDay = time1m.TimeOfDay;
+
+            // Session determination
+            bool inMorning = timeOfDay >= morningStart && timeOfDay < morningEnd;
+            bool inAfternoon = timeOfDay >= afternoonStart && timeOfDay < afternoonEnd;
+            string? currentSession = inMorning ? "MORNING" : inAfternoon ? "AFTERNOON" : null;
+
+            // Close position at session boundaries
+            if (!inMorning && !inAfternoon && openTrade != null)
+            {
+                var sessionClosed = CloseTrade(openTrade, ToIstDateTime(candle1m.Timestamp), (double)candle1m.Close);
+                if (sessionClosed != null)
+                {
+                    trades.Add(sessionClosed);
+                    runningCapital += sessionClosed.Pnl;
+                }
+                openTrade = null;
+                movedToBreakeven = false;
+                activeFvg = null;
+                continue;
+            }
+
+            // Skip if outside trading hours
+            if (currentSession == null)
+                continue;
+
+            // Initialize day state
+            var dayKey = time1m.Date;
+            if (!dayStates.TryGetValue(dayKey, out var dayState))
+                dayStates[dayKey] = dayState = new DaySmcState();
+
+            // Initialize session state
+            var sessionKey = (dayKey, currentSession);
+            if (!sessionStates.TryGetValue(sessionKey, out var sessState))
+            {
+                sessState = new SessionSmcState();
+                sessionStates[sessionKey] = sessState;
+
+                // Determine session bias on first candle of session using 15m EMA
+                var idx15mAtSessionStart = FindClosest5MinuteCandleIndex(ordered5m, istTimes5m, time1m);
+                if (idx15mAtSessionStart >= 0)
+                {
+                    var ind15m = indicators15m[Math.Min(idx15mAtSessionStart, indicators15m.Length - 1)];
+                    // Simple bias: if close > 9-EMA, bullish; else bearish
+                    sessState.IsBullishBias = ind15m.EMAFast > 0 && ordered15m[idx15mAtSessionStart].Close > ind15m.EMAFast;
+                }
+            }
+
+            // If already 2 trades completed this day, no new entries
+            if (dayState.CompletedTrades >= 2)
+            {
+                // Still manage open position
+                if (openTrade != null)
+                {
+                    var fullExit = CheckExit(openTrade, candle1m, (double)indicators1m[idx1m].ATR, p, ref trailStop);
+                    if (fullExit != null)
+                    {
+                        trades.Add(fullExit);
+                        runningCapital += fullExit.Pnl;
+                        dayState.CompletedTrades++;
+                        openTrade = null;
+                        movedToBreakeven = false;
+                        activeFvg = null;
+                    }
+                }
+                continue;
+            }
+
+            // Manage existing open position
+            if (openTrade != null)
+            {
+                // Partial exit management (50% at TP1, move SL to breakeven)
+                int remainingQty = 1; // For SMC, we track as whole position, not fractional
+                var partialExit = ManageOpenPosition(openTrade, candle1m, ref trailStop, ref remainingQty, ref movedToBreakeven);
+                if (partialExit != null)
+                {
+                    trades.Add(partialExit);
+                    movedToBreakeven = true;
+                }
+
+                // Check for full exit (SL or target hit)
+                var fullExit = CheckExit(openTrade, candle1m, (double)indicators1m[idx1m].ATR, p, ref trailStop);
+                if (fullExit != null)
+                {
+                    trades.Add(fullExit);
+                    runningCapital += fullExit.Pnl;
+                    dayState.CompletedTrades++;
+                    openTrade = null;
+                    movedToBreakeven = false;
+                    activeFvg = null;
+                }
+                continue;
+            }
+
+            // Entry logic (only in trade windows, no position open)
+            bool inEntryWindow = (timeOfDay >= entryWindowStart && timeOfDay <= entryWindowEnd) ||
+                                 (currentSession == "AFTERNOON" && timeOfDay < noEntryFinalMinute);
+
+            if (!inEntryWindow || openTrade != null)
+                continue;
+
+            // Find or create FVG target on 5m (simplified: just check if there's been a recent gap)
+            // For now, check if 1m candle closes inside a potential FVG zone and next candle rejects
+            if (activeFvg == null && idx1m > 0)
+            {
+                // Look back 3 candles on 5m to detect a potential FVG
+                var idx5m = FindClosestIndexInList(ordered5m, istTimes5m, time1m);
+                if (idx5m >= 2)
+                {
+                    var c5m_i2 = ordered5m[idx5m - 2];
+                    var c5m_i1 = ordered5m[idx5m - 1];
+                    var c5m_i0 = ordered5m[idx5m];
+
+                    // Check for bullish FVG (i-2 high < i high)
+                    bool hasBullishFvg = c5m_i2.High < c5m_i0.Low && sessState.IsBullishBias;
+                    // Check for bearish FVG (i-2 low > i low)
+                    bool hasBearishFvg = c5m_i2.Low > c5m_i0.High && !sessState.IsBullishBias;
+
+                    if (hasBullishFvg)
+                    {
+                        activeFvg = new FvgState
+                        {
+                            IsBullish = true,
+                            ZoneLow = c5m_i2.High,
+                            ZoneHigh = c5m_i0.Low,
+                            ObHigh = c5m_i1.High,
+                            ObLow = c5m_i1.Low,
+                            CreatedAt = c5m_i0.Timestamp
+                        };
+                    }
+                    else if (hasBearishFvg)
+                    {
+                        activeFvg = new FvgState
+                        {
+                            IsBullish = false,
+                            ZoneLow = c5m_i0.High,
+                            ZoneHigh = c5m_i2.Low,
+                            ObHigh = c5m_i1.High,
+                            ObLow = c5m_i1.Low,
+                            CreatedAt = c5m_i0.Timestamp
+                        };
+                    }
+                }
+            }
+
+            // Entry trigger: 1m candle closes inside FVG, then next candle rejects outside
+            if (activeFvg != null && idx1m > 0)
+            {
+                var prevCandle1m = ordered1m[idx1m - 1];
+
+                bool prevClosedInsideFvg = prevCandle1m.Close >= (decimal)activeFvg.ZoneLow && 
+                                           prevCandle1m.Close <= (decimal)activeFvg.ZoneHigh;
+                bool currRejected = activeFvg.IsBullish
+                    ? candle1m.Close > (decimal)activeFvg.ZoneHigh
+                    : candle1m.Close < (decimal)activeFvg.ZoneLow;
+
+                if (prevClosedInsideFvg && currRejected)
+                {
+                    // Entry triggered!
+                    double entryPrice = (double)candle1m.Close;
+                    double slPrice = activeFvg.IsBullish
+                        ? (double)activeFvg.ObLow - DeriveMinPriceStep(ordered1m, idx1m)
+                        : (double)activeFvg.ObHigh + DeriveMinPriceStep(ordered1m, idx1m);
+                    
+                    double riskDistance = Math.Abs(entryPrice - slPrice);
+                    double tp1Price = activeFvg.IsBullish
+                        ? entryPrice + 2 * riskDistance
+                        : entryPrice - 2 * riskDistance;
+                    
+                    double tp2Price = activeFvg.IsBullish
+                        ? sessState.SessionHigh > entryPrice ? sessState.SessionHigh : entryPrice + 3 * riskDistance
+                        : sessState.SessionLow > 0 && sessState.SessionLow < entryPrice ? sessState.SessionLow : entryPrice - 3 * riskDistance;
+
+                    var qty = CalcQuantity(runningCapital, p.RiskPercent ?? 1.0, riskDistance);
+
+                    openTrade = new BacktestTradeResult(
+                        Id: Guid.NewGuid().ToString(),
+                        EntryTime: ToIstDateTime(candle1m.Timestamp),
+                        EntryPrice: Math.Round(entryPrice, 2),
+                        ExitTime: null,
+                        ExitPrice: 0,
+                        StopLoss: Math.Round(slPrice, 2),
+                        Target: Math.Round(tp2Price, 2),
+                        Quantity: qty,
+                        TradeType: activeFvg.IsBullish ? "LONG" : "SHORT",
+                        Pnl: 0,
+                        PnlPercent: 0,
+                        RiskReward: riskDistance > 0 ? Math.Round((Math.Abs(tp2Price - entryPrice)) / riskDistance, 2) : 0
+                    );
+
+                    movedToBreakeven = false;
+                    activeFvg = null;
+                }
+            }
+
+            // Update session highs/lows for dynamic TP2
+            if (sessState.SessionHigh == 0 || candle1m.High > (decimal)sessState.SessionHigh)
+                sessState.SessionHigh = (double)candle1m.High;
+            if (sessState.SessionLow == 0 || candle1m.Low < (decimal)sessState.SessionLow)
+                sessState.SessionLow = (double)candle1m.Low;
+        }
+
+        return trades;
+    }
+
+    // Helper: Find closest 5m candle index to 1m timestamp
+    private static int FindClosestIndexInList(List<Candle> candles, DateTimeOffset[] times, DateTimeOffset targetTime)
+    {
+        for (int i = times.Length - 1; i >= 0; i--)
+            if (times[i] <= targetTime)
+                return i;
+        return -1;
+    }
+
+    // Helper: Derive minimum price step from observed candle data
+    private static double DeriveMinPriceStep(List<Candle> candles, int upToIdx)
+    {
+        decimal minDiff = decimal.MaxValue;
+        for (int i = 1; i <= Math.Min(upToIdx, 20); i++)
+        {
+            var diff = Math.Abs(candles[i].Close - candles[i - 1].Close);
+            if (diff > 0 && diff < minDiff)
+                minDiff = diff;
+        }
+        return (double)(minDiff == decimal.MaxValue ? 0.05m : minDiff);
+    }
+
+    // Helper: Find 5m candle closest to a given 1m timestamp
+    private static int Find15minAtOrBefore(List<Candle> candles15m, DateTimeOffset[] times15m, DateTimeOffset targetTime)
+    {
+        for (int i = times15m.Length - 1; i >= 0; i--)
+            if (times15m[i] <= targetTime)
+                return i;
+        return -1;
+    }
+
+    // Helper: Find the index of the closest matching candle in 5m list
+    private static int FindClosest5MinuteCandleIndex(List<Candle> candles5m, DateTimeOffset[] times5m, DateTimeOffset targetTime)
+    {
+        for (int i = times5m.Length - 1; i >= 0; i--)
+            if (times5m[i] <= targetTime)
+                return i;
+        return -1;
+    }
+
+    // ─── State Classes ───
+    private sealed class DaySmcState
+    {
+        public int CompletedTrades;
+    }
+
+    private sealed class SessionSmcState
+    {
+        public bool IsBullishBias;
+        public double SessionHigh;
+        public double SessionLow;
+    }
+
+    private sealed class FvgState
+    {
+        public bool IsBullish;
+        public double ZoneLow;
+        public double ZoneHigh;
+        public decimal ObHigh;
+        public decimal ObLow;
+        public DateTimeOffset CreatedAt;
+    }
+
 
     // ─────────────────────────────────────────────────────────
     // SHARED HELPERS

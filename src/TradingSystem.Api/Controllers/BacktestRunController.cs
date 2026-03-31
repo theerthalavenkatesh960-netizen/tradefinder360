@@ -10,7 +10,7 @@ namespace TradingSystem.Api.Controllers;
 public class BacktestRunController : ControllerBase
 {
     private static readonly HashSet<int> AllowedTimeframes = [1, 5, 15, 30];
-    private static readonly HashSet<string> AllowedStrategies = ["ORB", "RSI_REVERSAL", "EMA_CROSSOVER", "EMA_PULLBACK"];
+    private static readonly HashSet<string> AllowedStrategies = ["ORB", "RSI_REVERSAL", "EMA_CROSSOVER", "EMA_PULLBACK", "SMC_FVG"];
 
     private readonly BacktestRunnerService _backtestService;
     private readonly ILogger<BacktestRunController> _logger;
