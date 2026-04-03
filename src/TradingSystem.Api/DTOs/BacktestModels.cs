@@ -71,17 +71,19 @@ public record EquityPoint(
 
 // ── Replay Annotation Models ──
 public record OrbZone(
-    int OrbStartIdx,
-    int OrbEndIdx,
+    int OrbStartIdx,  // candle index of first ORB candle
+    int OrbEndIdx,    // candle index of last candle of that trading day
     double OrbHigh,
-    double OrbLow
+    double OrbLow,
+    string? TradeNotTakenReason = null  // non-null when no trade was entered that day
 );
 
 public record FvgZone(
-    int FvgStartIdx,
-    int FvgEndIdx,
+    int FvgStartIdx,  // candle index where FVG was detected
+    int FvgEndIdx,    // candle index of last candle of that trading day
     double FvgHigh,
-    double FvgLow
+    double FvgLow,
+    string? Direction = null  // "BULLISH" or "BEARISH"
 );
 
 public record OrderBlockZone(
@@ -123,14 +125,16 @@ public record SignalEventAnnotation(
 );
 
 public record BacktestAnnotations(
-    OrbZone? OrbZone = null,
+    // Multi-day ORB zones — one OrbZone per trading day
+    List<OrbZone>? OrbZones = null,
     List<FvgZone>? FvgZones = null,
     List<OrderBlockZone>? ObZones = null,
     ReplayEventData? RetraceEvent = null,
     ReplayEventData? EngulfingEvent = null,
-    // Legacy support
+    // Raw annotation data (timestamp + price, used to build index-based zones)
     List<OrbAnnotation>? Orbs = null,
     List<FvgAnnotation>? Fvgs = null,
     List<OrderBlockAnnotation>? OrderBlocks = null,
+    // All signal events including TRADE_NOT_TAKEN
     List<SignalEventAnnotation>? Events = null
 );
