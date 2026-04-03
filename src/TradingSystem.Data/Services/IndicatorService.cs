@@ -221,7 +221,7 @@ public class IndicatorService : IIndicatorService
         // 7. Run indicator engine over ALL candles (warmup + data range)
         //    but only save snapshots for the missing ones
         var engine = new IndicatorEngine(
-            emaFastPeriod: 20, emaSlowPeriod: 50,
+            emaFastPeriod: 21, emaSlowPeriod: 50,
             rsiPeriod: 14,
             macdFast: 12, macdSlow: 26, macdSignal: 9,
             adxPeriod: 14, atrPeriod: 14,
