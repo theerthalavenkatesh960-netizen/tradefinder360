@@ -1081,7 +1081,7 @@ public class BacktestRunnerService
     // Max 2 completed trades per day, one open position at a time
     // Bias: 15m EMA-based gate, FVG+OB on 5m, Entry on 1m rejection
     private List<BacktestTradeResult> RunSmcFvg(
-        long instrumentId, DateTime from, DateTime to, StrategyParams p, double initialCapital)
+        int instrumentId, DateTime from, DateTime to, StrategyParams p, double initialCapital)
     {
         // Fetch 15m, 5m, 1m candles (sequential; process as live/streaming)
         var candles15m = _candleService.GetCandlesAsync(instrumentId, 15, from, to).GetAwaiter().GetResult();
@@ -1300,7 +1300,7 @@ public class BacktestRunnerService
                         ? sessState.SessionHigh > entryPrice ? sessState.SessionHigh : entryPrice + 3 * riskDistance
                         : sessState.SessionLow > 0 && sessState.SessionLow < entryPrice ? sessState.SessionLow : entryPrice - 3 * riskDistance;
 
-                    var qty = CalcQuantity(runningCapital, p.RiskPercent ?? 1.0, riskDistance);
+                    var qty = CalcQuantity(runningCapital, p.RiskPercent, riskDistance);
 
                     openTrade = new BacktestTradeResult(
                         Id: Guid.NewGuid().ToString(),
@@ -1313,8 +1313,8 @@ public class BacktestRunnerService
                         Quantity: qty,
                         TradeType: activeFvg.IsBullish ? "LONG" : "SHORT",
                         Pnl: 0,
-                        PnlPercent: 0,
-                        RiskReward: riskDistance > 0 ? Math.Round((Math.Abs(tp2Price - entryPrice)) / riskDistance, 2) : 0
+                        PnlPercent: 0
+                        //RiskReward: riskDistance > 0 ? Math.Round((Math.Abs(tp2Price - entryPrice)) / riskDistance, 2) : 0
                     );
 
                     movedToBreakeven = false;
@@ -1388,8 +1388,8 @@ public class BacktestRunnerService
     private sealed class FvgState
     {
         public bool IsBullish;
-        public double ZoneLow;
-        public double ZoneHigh;
+        public decimal ZoneLow;
+        public decimal ZoneHigh;
         public decimal ObHigh;
         public decimal ObLow;
         public DateTimeOffset CreatedAt;

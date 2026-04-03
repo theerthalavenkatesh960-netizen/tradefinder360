@@ -34,7 +34,7 @@ public record BacktestTradeResult(
     string Id,
     DateTime EntryTime,
     double EntryPrice,
-    DateTime ExitTime,
+    DateTime? ExitTime,
     double ExitPrice,
     double StopLoss,
     double Target,
