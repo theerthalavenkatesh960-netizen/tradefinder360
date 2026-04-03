@@ -312,7 +312,8 @@ public class UpstoxClient
             {"grant_type", "authorization_code"}
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "login/authorization/token") { Content = new FormUrlEncodedContent(form) };
+        var tokenV2Url = $"{_config.BaseUrlV2}login/authorization/token";
+        using var request = new HttpRequestMessage(HttpMethod.Post, tokenV2Url) { Content = new FormUrlEncodedContent(form) };
 
         var response = await _httpClient.SendAsync(request);
 
