@@ -81,7 +81,7 @@ public class BacktestRunnerService
 
         if (request.Strategy.Name.Equals("ORB_FVG_RETEST", StringComparison.OrdinalIgnoreCase))
         {
-            var (trades, annot) = RunOrbFvgRetest(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital);
+            var (trades, annot) = RunOrbFvgRetest(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital, instrument);
             tradeList = trades;
             annotations = annot;
         }
@@ -419,7 +419,7 @@ public class BacktestRunnerService
     // ─────────────────────────────────────────────────────────
     private (List<BacktestTradeResult> trades, BacktestAnnotations annotations) RunOrbFvgRetest(
         List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
-        StrategyParams p, double initialCapital)
+        StrategyParams p, double initialCapital, TradingInstrument instrument)
     {
         var trades          = new List<BacktestTradeResult>();
         var orbAnnotations  = new List<OrbAnnotation>();
@@ -581,7 +581,7 @@ public class BacktestRunnerService
                             $"Breakout failed confluence check — {(isLong ? "RSI too high" : "RSI too low")}"));
                         continue;
                     }
-                    if (!HasVolumeConfirmation(candles, globalIdx))
+                    if (instrument.InstrumentType != InstrumentType.INDEX && !HasVolumeConfirmation(candles, globalIdx))
                     {
                         eventAnnotations.Add(new SignalEventAnnotation(
                             ToIstDateTime(candle.Timestamp), "VOLUME_FAIL",
