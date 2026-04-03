@@ -475,58 +475,6 @@ public class BacktestRunnerService
             int dayStartGlobalIdx = day[0].Index;
             int dayEndGlobalIdx   = day[^1].Index;
 
-            // Context scan: show FVG/OB structure for the day even if no entry triggers.
-            for (int j = orbCandleCount + 2; j < day.Count; j++)
-            {
-                var c0 = day[j - 2].Candle;
-                var c2 = day[j].Candle;
-
-                if ((double)c0.High < (double)c2.Low)
-                {
-                    // Bullish FVG
-                    var gapLow = (double)c0.High;
-                    var gapHigh = (double)c2.Low;
-                    AddFvgZone(day[j].Index, dayEndGlobalIdx, gapHigh, gapLow, "BULLISH", c2.Timestamp);
-
-                    if (p.IncludeOrderBlocks == true)
-                    {
-                        for (int b = j - 1; b >= Math.Max(orbCandleCount, j - 20); b--)
-                        {
-                            var obCandle = day[b].Candle;
-                            if ((double)obCandle.Close < (double)obCandle.Open)
-                            {
-                                AddOrderBlockZone(day[b].Index, dayEndGlobalIdx,
-                                    (double)obCandle.High, (double)obCandle.Low,
-                                    "BULLISH", obCandle.Timestamp);
-                                break;
-                            }
-                        }
-                    }
-                }
-                else if ((double)c0.Low > (double)c2.High)
-                {
-                    // Bearish FVG
-                    var gapLow = (double)c2.High;
-                    var gapHigh = (double)c0.Low;
-                    AddFvgZone(day[j].Index, dayEndGlobalIdx, gapHigh, gapLow, "BEARISH", c2.Timestamp);
-
-                    if (p.IncludeOrderBlocks == true)
-                    {
-                        for (int b = j - 1; b >= Math.Max(orbCandleCount, j - 20); b--)
-                        {
-                            var obCandle = day[b].Candle;
-                            if ((double)obCandle.Close > (double)obCandle.Open)
-                            {
-                                AddOrderBlockZone(day[b].Index, dayEndGlobalIdx,
-                                    (double)obCandle.High, (double)obCandle.Low,
-                                    "BEARISH", obCandle.Timestamp);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
             // ── ALWAYS record ORB zone so replay shows the range every day ────────
             var orbAnnotation = new OrbAnnotation(
                 ToIstDateTime(orbCandles[^1].Candle.Timestamp), openingHigh, openingLow);
@@ -568,6 +516,7 @@ public class BacktestRunnerService
             (double GapLow, double GapHigh)? fvgRange = null;
             int fvgGlobalIdx = 0;
             Candle? retestCandle = null;
+            bool fvgRetestLogged = false;
 
             string dayPhaseReason = "No breakout from ORB range";
 
@@ -668,8 +617,23 @@ public class BacktestRunnerService
                             double gapHigh = (double)c2.Low;
                             fvgRange     = (gapLow, gapHigh);
                             fvgGlobalIdx = postBreakoutCandles[k].GlobalIdx;
+                            fvgRetestLogged = false;
 
                             AddFvgZone(fvgGlobalIdx, dayEndGlobalIdx, gapHigh, gapLow, "BULLISH", c2.Timestamp);
+                            if (p.IncludeOrderBlocks == true)
+                            {
+                                for (int b = j - 1; b >= Math.Max(orbCandleCount, j - 20); b--)
+                                {
+                                    var obCandle = day[b].Candle;
+                                    if ((double)obCandle.Close < (double)obCandle.Open)
+                                    {
+                                        AddOrderBlockZone(day[b].Index, dayEndGlobalIdx,
+                                            (double)obCandle.High, (double)obCandle.Low,
+                                            "BULLISH", obCandle.Timestamp);
+                                        break;
+                                    }
+                                }
+                            }
                             eventAnnotations.Add(new SignalEventAnnotation(
                                 ToIstDateTime(c2.Timestamp), "FVG_FORMED", "Bullish FVG detected"));
                             phase = 2;
@@ -682,8 +646,23 @@ public class BacktestRunnerService
                             double gapHigh = (double)c0.Low;
                             fvgRange     = (gapLow, gapHigh);
                             fvgGlobalIdx = postBreakoutCandles[k].GlobalIdx;
+                            fvgRetestLogged = false;
 
                             AddFvgZone(fvgGlobalIdx, dayEndGlobalIdx, gapHigh, gapLow, "BEARISH", c2.Timestamp);
+                            if (p.IncludeOrderBlocks == true)
+                            {
+                                for (int b = j - 1; b >= Math.Max(orbCandleCount, j - 20); b--)
+                                {
+                                    var obCandle = day[b].Candle;
+                                    if ((double)obCandle.Close > (double)obCandle.Open)
+                                    {
+                                        AddOrderBlockZone(day[b].Index, dayEndGlobalIdx,
+                                            (double)obCandle.High, (double)obCandle.Low,
+                                            "BEARISH", obCandle.Timestamp);
+                                        break;
+                                    }
+                                }
+                            }
                             eventAnnotations.Add(new SignalEventAnnotation(
                                 ToIstDateTime(c2.Timestamp), "FVG_FORMED", "Bearish FVG detected"));
                             phase = 2;
@@ -705,9 +684,13 @@ public class BacktestRunnerService
                     retestCandle   = candle;
                     phase          = 3;
                     dayPhaseReason = "FVG retested — waiting for engulfing candle";
-                    eventAnnotations.Add(new SignalEventAnnotation(
-                        ToIstDateTime(candle.Timestamp), "RETEST",
-                        $"Close inside {(breakoutDirection == true ? "bullish" : "bearish")} FVG gap"));
+                    if (!fvgRetestLogged)
+                    {
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "RETEST",
+                            $"First retest: close inside {(breakoutDirection == true ? "bullish" : "bearish")} FVG gap"));
+                        fvgRetestLogged = true;
+                    }
                     continue;
                 }
 
@@ -859,6 +842,7 @@ public class BacktestRunnerService
 
                     // Reset phase state for potential second setup on the same day
                     phase = 0; breakoutDirection = null; fvgRange = null; retestCandle = null;
+                    fvgRetestLogged = false;
                     postBreakoutCandles.Clear();
                     j += 1; // skip the entry candle (already processed above)
                 }
@@ -888,34 +872,6 @@ public class BacktestRunnerService
                 orbZones[thisOrbZoneIdx] = existing with { TradeNotTakenReason = dayPhaseReason };
             }
         } // end day loop
-
-        // ── Post-process: Mark ALL retests into ALL FVG zones ──────────────────
-        // This ensures replay shows retest activity for context FVGs even if no trade
-        var retestEventKeys = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var fvgZone in fvgZones)
-        {
-            // Scan all candles within this FVG zone's time range
-            for (int idx = fvgZone.FvgStartIdx; idx <= fvgZone.FvgEndIdx && idx < candles.Count; idx++)
-            {
-                var candle = candles[idx];
-                double close = (double)candle.Close;
-
-                // Check if close falls inside the gap
-                if (close >= fvgZone.FvgLow && close <= fvgZone.FvgHigh)
-                {
-                    // Create a unique key to avoid duplicate retest events
-                    var retestKey = $"{idx}:{fvgZone.Direction}:{Math.Round(fvgZone.FvgLow, 4)}:{Math.Round(fvgZone.FvgHigh, 4)}";
-                    if (retestEventKeys.Add(retestKey))
-                    {
-                        eventAnnotations.Add(new SignalEventAnnotation(
-                            ToIstDateTime(candle.Timestamp),
-                            "RETEST",
-                            $"{fvgZone.Direction} FVG retested at {close:F2}"));
-                    }
-                }
-            }
-        }
 
         var annotations = new BacktestAnnotations(
             OrbZones: orbZones,
