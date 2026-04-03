@@ -4,7 +4,8 @@ public record BacktestRunRequest(
     string Symbol,
     DateTime From,
     DateTime To,
-    StrategyConfig Strategy
+    StrategyConfig Strategy,
+    double? InitialCapital
 );
 
 public record StrategyConfig(
@@ -54,7 +55,11 @@ public record BacktestMetrics(
     int LosingTrades,
     double TotalReturn,
     double ProfitFactor,
-    List<EquityPoint> EquityCurve
+    List<EquityPoint> EquityCurve,
+    double InitialCapital,
+    double FinalCapital,
+    double AvgWinPnl,
+    double AvgLossPnl
 );
 
 public record EquityPoint(

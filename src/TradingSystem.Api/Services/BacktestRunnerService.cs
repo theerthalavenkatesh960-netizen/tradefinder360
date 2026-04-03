@@ -82,6 +82,8 @@ public class BacktestRunnerService
             "RSI_REVERSAL" => RunRsiReversal(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
             "EMA_CROSSOVER" => RunEmaCrossover(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
             "EMA_PULLBACK" => RunEmaPullback(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+            "EMA_SPEED" => RunEmaSpeed(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+            "EMA_PULLBACK_SPEED" => RunEmaPullbackSpeed(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
             "SMC_FVG" => RunSmcFvg(instrument.Id, request.From, request.To, request.Strategy.Params, initialCapital),
             _ => throw new ArgumentException($"Unknown strategy: {request.Strategy.Name}")
         };
@@ -715,7 +717,7 @@ public class BacktestRunnerService
     // ─────────────────────────────────────────────────────────
     // STRATEGY D: EMA Pullback / Retest
     // ─────────────────────────────────────────────────────────
-    private static readonly TimeOnly EmaPullbackCutoff = new(12, 30);
+    private static readonly TimeOnly EmaPullbackCutoff = new(13, 30);
 
     private static List<BacktestTradeResult> RunEmaPullback(
         List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
@@ -809,9 +811,9 @@ public class BacktestRunnerService
             // ── Register new crossover setups (only before cutoff) ──
             if (!pastCutoff && bullishCross && !waitingForLong)
             {
-                // Compute swing target: max High of current day's candles before this bar
-                double dayHigh = GetDayHighBeforeIdx(candles, istTimes, i);
-                if (dayHigh > 0)
+                // Target: max High of the previous bullish EMA run (before the bearish phase that just ended)
+                double bullRunHigh = FindPreviousBullRunHigh(candles, indicators, i);
+                if (bullRunHigh > 0)
                 {
                     if ((double)candle.Close < (double)curInd.EMAFast)
                     {
@@ -824,7 +826,7 @@ public class BacktestRunnerService
                             var swingLow = FindRecentSwingLow(candles, i);
                             var slDistance = Math.Max(entryPrice - (swingLow - atr * 0.1), atr * 0.25);
                             var sl = entryPrice - slDistance;
-                            var target = dayHigh;
+                            var target = bullRunHigh;
 
                             var rrRatio = slDistance > 0 ? (target - entryPrice) / slDistance : 0;
                             if (rrRatio >= MinRRForEntry && PassesConfluence(curInd, true) && HasVolumeConfirmation(candles, i))
@@ -870,15 +872,16 @@ public class BacktestRunnerService
                     {
                         // Case B: price above FastEMA — wait for pullback
                         waitingForLong = true;
-                        longSwingTarget = dayHigh;
+                        longSwingTarget = bullRunHigh;
                     }
                 }
             }
 
             if (!pastCutoff && bearishCross && !waitingForShort)
             {
-                double dayLow = GetDayLowBeforeIdx(candles, istTimes, i);
-                if (dayLow > 0)
+                // Target: min Low of the previous bearish EMA run (before the bullish phase that just ended)
+                double bearRunLow = FindPreviousBearRunLow(candles, indicators, i);
+                if (bearRunLow > 0)
                 {
                     if ((double)candle.Close > (double)curInd.EMAFast)
                     {
@@ -891,7 +894,7 @@ public class BacktestRunnerService
                             var swingHigh = FindRecentSwingHigh(candles, i);
                             var slDistance = Math.Max((swingHigh + atr * 0.1) - entryPrice, atr * 0.25);
                             var sl = entryPrice + slDistance;
-                            var target = dayLow;
+                            var target = bearRunLow;
 
                             var rrRatio = slDistance > 0 ? (entryPrice - target) / slDistance : 0;
                             if (rrRatio >= MinRRForEntry && PassesConfluence(curInd, false) && HasVolumeConfirmation(candles, i))
@@ -937,7 +940,7 @@ public class BacktestRunnerService
                     {
                         // Case B: price below FastEMA — wait for pullback
                         waitingForShort = true;
-                        shortSwingTarget = dayLow;
+                        shortSwingTarget = bearRunLow;
                     }
                 }
             }
@@ -1056,6 +1059,618 @@ public class BacktestRunnerService
             }
 
             // Abandon pending setups once past the cutoff
+            if (pastCutoff)
+            {
+                waitingForLong = false;
+                waitingForShort = false;
+            }
+        }
+
+        if (openTrade != null && candles.Count > 0)
+        {
+            var last = candles[^1];
+            var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(last.Timestamp), (double)last.Close, remainingQty);
+            runningCapital += closed.Pnl;
+            trades.Add(closed);
+        }
+
+        return trades;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // STRATEGY: EMA Speed (Pullback Speed Strategy)
+    // ─────────────────────────────────────────────────────────
+    // Adapted from: TradingView "EMA Pullback Speed Strategy"
+    // Concept: Enter on shallow pullbacks toward the FastEMA in trending conditions,
+    // confirmed by a strong momentum candle (body ≥ speedThreshold ticks).
+    // Pullback must not exceed maxPullbackPct% from FastEMA.
+    // SL: ATR-based (4× ATR). Target: CalcTarget (R:R or trailing per user params).
+    // Cutoff: no new setups after 14:00 IST.
+    private static readonly TimeOnly EmaSpeedCutoff = new(14, 0);
+
+    private static List<BacktestTradeResult> RunEmaSpeed(
+        List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
+        StrategyParams p, double initialCapital)
+    {
+        var trades = new List<BacktestTradeResult>();
+        double runningCapital = initialCapital;
+        double peakCapital = initialCapital;
+
+        BacktestTradeResult? openTrade = null;
+        double trailStop = 0;
+        int remainingQty = 0;
+        bool movedToBE = false;
+        var risk = new DayRiskState { DayStartCapital = initialCapital };
+        DateTime lastDayDate = DateTime.MinValue;
+
+        const double MaxPullbackPct = 5.0;   // max % price can deviate above/below FastEMA for pullback entry
+        const double SpeedThresholdPct = 0.5; // candle body must be ≥ 0.5% of price (approximates the "tick speed" filter)
+        const double AtrSlMultiplier = 4.0;
+
+        for (int i = Math.Max(1, MinWarmupBars); i < candles.Count; i++)
+        {
+            var curInd = indicators[i];
+            var candle = candles[i];
+            var atr = (double)curInd.ATR;
+            var istTime = istTimes[i];
+
+            // ── Day boundary reset ──
+            if (istTime.Date != lastDayDate)
+            {
+                if (openTrade != null)
+                {
+                    var prev = candles[i - 1];
+                    var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(prev.Timestamp), (double)prev.Close, remainingQty);
+                    runningCapital += closed.Pnl;
+                    if (runningCapital > peakCapital) peakCapital = runningCapital;
+                    trades.Add(closed);
+                    openTrade = null;
+                }
+                risk = new DayRiskState { DayStartCapital = runningCapital };
+                lastDayDate = istTime.Date;
+            }
+
+            // ── Manage open position ──
+            if (openTrade != null)
+            {
+                var partial = ManageOpenPosition(openTrade, candle, ref trailStop, ref remainingQty, ref movedToBE);
+                if (partial != null)
+                {
+                    runningCapital += partial.Pnl;
+                    if (runningCapital > peakCapital) peakCapital = runningCapital;
+                    trades.Add(partial);
+                }
+
+                var exitResult = CheckExit(openTrade, candle, atr, p, ref trailStop);
+                if (exitResult != null)
+                {
+                    var closed = ApplyCostsWithQty(exitResult, remainingQty);
+                    runningCapital += closed.Pnl;
+                    if (runningCapital > peakCapital) peakCapital = runningCapital;
+                    trades.Add(closed);
+                    risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                    openTrade = null;
+                }
+                continue;
+            }
+
+            if (atr <= 0) continue;
+
+            var timeOfDay = TimeOnly.FromDateTime(istTime.DateTime);
+            if (timeOfDay >= EmaSpeedCutoff) continue;
+
+            // ── Trend gate: FastEMA vs SlowEMA ──
+            bool uptrend = curInd.EMAFast > curInd.EMASlow;
+            bool downtrend = curInd.EMAFast < curInd.EMASlow;
+            if (!uptrend && !downtrend) continue;
+
+            double fastEma = (double)curInd.EMAFast;
+            double close = (double)candle.Close;
+            double open = (double)candle.Open;
+            double candleBody = Math.Abs(close - open);
+            double speedThreshold = close * SpeedThresholdPct / 100.0;
+
+            // ── Momentum candle filter: body must be large enough (speed confirmation) ──
+            if (candleBody < speedThreshold) continue;
+
+            bool isLong = uptrend && candle.IsBullish;
+            bool isShort = downtrend && candle.IsBearish;
+            if (!isLong && !isShort) continue;
+
+            // ── Pullback filter: price must be within MaxPullbackPct% of FastEMA ──
+            // LONG: price pulled back toward FastEMA from above (close ≥ FastEMA, within 5%)
+            // SHORT: price pulled back toward FastEMA from below (close ≤ FastEMA, within 5%)
+            if (isLong)
+            {
+                if (close < fastEma) continue; // price below FastEMA — not a valid pullback in uptrend
+                double pullbackPct = (close - fastEma) / fastEma * 100.0;
+                if (pullbackPct > MaxPullbackPct) continue; // too far from EMA — not a shallow pullback
+            }
+            else
+            {
+                if (close > fastEma) continue; // price above FastEMA — not a valid pullback in downtrend
+                double pullbackPct = (fastEma - close) / fastEma * 100.0;
+                if (pullbackPct > MaxPullbackPct) continue;
+            }
+
+            if (!PassesConfluence(curInd, isLong)) continue;
+            if (!HasVolumeConfirmation(candles, i)) continue;
+            if (!risk.CanTrade(i, isLong ? "LONG" : "SHORT")) continue;
+            if (i + 1 >= candles.Count) continue;
+
+            var nextCandle = candles[i + 1];
+            var rawEntry = (double)nextCandle.Open;
+            var entryPrice = ApplySlippage(rawEntry, isLong);
+
+            // SL: ATR × 4 (as per the original strategy)
+            var slDistance = Math.Max(atr * AtrSlMultiplier, atr * 0.25);
+            var sl = isLong ? entryPrice - slDistance : entryPrice + slDistance;
+            var target = CalcTarget(p, entryPrice, slDistance, atr, isLong);
+
+            var rrRatio = slDistance > 0 ? Math.Abs(target - entryPrice) / slDistance : 0;
+            if (rrRatio < MinRRForEntry) { i++; continue; }
+
+            var effectiveRisk = DrawdownAdjustedRisk(p.RiskPercent, runningCapital, peakCapital);
+            if (effectiveRisk <= 0) { i++; continue; }
+
+            var qty = CalcQuantity(runningCapital, effectiveRisk, slDistance);
+            if (qty <= 0) { i++; continue; }
+
+            var notional = entryPrice * qty;
+            if (notional > runningCapital * 0.20)
+                qty = (int)Math.Floor(runningCapital * 0.20 / entryPrice);
+            if (qty <= 0) { i++; continue; }
+
+            openTrade = new BacktestTradeResult(
+                Guid.NewGuid().ToString(),
+                ToIstDateTime(nextCandle.Timestamp), entryPrice,
+                default, 0, sl, target, qty, 0, 0,
+                isLong ? "LONG" : "SHORT");
+            trailStop = sl;
+            remainingQty = qty;
+            movedToBE = false;
+
+            var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+            if (entryBarExit != null)
+            {
+                var closed = ApplyCostsWithQty(entryBarExit, remainingQty);
+                runningCapital += closed.Pnl;
+                if (runningCapital > peakCapital) peakCapital = runningCapital;
+                trades.Add(closed);
+                risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                openTrade = null;
+            }
+            i++;
+        }
+
+        if (openTrade != null && candles.Count > 0)
+        {
+            var last = candles[^1];
+            var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(last.Timestamp), (double)last.Close, remainingQty);
+            runningCapital += closed.Pnl;
+            trades.Add(closed);
+        }
+
+        return trades;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // STRATEGY: EMA Pullback + Speed (Combined)
+    // ─────────────────────────────────────────────────────────
+    // Merges EMA_PULLBACK (crossover-triggered entries) with EMA_SPEED (trend-continuation
+    // momentum entries). Crossover setups take priority; speed entries fire only when
+    // no crossover setup is pending. One open position at a time.
+    private static readonly TimeOnly EmaPullbackSpeedCutoff = new(14, 0);
+
+    private static List<BacktestTradeResult> RunEmaPullbackSpeed(
+        List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
+        StrategyParams p, double initialCapital)
+    {
+        var trades = new List<BacktestTradeResult>();
+        double runningCapital = initialCapital;
+        double peakCapital = initialCapital;
+
+        BacktestTradeResult? openTrade = null;
+        double trailStop = 0;
+        int remainingQty = 0;
+        bool movedToBE = false;
+        var risk = new DayRiskState { DayStartCapital = initialCapital };
+        DateTime lastDayDate = DateTime.MinValue;
+
+        // Pullback-wait state (from EMA_PULLBACK)
+        bool waitingForLong = false;
+        bool waitingForShort = false;
+        double longSwingTarget = 0;
+        double shortSwingTarget = 0;
+
+        // Speed entry constants (from EMA_SPEED)
+        const double MaxPullbackPct = 5.0;
+        const double SpeedThresholdPct = 0.5;
+        const double AtrSlMultiplier = 4.0;
+
+        for (int i = Math.Max(1, MinWarmupBars); i < candles.Count; i++)
+        {
+            var prevInd = indicators[i - 1];
+            var curInd = indicators[i];
+            var candle = candles[i];
+            var atr = (double)curInd.ATR;
+            var istTime = istTimes[i];
+
+            // ── Day boundary reset ──
+            if (istTime.Date != lastDayDate)
+            {
+                if (openTrade != null)
+                {
+                    var prevCandle = candles[i - 1];
+                    var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(prevCandle.Timestamp), (double)prevCandle.Close, remainingQty);
+                    runningCapital += closed.Pnl;
+                    if (runningCapital > peakCapital) peakCapital = runningCapital;
+                    trades.Add(closed);
+                    openTrade = null;
+                }
+                waitingForLong = false;
+                waitingForShort = false;
+                risk = new DayRiskState { DayStartCapital = runningCapital };
+                lastDayDate = istTime.Date;
+            }
+
+            // ── Manage open position ──
+            if (openTrade != null)
+            {
+                var partial = ManageOpenPosition(openTrade, candle, ref trailStop, ref remainingQty, ref movedToBE);
+                if (partial != null)
+                {
+                    runningCapital += partial.Pnl;
+                    if (runningCapital > peakCapital) peakCapital = runningCapital;
+                    trades.Add(partial);
+                }
+
+                var exitResult = CheckExit(openTrade, candle, atr, p, ref trailStop);
+                if (exitResult != null)
+                {
+                    var closed = ApplyCostsWithQty(exitResult, remainingQty);
+                    runningCapital += closed.Pnl;
+                    if (runningCapital > peakCapital) peakCapital = runningCapital;
+                    trades.Add(closed);
+                    risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                    openTrade = null;
+                }
+                else
+                {
+                    continue;
+                }
+            }
+
+            if (atr <= 0) continue;
+
+            var timeOfDay = TimeOnly.FromDateTime(istTime.DateTime);
+            bool pastCutoff = timeOfDay >= EmaPullbackSpeedCutoff;
+
+            // ── Detect crossovers ──
+            bool bullishCross = prevInd.EMAFast <= prevInd.EMASlow && curInd.EMAFast > curInd.EMASlow;
+            bool bearishCross = prevInd.EMAFast >= prevInd.EMASlow && curInd.EMAFast < curInd.EMASlow;
+
+            if (bearishCross) waitingForLong = false;
+            if (bullishCross) waitingForShort = false;
+
+            bool enteredThisBar = false;
+
+            // ════════════════════════════════════════════════════════
+            // PHASE 1: CROSSOVER ENTRIES (EMA_PULLBACK logic)
+            // ════════════════════════════════════════════════════════
+
+            // ── Bullish crossover ──
+            if (!pastCutoff && bullishCross && !waitingForLong)
+            {
+                double bullRunHigh = FindPreviousBullRunHigh(candles, indicators, i);
+                if (bullRunHigh > 0)
+                {
+                    if ((double)candle.Close < (double)curInd.EMAFast)
+                    {
+                        // Case A: immediate LONG
+                        if (i + 1 < candles.Count && risk.CanTrade(i, "LONG"))
+                        {
+                            var nextCandle = candles[i + 1];
+                            var entryPrice = ApplySlippage((double)nextCandle.Open, true);
+                            var swingLow = FindRecentSwingLow(candles, i);
+                            var slDistance = Math.Max(entryPrice - (swingLow - atr * 0.1), atr * 0.25);
+                            var sl = entryPrice - slDistance;
+                            var target = bullRunHigh;
+
+                            var rrRatio = slDistance > 0 ? (target - entryPrice) / slDistance : 0;
+                            if (rrRatio >= MinRRForEntry && PassesConfluence(curInd, true) && HasVolumeConfirmation(candles, i))
+                            {
+                                var effectiveRisk = DrawdownAdjustedRisk(p.RiskPercent, runningCapital, peakCapital);
+                                if (effectiveRisk > 0)
+                                {
+                                    var qty = CalcQuantity(runningCapital, effectiveRisk, slDistance);
+                                    if (qty > 0)
+                                    {
+                                        var notional = entryPrice * qty;
+                                        if (notional > runningCapital * 0.20)
+                                            qty = (int)Math.Floor(runningCapital * 0.20 / entryPrice);
+                                        if (qty > 0)
+                                        {
+                                            openTrade = new BacktestTradeResult(
+                                                Guid.NewGuid().ToString(),
+                                                ToIstDateTime(nextCandle.Timestamp), entryPrice,
+                                                default, 0, sl, target, qty, 0, 0, "LONG");
+                                            trailStop = sl; remainingQty = qty; movedToBE = false;
+
+                                            var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                                            if (entryBarExit != null)
+                                            {
+                                                var closed = ApplyCostsWithQty(entryBarExit, remainingQty);
+                                                runningCapital += closed.Pnl;
+                                                if (runningCapital > peakCapital) peakCapital = runningCapital;
+                                                trades.Add(closed);
+                                                risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                                                openTrade = null;
+                                            }
+                                            enteredThisBar = true;
+                                            i++;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Case B: wait for pullback
+                        waitingForLong = true;
+                        longSwingTarget = bullRunHigh;
+                    }
+                }
+            }
+
+            // ── Bearish crossover ──
+            if (!enteredThisBar && !pastCutoff && bearishCross && !waitingForShort)
+            {
+                double bearRunLow = FindPreviousBearRunLow(candles, indicators, i);
+                if (bearRunLow > 0)
+                {
+                    if ((double)candle.Close > (double)curInd.EMAFast)
+                    {
+                        // Case A: immediate SHORT
+                        if (i + 1 < candles.Count && risk.CanTrade(i, "SHORT"))
+                        {
+                            var nextCandle = candles[i + 1];
+                            var entryPrice = ApplySlippage((double)nextCandle.Open, false);
+                            var swingHigh = FindRecentSwingHigh(candles, i);
+                            var slDistance = Math.Max((swingHigh + atr * 0.1) - entryPrice, atr * 0.25);
+                            var sl = entryPrice + slDistance;
+                            var target = bearRunLow;
+
+                            var rrRatio = slDistance > 0 ? (entryPrice - target) / slDistance : 0;
+                            if (rrRatio >= MinRRForEntry && PassesConfluence(curInd, false) && HasVolumeConfirmation(candles, i))
+                            {
+                                var effectiveRisk = DrawdownAdjustedRisk(p.RiskPercent, runningCapital, peakCapital);
+                                if (effectiveRisk > 0)
+                                {
+                                    var qty = CalcQuantity(runningCapital, effectiveRisk, slDistance);
+                                    if (qty > 0)
+                                    {
+                                        var notional = entryPrice * qty;
+                                        if (notional > runningCapital * 0.20)
+                                            qty = (int)Math.Floor(runningCapital * 0.20 / entryPrice);
+                                        if (qty > 0)
+                                        {
+                                            openTrade = new BacktestTradeResult(
+                                                Guid.NewGuid().ToString(),
+                                                ToIstDateTime(nextCandle.Timestamp), entryPrice,
+                                                default, 0, sl, target, qty, 0, 0, "SHORT");
+                                            trailStop = sl; remainingQty = qty; movedToBE = false;
+
+                                            var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                                            if (entryBarExit != null)
+                                            {
+                                                var closed = ApplyCostsWithQty(entryBarExit, remainingQty);
+                                                runningCapital += closed.Pnl;
+                                                if (runningCapital > peakCapital) peakCapital = runningCapital;
+                                                trades.Add(closed);
+                                                risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                                                openTrade = null;
+                                            }
+                                            enteredThisBar = true;
+                                            i++;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Case B: wait for pullback
+                        waitingForShort = true;
+                        shortSwingTarget = bearRunLow;
+                    }
+                }
+            }
+
+            if (enteredThisBar) continue;
+
+            // ════════════════════════════════════════════════════════
+            // PHASE 2: PULLBACK RETEST ENTRIES (EMA_PULLBACK Case B)
+            // ════════════════════════════════════════════════════════
+
+            if (waitingForLong && openTrade == null && !pastCutoff && i + 1 < candles.Count)
+            {
+                bool wickTouchesEma = (double)candle.Low <= (double)curInd.EMAFast;
+                bool closesGreen = candle.IsBullish;
+                if (wickTouchesEma && closesGreen && risk.CanTrade(i, "LONG"))
+                {
+                    var nextCandle = candles[i + 1];
+                    var entryPrice = ApplySlippage((double)nextCandle.Open, true);
+                    var slDistance = Math.Max(entryPrice - ((double)candle.Low - atr * 0.1), atr * 0.25);
+                    var sl = entryPrice - slDistance;
+                    var target = longSwingTarget;
+
+                    var rrRatio = slDistance > 0 ? (target - entryPrice) / slDistance : 0;
+                    if (rrRatio >= MinRRForEntry && PassesConfluence(curInd, true) && HasVolumeConfirmation(candles, i))
+                    {
+                        var effectiveRisk = DrawdownAdjustedRisk(p.RiskPercent, runningCapital, peakCapital);
+                        if (effectiveRisk > 0)
+                        {
+                            var qty = CalcQuantity(runningCapital, effectiveRisk, slDistance);
+                            if (qty > 0)
+                            {
+                                var notional = entryPrice * qty;
+                                if (notional > runningCapital * 0.20)
+                                    qty = (int)Math.Floor(runningCapital * 0.20 / entryPrice);
+                                if (qty > 0)
+                                {
+                                    openTrade = new BacktestTradeResult(
+                                        Guid.NewGuid().ToString(),
+                                        ToIstDateTime(nextCandle.Timestamp), entryPrice,
+                                        default, 0, sl, target, qty, 0, 0, "LONG");
+                                    trailStop = sl; remainingQty = qty; movedToBE = false;
+                                    waitingForLong = false;
+
+                                    var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                                    if (entryBarExit != null)
+                                    {
+                                        var closed = ApplyCostsWithQty(entryBarExit, remainingQty);
+                                        runningCapital += closed.Pnl;
+                                        if (runningCapital > peakCapital) peakCapital = runningCapital;
+                                        trades.Add(closed);
+                                        risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                                        openTrade = null;
+                                    }
+                                    i++;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (waitingForShort && openTrade == null && !pastCutoff && i + 1 < candles.Count)
+            {
+                bool wickTouchesEma = (double)candle.High >= (double)curInd.EMAFast;
+                bool closesRed = candle.IsBearish;
+                if (wickTouchesEma && closesRed && risk.CanTrade(i, "SHORT"))
+                {
+                    var nextCandle = candles[i + 1];
+                    var entryPrice = ApplySlippage((double)nextCandle.Open, false);
+                    var slDistance = Math.Max(((double)candle.High + atr * 0.1) - entryPrice, atr * 0.25);
+                    var sl = entryPrice + slDistance;
+                    var target = shortSwingTarget;
+
+                    var rrRatio = slDistance > 0 ? (entryPrice - target) / slDistance : 0;
+                    if (rrRatio >= MinRRForEntry && PassesConfluence(curInd, false) && HasVolumeConfirmation(candles, i))
+                    {
+                        var effectiveRisk = DrawdownAdjustedRisk(p.RiskPercent, runningCapital, peakCapital);
+                        if (effectiveRisk > 0)
+                        {
+                            var qty = CalcQuantity(runningCapital, effectiveRisk, slDistance);
+                            if (qty > 0)
+                            {
+                                var notional = entryPrice * qty;
+                                if (notional > runningCapital * 0.20)
+                                    qty = (int)Math.Floor(runningCapital * 0.20 / entryPrice);
+                                if (qty > 0)
+                                {
+                                    openTrade = new BacktestTradeResult(
+                                        Guid.NewGuid().ToString(),
+                                        ToIstDateTime(nextCandle.Timestamp), entryPrice,
+                                        default, 0, sl, target, qty, 0, 0, "SHORT");
+                                    trailStop = sl; remainingQty = qty; movedToBE = false;
+                                    waitingForShort = false;
+
+                                    var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                                    if (entryBarExit != null)
+                                    {
+                                        var closed = ApplyCostsWithQty(entryBarExit, remainingQty);
+                                        runningCapital += closed.Pnl;
+                                        if (runningCapital > peakCapital) peakCapital = runningCapital;
+                                        trades.Add(closed);
+                                        risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                                        openTrade = null;
+                                    }
+                                    i++;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ════════════════════════════════════════════════════════
+            // PHASE 3: SPEED ENTRIES (only when no crossover setup pending)
+            // ════════════════════════════════════════════════════════
+
+            if (!waitingForLong && !waitingForShort && openTrade == null && !pastCutoff && i + 1 < candles.Count)
+            {
+                bool uptrend = curInd.EMAFast > curInd.EMASlow;
+                bool downtrend = curInd.EMAFast < curInd.EMASlow;
+                double close = (double)candle.Close;
+                double fastEma = (double)curInd.EMAFast;
+                double candleBody = Math.Abs(close - (double)candle.Open);
+                double speedThreshold = close * SpeedThresholdPct / 100.0;
+                bool speedOk = candleBody >= speedThreshold;
+
+                bool isLong = uptrend && candle.IsBullish && speedOk
+                              && close >= fastEma
+                              && (close - fastEma) / fastEma * 100.0 <= MaxPullbackPct;
+
+                bool isShort = !isLong && downtrend && candle.IsBearish && speedOk
+                               && close <= fastEma
+                               && (fastEma - close) / fastEma * 100.0 <= MaxPullbackPct;
+
+                if ((isLong || isShort) && PassesConfluence(curInd, isLong) && HasVolumeConfirmation(candles, i)
+                    && risk.CanTrade(i, isLong ? "LONG" : "SHORT"))
+                {
+                    var nextCandle = candles[i + 1];
+                    var entryPrice = ApplySlippage((double)nextCandle.Open, isLong);
+                    var slDistance = Math.Max(atr * AtrSlMultiplier, atr * 0.25);
+                    var sl = isLong ? entryPrice - slDistance : entryPrice + slDistance;
+                    var target = CalcTarget(p, entryPrice, slDistance, atr, isLong);
+
+                    var rrRatio = slDistance > 0 ? Math.Abs(target - entryPrice) / slDistance : 0;
+                    if (rrRatio >= MinRRForEntry)
+                    {
+                        var effectiveRisk = DrawdownAdjustedRisk(p.RiskPercent, runningCapital, peakCapital);
+                        if (effectiveRisk > 0)
+                        {
+                            var qty = CalcQuantity(runningCapital, effectiveRisk, slDistance);
+                            if (qty > 0)
+                            {
+                                var notional = entryPrice * qty;
+                                if (notional > runningCapital * 0.20)
+                                    qty = (int)Math.Floor(runningCapital * 0.20 / entryPrice);
+                                if (qty > 0)
+                                {
+                                    openTrade = new BacktestTradeResult(
+                                        Guid.NewGuid().ToString(),
+                                        ToIstDateTime(nextCandle.Timestamp), entryPrice,
+                                        default, 0, sl, target, qty, 0, 0,
+                                        isLong ? "LONG" : "SHORT");
+                                    trailStop = sl; remainingQty = qty; movedToBE = false;
+
+                                    var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
+                                    if (entryBarExit != null)
+                                    {
+                                        var closed = ApplyCostsWithQty(entryBarExit, remainingQty);
+                                        runningCapital += closed.Pnl;
+                                        if (runningCapital > peakCapital) peakCapital = runningCapital;
+                                        trades.Add(closed);
+                                        risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                                        openTrade = null;
+                                    }
+                                    i++;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Abandon pending setups past cutoff
             if (pastCutoff)
             {
                 waitingForLong = false;
@@ -1400,26 +2015,37 @@ public class BacktestRunnerService
     // SHARED HELPERS
     // ─────────────────────────────────────────────────────────
 
-    private static double GetDayHighBeforeIdx(List<Candle> candles, DateTimeOffset[] istTimes, int idx)
+
+    /// <summary>
+    /// Walks back from <paramref name="crossoverIdx"/> through the bearish EMA phase that just ended
+    /// (bars where FastEMA &lt; SlowEMA) and returns the highest High in that run.
+    /// Used as the LONG target after a bullish crossover.
+    /// </summary>
+    private static double FindPreviousBullRunHigh(List<Candle> candles, IndicatorValues[] indicators, int crossoverIdx)
     {
-        var date = istTimes[idx].Date;
         double high = 0;
-        for (int k = idx - 1; k >= 0; k--)
+        for (int k = crossoverIdx - 1; k >= 0; k--)
         {
-            if (istTimes[k].Date != date) break;
+            // Walk through the bearish phase (FastEMA < SlowEMA); stop when we exit back into the prior bullish phase
+            if (indicators[k].EMAFast >= indicators[k].EMASlow) break;
             var h = (double)candles[k].High;
             if (h > high) high = h;
         }
         return high;
     }
 
-    private static double GetDayLowBeforeIdx(List<Candle> candles, DateTimeOffset[] istTimes, int idx)
+    /// <summary>
+    /// Walks back from <paramref name="crossoverIdx"/> through the bullish EMA phase that just ended
+    /// (bars where FastEMA &gt; SlowEMA) and returns the lowest Low in that run.
+    /// Used as the SHORT target after a bearish crossover.
+    /// </summary>
+    private static double FindPreviousBearRunLow(List<Candle> candles, IndicatorValues[] indicators, int crossoverIdx)
     {
-        var date = istTimes[idx].Date;
         double low = double.MaxValue;
-        for (int k = idx - 1; k >= 0; k--)
+        for (int k = crossoverIdx - 1; k >= 0; k--)
         {
-            if (istTimes[k].Date != date) break;
+            // Walk through the bullish phase (FastEMA > SlowEMA); stop when we exit back into the prior bearish phase
+            if (indicators[k].EMAFast <= indicators[k].EMASlow) break;
             var l = (double)candles[k].Low;
             if (l < low) low = l;
         }
@@ -1603,20 +2229,27 @@ public class BacktestRunnerService
         int losingTrades = trades.Count(t => t.Pnl < 0);
         double winRate = (double)winningTrades / totalTrades;
         double totalPnl = trades.Sum(t => t.Pnl);
+        double finalCapital = initialCapital + totalPnl;
         double totalReturn = (totalPnl / initialCapital) * 100.0;
 
         double grossProfit = trades.Where(t => t.Pnl > 0).Sum(t => t.Pnl);
         double grossLoss = Math.Abs(trades.Where(t => t.Pnl < 0).Sum(t => t.Pnl));
         double profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 9999.0 : 0;
+        double avgWinPnl = winningTrades > 0 ? grossProfit / winningTrades : 0;
+        double avgLossPnl = losingTrades > 0 ? -(grossLoss / losingTrades) : 0;
 
-        double avgRR = trades.Average(t =>
-        {
-            var risk = Math.Abs(t.EntryPrice - t.StopLoss);
-            if (risk <= 0) return 0;
-            bool isLong = t.TradeType == "LONG";
-            var signedMove = isLong ? t.ExitPrice - t.EntryPrice : t.EntryPrice - t.ExitPrice;
-            return signedMove / risk;
-        });
+        // Quantity-weighted avgRR: larger positions count proportionally more
+        long totalQty = trades.Sum(t => (long)t.Quantity);
+        double avgRR = totalQty > 0
+            ? trades.Sum(t =>
+            {
+                var risk = Math.Abs(t.EntryPrice - t.StopLoss);
+                if (risk <= 0) return 0.0;
+                bool isLong = t.TradeType == "LONG";
+                var signedMove = isLong ? t.ExitPrice - t.EntryPrice : t.EntryPrice - t.ExitPrice;
+                return (signedMove / risk) * t.Quantity;
+            }) / totalQty
+            : 0;
 
         // Equity curve uses IST times for display consistency.
         // Internally, candle ordering by UTC is fine (IST = UTC+5:30, order is preserved).
@@ -1685,9 +2318,14 @@ public class BacktestRunnerService
             LosingTrades: losingTrades,
             TotalReturn: Math.Round(totalReturn, 2),
             ProfitFactor: Math.Round(profitFactor, 2),
-            EquityCurve: equityCurve);
+            EquityCurve: equityCurve,
+            InitialCapital: Math.Round(initialCapital, 2),
+            FinalCapital: Math.Round(finalCapital, 2),
+            AvgWinPnl: Math.Round(avgWinPnl, 2),
+            AvgLossPnl: Math.Round(avgLossPnl, 2));
     }
 
     private static BacktestMetrics EmptyMetrics(double initialCapital, DateTime timestamp) =>
-        new(0, 0, 0, 0, 0, 0, 0, 0, 0, [new EquityPoint(timestamp, initialCapital)]);
+        new(0, 0, 0, 0, 0, 0, 0, 0, 0, [new EquityPoint(timestamp, initialCapital)],
+            Math.Round(initialCapital, 2), Math.Round(initialCapital, 2), 0, 0);
 }

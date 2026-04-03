@@ -10,7 +10,7 @@ namespace TradingSystem.Api.Controllers;
 public class BacktestRunController : ControllerBase
 {
     private static readonly HashSet<int> AllowedTimeframes = [1, 5, 15, 30];
-    private static readonly HashSet<string> AllowedStrategies = ["ORB", "RSI_REVERSAL", "EMA_CROSSOVER", "EMA_PULLBACK", "SMC_FVG"];
+    private static readonly HashSet<string> AllowedStrategies = ["ORB", "RSI_REVERSAL", "EMA_CROSSOVER", "EMA_PULLBACK", "EMA_SPEED", "EMA_PULLBACK_SPEED", "SMC_FVG"];
 
     private readonly BacktestRunnerService _backtestService;
     private readonly ILogger<BacktestRunController> _logger;
@@ -45,7 +45,7 @@ public class BacktestRunController : ControllerBase
 
         var strategyName = request.Strategy.Name?.ToUpperInvariant() ?? "";
         if (!AllowedStrategies.Contains(strategyName))
-            return BadRequest("Strategy name must be one of: ORB, RSI_REVERSAL, EMA_CROSSOVER, EMA_PULLBACK");
+            return BadRequest("Strategy name must be one of: ORB, RSI_REVERSAL, EMA_CROSSOVER, EMA_PULLBACK, EMA_SPEED, EMA_PULLBACK_SPEED, SMC_FVG");
 
         if (request.Strategy.Params.RiskPercent < 0.1 || request.Strategy.Params.RiskPercent > 10)
             return BadRequest("RiskPercent must be between 0.1 and 10");
@@ -62,9 +62,13 @@ public class BacktestRunController : ControllerBase
                 return BadRequest("SlPercent must be provided and greater than 0 when StopLossType is FIXED_PERCENT");
         }
 
+        var capital = request.InitialCapital ?? 100_000;
+        if (capital < 1_000 || capital > 100_000_000)
+            return BadRequest("InitialCapital must be between 1,000 and 100,000,000");
+
         try
         {
-            var result = await _backtestService.RunAsync(request);
+            var result = await _backtestService.RunAsync(request, capital);
             return Ok(result);
         }
         catch (KeyNotFoundException ex)
