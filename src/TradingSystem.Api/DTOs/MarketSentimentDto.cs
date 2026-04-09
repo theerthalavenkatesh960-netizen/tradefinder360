@@ -13,6 +13,8 @@ public class MarketSentimentDto
     public MarketBreadthDto Breadth { get; set; } = new();
     public List<IndexPerformanceDto> MajorIndices { get; set; } = new();
     public List<SectorPerformanceDto> Sectors { get; set; } = new();
+    public GlobalMacroSnapshotDto GlobalMacro { get; set; } = new();
+    public InstitutionalFlowsDto InstitutionalFlows { get; set; } = new();
     public List<string> KeyFactors { get; set; } = new();
     public string Summary { get; set; } = string.Empty;
 }
@@ -52,4 +54,32 @@ public class SectorPerformanceDto
     public int StocksDeclining { get; set; }
     public decimal RelativeStrength { get; set; }
     public string Performance { get; set; } = string.Empty; // "OUTPERFORMING", "INLINE", "UNDERPERFORMING"
+}
+
+public class GlobalMacroSnapshotDto
+{
+    public MacroMetricDto GiftNifty { get; set; } = new();
+    public MacroMetricDto BrentCrude { get; set; } = new();
+    public MacroMetricDto UsdInr { get; set; } = new();
+    public MacroMetricDto Us10yYield { get; set; } = new();
+}
+
+public class MacroMetricDto
+{
+    public decimal Price { get; set; }
+    public decimal Change { get; set; }
+    public decimal ChangePct { get; set; }
+}
+
+public class InstitutionalFlowsDto
+{
+    public FlowMetricDto Fii { get; set; } = new();
+    public FlowMetricDto Dii { get; set; } = new();
+}
+
+public class FlowMetricDto
+{
+    public decimal Buy { get; set; }
+    public decimal Sell { get; set; }
+    public decimal Net { get; set; }
 }

@@ -77,6 +77,9 @@ public class MarketContext
     public decimal SentimentScore { get; set; }
     public decimal VolatilityIndex { get; set; }
     public decimal MarketBreadth { get; set; }
+    public int StocksAdvancing { get; set; }
+    public int StocksDeclining { get; set; }
+    public int StocksUnchanged { get; set; }
 
     // ?? Multi-period indicator fields ????????????????????????????????????????
     public decimal RSI { get; set; }
@@ -90,6 +93,29 @@ public class MarketContext
 
     public List<IndexPerformance> MajorIndices { get; set; } = new();
     public List<SectorPerformance> Sectors { get; set; } = new();
+    public List<GlobalMacroMetric> GlobalMacro { get; set; } = new();
+    public InstitutionalFlowSnapshot InstitutionalFlows { get; set; } = new();
     public List<string> KeyFactors { get; set; } = new();
     public string Summary { get; set; } = string.Empty;
+}
+
+public class GlobalMacroMetric
+{
+    public string Key { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public decimal Change { get; set; }
+    public decimal ChangePercent { get; set; }
+}
+
+public class InstitutionalFlowSnapshot
+{
+    public InstitutionalFlow Fii { get; set; } = new();
+    public InstitutionalFlow Dii { get; set; } = new();
+}
+
+public class InstitutionalFlow
+{
+    public decimal Buy { get; set; }
+    public decimal Sell { get; set; }
+    public decimal Net { get; set; }
 }
