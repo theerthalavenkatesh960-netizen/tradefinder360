@@ -354,3 +354,186 @@ Focus on precision.
 Cannot write DateTimeOffset with Offset=05:30:00 
 to PostgreSQL type 'timestamp with time zone'
 only offset 0 (UTC) is supported
+
+
+-------------------------------------------------------
+
+You are a senior software architect and quantitative trading engineer.
+
+I already have an existing .NET system with:
+
+* APIs to fetch market data (Nifty/options)
+* A working backtesting engine
+* A UI to visualize results
+
+Your task is to DESIGN and IMPLEMENT a modular “Strategy Research Engine” that builds on top of my existing system.
+
+Do NOT rewrite existing functionality. Instead:
+
+* Discover and reuse existing services
+* Extend them cleanly using interfaces and dependency injection
+* Keep everything production-grade and maintainable
+
+---
+
+## 🎯 Goal
+
+Create a system that can:
+
+1. Generate trading strategies
+2. Run backtests using my existing engine
+3. Evaluate performance
+4. Improve strategies iteratively
+5. Simulate a multi-agent discussion in a structured way
+
+---
+
+## 🧩 Architecture Requirements
+
+Design the system with the following components:
+
+### 1. Orchestrator (Core Engine)
+
+* Controls the full loop:
+  Generate → Backtest → Evaluate → Improve → Repeat
+* Configurable number of iterations
+* Logs every step
+
+---
+
+### 2. Strategy Model
+
+Define a flexible strategy schema (class or JSON) with:
+
+* Entry conditions (e.g., breakout, delta threshold)
+* Exit rules (SL, target)
+* Filters (volume, trend, theta constraints)
+
+Ensure it is extensible.
+
+---
+
+### 3. Strategy Generator
+
+* Generates initial strategies (rule-based first, then AI-ready)
+* Should support:
+
+  * Randomized parameter generation
+  * Template-based strategies
+
+---
+
+### 4. Backtest Adapter
+
+* Connects to my existing backtest system
+* Accepts Strategy Model
+* Returns:
+
+  * PnL
+  * Win rate
+  * Drawdown
+  * Trade logs
+
+---
+
+### 5. Evaluation Engine
+
+* Scores strategies based on:
+
+  * Profitability
+  * Drawdown
+  * Risk-reward
+* Produces a normalized score
+
+---
+
+### 6. Improvement Engine (Agent-like behavior)
+
+* Takes a weak strategy and improves it by:
+
+  * Adjusting parameters (delta, theta thresholds)
+  * Adding/removing conditions
+* Should NOT be random — must use evaluation feedback
+
+---
+
+### 7. Critic / Validator
+
+* Rejects:
+
+  * Overfitted strategies
+  * Unrealistic assumptions
+* Adds constraints like:
+
+  * Minimum trades
+  * Max drawdown limits
+
+---
+
+### 8. Strategy Memory
+
+* Store all strategies tested
+* Avoid duplicates
+* Track best-performing strategies
+
+---
+
+## 🤖 “Agent Discussion” Simulation
+
+Do NOT implement free-form chat agents.
+
+Instead simulate agents as structured roles:
+
+* Generator → proposes strategy
+* Evaluator → scores it
+* Critic → challenges it
+* Improver → modifies it
+
+Each step must pass structured data (not plain text).
+
+---
+
+## ⚙️ Technical Requirements
+
+* Use clean architecture (interfaces, services)
+* Use dependency injection
+* Keep components loosely coupled
+* Add logging at every stage
+* Make it easy to plug in LLM later
+
+---
+
+## 📦 Deliverables
+
+1. Folder structure for new modules
+2. Interfaces and implementations for all components
+3. Example workflow execution
+4. Sample strategies and outputs
+5. Extension points for AI integration later
+
+---
+
+## 🚨 Constraints
+
+* DO NOT break existing APIs
+* DO NOT hardcode values
+* DO NOT tightly couple components
+* Ensure testability
+
+---
+
+## 💡 Bonus (if possible)
+
+* Add parallel strategy testing
+* Add configuration for risk parameters
+* Add ability to export best strategies
+
+---
+
+Start by:
+
+1. Analyzing what components likely already exist in my system
+2. Designing the architecture
+3. Then implementing step-by-step
+
+Output clean, production-quality .NET code.

@@ -76,22 +76,33 @@ public class BacktestRunnerService
             .Select(c => TimeZoneInfo.ConvertTime(c.Timestamp, Ist))
             .ToArray();
 
-        var trades = request.Strategy.Name.ToUpperInvariant() switch
+        BacktestAnnotations? annotations = null;
+        List<BacktestTradeResult> tradeList;
+
+        if (request.Strategy.Name.Equals("ORB_FVG_RETEST", StringComparison.OrdinalIgnoreCase))
         {
-            "ORB" => RunORB(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-            "RSI_REVERSAL" => RunRsiReversal(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-            "EMA_CROSSOVER" => RunEmaCrossover(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-            "EMA_PULLBACK" => RunEmaPullback(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-            "EMA_SPEED" => RunEmaSpeed(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-            "EMA_PULLBACK_SPEED" => RunEmaPullbackSpeed(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-            "SMC_FVG" => RunSmcFvg(instrument.Id, request.From, request.To, request.Strategy.Params, initialCapital),
-            _ => throw new ArgumentException($"Unknown strategy: {request.Strategy.Name}")
-        };
+            var (trades, annot) = RunOrbFvgRetest(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital, instrument);
+            tradeList = trades;
+            annotations = annot;
+        }
+        else
+        {
+            var trades = request.Strategy.Name.ToUpperInvariant() switch
+            {
+                "ORB" => RunORB(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+                "RSI_REVERSAL" => RunRsiReversal(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+                "EMA_CROSSOVER" => RunEmaCrossover(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+                "EMA_PULLBACK" => RunEmaPullback(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+                "EMA_SPEED" => RunEmaSpeed(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+                "EMA_PULLBACK_SPEED" => RunEmaPullbackSpeed(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
+                "SMC_FVG" => RunSmcFvg(instrument.Id, request.From, request.To, request.Strategy.Params, initialCapital),
+                _ => throw new ArgumentException($"Unknown strategy: {request.Strategy.Name}")
+            };
+            tradeList = trades.ToList();
+        }
 
-        var tradeList = trades.ToList();
         var metrics = CalculateMetrics(tradeList, initialCapital, orderedCandles);
-
-        return new BacktestResponse(tradeList, metrics);
+        return new BacktestResponse(tradeList, metrics, annotations);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -401,6 +412,492 @@ public class BacktestRunnerService
         }
 
         return trades;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // STRATEGY A.5: Opening Range Breakout + FVG Retest
+    // ─────────────────────────────────────────────────────────
+    private (List<BacktestTradeResult> trades, BacktestAnnotations annotations) RunOrbFvgRetest(
+        List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
+        StrategyParams p, double initialCapital, TradingInstrument instrument)
+    {
+        var trades          = new List<BacktestTradeResult>();
+        var orbAnnotations  = new List<OrbAnnotation>();
+        var fvgAnnotations  = new List<FvgAnnotation>();
+        var obAnnotations   = new List<OrderBlockAnnotation>();
+        var eventAnnotations = new List<SignalEventAnnotation>();
+
+        // Index-based zones built directly — no post-loop timestamp lookup needed
+        var orbZones = new List<OrbZone>();
+        var fvgZones = new List<FvgZone>();
+        var obZones = new List<OrderBlockZone>();
+
+        // Prevent duplicate context zones when both context-scan and setup-detection hit the same area
+        var seenFvgKeys = new HashSet<string>(StringComparer.Ordinal);
+        var seenObKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        void AddFvgZone(int startIdx, int endIdx, double high, double low, string direction, DateTimeOffset formedAt)
+        {
+            var key = $"{startIdx}:{direction}:{Math.Round(high, 4)}:{Math.Round(low, 4)}";
+            if (!seenFvgKeys.Add(key)) return;
+
+            fvgZones.Add(new FvgZone(startIdx, endIdx, high, low, direction));
+            fvgAnnotations.Add(new FvgAnnotation(ToIstDateTime(formedAt), low, high, direction));
+        }
+
+        void AddOrderBlockZone(int startIdx, int endIdx, double high, double low, string direction, DateTimeOffset formedAt)
+        {
+            var key = $"{startIdx}:{direction}:{Math.Round(high, 4)}:{Math.Round(low, 4)}";
+            if (!seenObKeys.Add(key)) return;
+
+            obZones.Add(new OrderBlockZone(startIdx, endIdx, high, low));
+            obAnnotations.Add(new OrderBlockAnnotation(ToIstDateTime(formedAt), high, low, direction));
+        }
+
+        int orbCandleCount   = p.Timeframe switch { 1 => 5, _ => 1 };
+        double runningCapital = initialCapital;
+        double peakCapital   = initialCapital;
+
+        var dayGroups = candles
+            .Select((c, i) => (Candle: c, Index: i, Indicator: indicators[i], IstTime: istTimes[i]))
+            .GroupBy(x => x.IstTime.Date)
+            .OrderBy(g => g.Key);
+
+        foreach (var dayGroup in dayGroups)
+        {
+            var day = dayGroup.OrderBy(x => x.Candle.Timestamp).ToList();
+            if (day.Count <= orbCandleCount + 3) continue;
+
+            var orbCandles  = day.Take(orbCandleCount).ToList();
+            double openingHigh  = (double)orbCandles.Max(x => x.Candle.High);
+            double openingLow   = (double)orbCandles.Min(x => x.Candle.Low);
+            double openingRange = openingHigh - openingLow;
+            int dayStartGlobalIdx = day[0].Index;
+            int dayEndGlobalIdx   = day[^1].Index;
+
+            // ── ALWAYS record ORB zone so replay shows the range every day ────────
+            var orbAnnotation = new OrbAnnotation(
+                ToIstDateTime(orbCandles[^1].Candle.Timestamp), openingHigh, openingLow);
+            orbAnnotations.Add(orbAnnotation);
+
+            double firstAtr = (double)orbCandles[0].Indicator.ATR;
+            if (firstAtr <= 0 || openingRange < firstAtr * 0.3 || openingRange > firstAtr * 3.0)
+            {
+                // Invalid ORB — add zone with reason so replay still shows range
+                string skipReason = firstAtr <= 0
+                    ? "ATR not ready (warmup)"
+                    : "ORB range outside ATR bounds — skipped";
+                orbZones.Add(new OrbZone(dayStartGlobalIdx, dayEndGlobalIdx,
+                    openingHigh, openingLow, skipReason));
+                eventAnnotations.Add(new SignalEventAnnotation(
+                    ToIstDateTime(day[^1].Candle.Timestamp), "TRADE_NOT_TAKEN", skipReason));
+                continue;
+            }
+
+            // Valid ORB — add zone without reason initially; patch at end-of-day if no trade
+            orbZones.Add(new OrbZone(dayStartGlobalIdx, dayEndGlobalIdx, openingHigh, openingLow));
+            int thisOrbZoneIdx = orbZones.Count - 1;
+
+            var risk = new DayRiskState { DayStartCapital = runningCapital };
+            BacktestTradeResult? openTrade = null;
+            double trailStop    = 0;
+            int remainingQty    = 0;
+            bool movedToBE      = false;
+            bool tradeTakenToday = false;
+
+            // ── State machine phases ──────────────────────────────────────────────
+            // 0 = waiting for ORB breakout
+            // 1 = breakout seen, collecting post-breakout candles, waiting for FVG
+            // 2 = FVG formed, waiting for close inside gap (retest)
+            // 3 = retest confirmed, waiting for engulfing on NEXT candle
+            int phase = 0;
+            bool? breakoutDirection = null;
+            var postBreakoutCandles = new List<(Candle Candle, int GlobalIdx)>();
+            (double GapLow, double GapHigh)? fvgRange = null;
+            int fvgGlobalIdx = 0;
+            Candle? retestCandle = null;
+            bool fvgRetestLogged = false;
+
+            string dayPhaseReason = "No breakout from ORB range";
+
+            for (int j = orbCandleCount; j < day.Count; j++)
+            {
+                var (candle, globalIdx, ind, istTime) = day[j];
+
+                // ── Force-close at end of day ─────────────────────────────────────
+                if (j == day.Count - 1 && openTrade != null)
+                {
+                    var closed = CloseRemainingWithCosts(openTrade,
+                        ToIstDateTime(candle.Timestamp), (double)candle.Close, remainingQty);
+                    runningCapital += closed.Pnl;
+                    if (runningCapital > peakCapital) peakCapital = runningCapital;
+                    trades.Add(closed);
+                    risk.RecordTrade(closed.Pnl, closed.TradeType, j);
+                    openTrade = null;
+                    break;
+                }
+
+                // ── Manage open position ──────────────────────────────────────────
+                if (openTrade != null)
+                {
+                    var partial = ManageOpenPosition(openTrade, candle, ref trailStop, ref remainingQty, ref movedToBE);
+                    if (partial != null)
+                    {
+                        runningCapital += partial.Pnl;
+                        if (runningCapital > peakCapital) peakCapital = runningCapital;
+                        trades.Add(partial);
+                    }
+                    var exitResult = CheckExit(openTrade, candle, (double)ind.ATR, p, ref trailStop);
+                    if (exitResult != null)
+                    {
+                        var closed = ApplyCostsWithQty(exitResult, remainingQty);
+                        runningCapital += closed.Pnl;
+                        if (runningCapital > peakCapital) peakCapital = runningCapital;
+                        trades.Add(closed);
+                        risk.RecordTrade(closed.Pnl, closed.TradeType, j);
+                        openTrade = null;
+                    }
+                    continue;
+                }
+
+                if (TimeOnly.FromDateTime(istTime.DateTime) >= NoCutoff) continue;
+                if (!risk.CanTrade(j, "")) continue;
+
+                double atr = (double)ind.ATR;
+                if (atr <= 0) continue;
+
+                // ── PHASE 0: Wait for ORB breakout ────────────────────────────────
+                if (phase == 0)
+                {
+                    bool longBreak  = (double)candle.Close > openingHigh;
+                    bool shortBreak = (double)candle.Close < openingLow;
+                    if (!longBreak && !shortBreak) continue;
+
+                    bool isLong = longBreak;
+                    if (!PassesConfluence(indicators[globalIdx], isLong))
+                    {
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "CONFLUENCE_FAIL",
+                            $"Breakout failed confluence check — {(isLong ? "RSI too high" : "RSI too low")}"));
+                        continue;
+                    }
+                    if (instrument.InstrumentType != InstrumentType.INDEX && !HasVolumeConfirmation(candles, globalIdx))
+                    {
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "VOLUME_FAIL",
+                            "Breakout failed volume confirmation check"));
+                        continue;
+                    }
+
+                    breakoutDirection = isLong;
+                    postBreakoutCandles.Clear();
+                    phase = 1;
+                    dayPhaseReason = "Breakout confirmed — waiting for FVG to form";
+                    eventAnnotations.Add(new SignalEventAnnotation(
+                        ToIstDateTime(candle.Timestamp), "BREAKOUT",
+                        $"{(isLong ? "Bullish" : "Bearish")} breakout confirmed"));
+                    continue;
+                }
+
+                // ── PHASE 1: Accumulate post-breakout bars and scan for FVG ──────
+                if (phase == 1)
+                {
+                    postBreakoutCandles.Add((candle, globalIdx));
+                    if (postBreakoutCandles.Count < 3) continue;
+
+                    bool isBullish = breakoutDirection == true;
+                    for (int k = 2; k < postBreakoutCandles.Count; k++)
+                    {
+                        var c0 = postBreakoutCandles[k - 2].Candle;
+                        var c2 = postBreakoutCandles[k].Candle;
+
+                        if (isBullish && (double)c0.High < (double)c2.Low)
+                        {
+                            double gapLow  = (double)c0.High;
+                            double gapHigh = (double)c2.Low;
+                            fvgRange     = (gapLow, gapHigh);
+                            fvgGlobalIdx = postBreakoutCandles[k].GlobalIdx;
+                            fvgRetestLogged = false;
+
+                            AddFvgZone(fvgGlobalIdx, dayEndGlobalIdx, gapHigh, gapLow, "BULLISH", c2.Timestamp);
+                            if (p.IncludeOrderBlocks == true)
+                            {
+                                for (int b = j - 1; b >= Math.Max(orbCandleCount, j - 20); b--)
+                                {
+                                    var obCandle = day[b].Candle;
+                                    if ((double)obCandle.Close < (double)obCandle.Open)
+                                    {
+                                        AddOrderBlockZone(day[b].Index, dayEndGlobalIdx,
+                                            (double)obCandle.High, (double)obCandle.Low,
+                                            "BULLISH", obCandle.Timestamp);
+                                        break;
+                                    }
+                                }
+                            }
+                            eventAnnotations.Add(new SignalEventAnnotation(
+                                ToIstDateTime(c2.Timestamp), "FVG_FORMED", "Bullish FVG detected"));
+                            phase = 2;
+                            dayPhaseReason = "FVG formed — waiting for price to retest gap";
+                            break;
+                        }
+                        else if (!isBullish && (double)c0.Low > (double)c2.High)
+                        {
+                            double gapLow  = (double)c2.High;
+                            double gapHigh = (double)c0.Low;
+                            fvgRange     = (gapLow, gapHigh);
+                            fvgGlobalIdx = postBreakoutCandles[k].GlobalIdx;
+                            fvgRetestLogged = false;
+
+                            AddFvgZone(fvgGlobalIdx, dayEndGlobalIdx, gapHigh, gapLow, "BEARISH", c2.Timestamp);
+                            if (p.IncludeOrderBlocks == true)
+                            {
+                                for (int b = j - 1; b >= Math.Max(orbCandleCount, j - 20); b--)
+                                {
+                                    var obCandle = day[b].Candle;
+                                    if ((double)obCandle.Close > (double)obCandle.Open)
+                                    {
+                                        AddOrderBlockZone(day[b].Index, dayEndGlobalIdx,
+                                            (double)obCandle.High, (double)obCandle.Low,
+                                            "BEARISH", obCandle.Timestamp);
+                                        break;
+                                    }
+                                }
+                            }
+                            eventAnnotations.Add(new SignalEventAnnotation(
+                                ToIstDateTime(c2.Timestamp), "FVG_FORMED", "Bearish FVG detected"));
+                            phase = 2;
+                            dayPhaseReason = "FVG formed — waiting for price to retest gap";
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                // ── PHASE 2: Wait for candle CLOSE inside the FVG ────────────────
+                // Matches live StrategyOrchestrator: fvg.Contains(candle.Close)
+                if (phase == 2 && fvgRange.HasValue)
+                {
+                    double close      = (double)candle.Close;
+                    bool closeInGap   = close >= fvgRange.Value.GapLow && close <= fvgRange.Value.GapHigh;
+                    if (!closeInGap) continue;
+
+                    retestCandle   = candle;
+                    phase          = 3;
+                    dayPhaseReason = "FVG retested — waiting for engulfing candle";
+                    if (!fvgRetestLogged)
+                    {
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "RETEST",
+                            $"First retest: close inside {(breakoutDirection == true ? "bullish" : "bearish")} FVG gap"));
+                        fvgRetestLogged = true;
+                    }
+                    continue;
+                }
+
+                // ── PHASE 3: NEXT candle must engulf the retest candle ────────────
+                // Matches live EngulfingConfirmation.IsEngulfing(retestCandle, currentCandle)
+                if (phase == 3 && retestCandle != null)
+                {
+                    bool isBullish = breakoutDirection == true;
+
+                    bool engulfing = isBullish
+                        ? (double)candle.Open  < (double)retestCandle.Low
+                       && (double)candle.Close > (double)retestCandle.High
+                        : (double)candle.Open  > (double)retestCandle.High
+                       && (double)candle.Close < (double)retestCandle.Low;
+
+                    if (!engulfing)
+                    {
+                        double retestLow  = (double)retestCandle.Low;
+                        double retestHigh = (double)retestCandle.High;
+                        double candleOpen  = (double)candle.Open;
+                        double candleClose = (double)candle.Close;
+                        
+                        // If candle's close is still inside the gap it becomes the new retest candle
+                        double close = (double)candle.Close;
+                        bool stillInGap = fvgRange.HasValue &&
+                            close >= fvgRange.Value.GapLow && close <= fvgRange.Value.GapHigh;
+
+                        string engulfFailReason = isBullish
+                            ? $"Engulfing failed: Open {candleOpen:F2} >= Retest Low {retestLow:F2} OR Close {candleClose:F2} <= Retest High {retestHigh:F2}"
+                            : $"Engulfing failed: Open {candleOpen:F2} <= Retest High {retestHigh:F2} OR Close {candleClose:F2} >= Retest Low {retestLow:F2}";
+
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "ENGULF_FAIL",
+                            engulfFailReason));
+
+                        if (stillInGap)
+                        {
+                            retestCandle = candle;  // roll the retest forward
+                            eventAnnotations.Add(new SignalEventAnnotation(
+                                ToIstDateTime(candle.Timestamp), "RETEST_CONTINUED",
+                                $"Close {candleClose:F2} still inside FVG [{fvgRange.Value.GapLow:F2}, {fvgRange.Value.GapHigh:F2}] — watching for engulfing"));
+                        }
+                        else
+                        {
+                            // Exited gap without engulfing — go back to watching for another retest
+                            dayPhaseReason = "No engulfing after FVG retest — watching for re-entry";
+                            phase = 2;
+                            retestCandle = null;
+                            eventAnnotations.Add(new SignalEventAnnotation(
+                                ToIstDateTime(candle.Timestamp), "PHASE_BACK_TO_RETEST",
+                                $"Price exited FVG [{fvgRange.Value.GapLow:F2}, {fvgRange.Value.GapHigh:F2}] without engulfing — watching for new retest"));
+                        }
+                        continue;
+                    }
+
+                    // Engulfing confirmed — entry on NEXT candle's open
+                    if (j + 1 >= day.Count) continue;
+
+                    eventAnnotations.Add(new SignalEventAnnotation(
+                        ToIstDateTime(candle.Timestamp), "ENGULF_CONFIRMED",
+                        $"{(isBullish ? "Bullish" : "Bearish")} engulfing confirmation: Open {(double)candle.Open:F2}, Close {(double)candle.Close:F2}"));
+
+                    var entryCandle = day[j + 1].Candle;
+                    double rawEntry  = (double)entryCandle.Open;
+                    double entryPrice = ApplySlippage(rawEntry, isBullish);
+                    double slDist     = CalcStopLossDistance(p, entryPrice, atr,
+                                            (double)retestCandle.Low, (double)retestCandle.High, isBullish);
+                    double sl         = isBullish ? entryPrice - slDist : entryPrice + slDist;
+                    double target     = CalcTarget(p, entryPrice, slDist, atr, isBullish);
+
+                    double rrRatio = slDist > 0 ? Math.Abs(target - entryPrice) / slDist : 0;
+                    if (rrRatio < MinRRForEntry)
+                    {
+                        dayPhaseReason = $"R/R too low ({rrRatio:F2}) — minimum required {MinRRForEntry}";
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "RR_FAILED",
+                            $"Risk/Reward ratio {rrRatio:F2} < {MinRRForEntry} — entry rejected"));
+                        phase = 0; breakoutDirection = null; fvgRange = null; retestCandle = null;
+                        postBreakoutCandles.Clear();
+                        continue;
+                    }
+
+                    double effectiveRisk = DrawdownAdjustedRisk(p.RiskPercent, runningCapital, peakCapital);
+                    if (effectiveRisk <= 0)
+                    {
+                        dayPhaseReason = "Drawdown halt — no new entries";
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "DRAWDOWN_HALT",
+                            $"Drawdown > {DrawdownHaltThreshold}% — no new entries"));
+                        phase = 0; breakoutDirection = null; fvgRange = null; retestCandle = null;
+                        postBreakoutCandles.Clear();
+                        continue;
+                    }
+
+                    int qty = CalcQuantity(runningCapital, effectiveRisk, slDist);
+                    if (qty <= 0)
+                    {
+                        dayPhaseReason = "Quantity too small — position sizing failed";
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "QTY_FAILED",
+                            $"Calculated quantity {qty} — position sizing failed"));
+                        phase = 0; breakoutDirection = null; fvgRange = null; retestCandle = null;
+                        postBreakoutCandles.Clear();
+                        continue;
+                    }
+
+                    double notional = entryPrice * qty;
+                    if (notional > runningCapital * 0.20)
+                    {
+                        qty = (int)Math.Floor(runningCapital * 0.20 / entryPrice);
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "QTY_CAPPED",
+                            $"Notional {notional:F2} exceeds 20% limit — qty capped to {qty}"));
+                    }
+                    if (qty <= 0)
+                    {
+                        dayPhaseReason = "Notional exceeds 20% capital limit";
+                        eventAnnotations.Add(new SignalEventAnnotation(
+                            ToIstDateTime(candle.Timestamp), "QTY_FINAL_FAIL",
+                            "Adjusted quantity still <= 0 — entry rejected"));
+                        phase = 0; breakoutDirection = null; fvgRange = null; retestCandle = null;
+                        postBreakoutCandles.Clear();
+                        continue;
+                    }
+
+                    openTrade = new BacktestTradeResult(
+                        Guid.NewGuid().ToString(),
+                        ToIstDateTime(entryCandle.Timestamp), entryPrice,
+                        default, 0, sl, target, qty, 0, 0, isBullish ? "LONG" : "SHORT");
+                    trailStop    = sl;
+                    remainingQty = qty;
+                    movedToBE    = false;
+                    tradeTakenToday = true;
+
+                    eventAnnotations.Add(new SignalEventAnnotation(
+                        ToIstDateTime(entryCandle.Timestamp), "ENTRY",
+                        $"{(isBullish ? "LONG" : "SHORT")} entry at {entryPrice:F2}  SL={sl:F2}  Target={target:F2}"));
+
+                    var entryBarExit = CheckExit(openTrade, entryCandle, atr, p, ref trailStop);
+                    if (entryBarExit != null)
+                    {
+                        var closed = ApplyCostsWithQty(entryBarExit, remainingQty);
+                        runningCapital += closed.Pnl;
+                        if (runningCapital > peakCapital) peakCapital = runningCapital;
+                        trades.Add(closed);
+                        risk.RecordTrade(closed.Pnl, closed.TradeType, j);
+                        openTrade = null;
+                    }
+
+                    // Reset phase state for potential second setup on the same day
+                    phase = 0; breakoutDirection = null; fvgRange = null; retestCandle = null;
+                    fvgRetestLogged = false;
+                    postBreakoutCandles.Clear();
+                    j += 1; // skip the entry candle (already processed above)
+                }
+            } // end bar loop
+
+            // Force-close any still-open position at day end
+            if (openTrade != null)
+            {
+                var lastCandle = day[^1].Candle;
+                var closed = CloseRemainingWithCosts(openTrade,
+                    ToIstDateTime(lastCandle.Timestamp), (double)lastCandle.Close, remainingQty);
+                runningCapital += closed.Pnl;
+                if (runningCapital > peakCapital) peakCapital = runningCapital;
+                trades.Add(closed);
+            }
+
+            // ── Per-day TRADE_NOT_TAKEN event + patch ORB zone reason ─────────────
+            if (!tradeTakenToday)
+            {
+                eventAnnotations.Add(new SignalEventAnnotation(
+                    ToIstDateTime(day[^1].Candle.Timestamp),
+                    "TRADE_NOT_TAKEN",
+                    dayPhaseReason));
+
+                // Patch the ORB zone entry for this day to show the reason on replay
+                var existing = orbZones[thisOrbZoneIdx];
+                orbZones[thisOrbZoneIdx] = existing with { TradeNotTakenReason = dayPhaseReason };
+            }
+        } // end day loop
+
+        var annotations = new BacktestAnnotations(
+            OrbZones: orbZones,
+            FvgZones: fvgZones,
+            ObZones: obZones,
+            RetraceEvent: null,
+            EngulfingEvent: null,
+            Orbs: orbAnnotations,
+            Fvgs: fvgAnnotations,
+            OrderBlocks: obAnnotations,
+            Events: eventAnnotations
+        );
+
+        return (trades, annotations);
+    }
+
+    // Helper: convert OB annotation from timestamp to index-based for chart rendering
+    private OrderBlockZone ConvertOrderBlockAnnotation(List<Candle> candles, OrderBlockAnnotation ob)
+    {
+        var obIdx = candles.FindIndex(c => c.Timestamp == ob.Timestamp);
+        return new OrderBlockZone(
+            ObStartIdx: Math.Max(0, obIdx),
+            ObEndIdx: Math.Max(0, obIdx + 2),
+            ObHigh: ob.High,
+            ObLow: ob.Low
+        );
     }
 
     // ─────────────────────────────────────────────────────────

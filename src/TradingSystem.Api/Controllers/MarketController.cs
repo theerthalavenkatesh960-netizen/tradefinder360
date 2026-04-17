@@ -31,45 +31,7 @@ public class MarketController : ControllerBase
         {
             var context = await _sentimentService.GetCurrentMarketContextAsync();
 
-            var dto = new MarketSentimentDto
-            {
-                Timestamp = context.Timestamp,
-                Sentiment = context.Sentiment.ToString(),
-                SentimentScore = context.SentimentScore,
-                SentimentDescription = GetSentimentDescription(context.Sentiment, context.SentimentScore),
-                Volatility = new MarketVolatilityDto
-                {
-                    Index = context.VolatilityIndex,
-                    Level = GetVolatilityLevel(context.VolatilityIndex),
-                    Impact = GetVolatilityImpact(context.VolatilityIndex)
-                },
-                Breadth = new MarketBreadthDto
-                {
-                    AdvanceDeclineRatio = context.MarketBreadth,
-                    Interpretation = GetBreadthInterpretation(context.MarketBreadth)
-                },
-                MajorIndices = context.MajorIndices.Select(i => new IndexPerformanceDto
-                {
-                    Name = i.IndexName,
-                    Symbol = i.Symbol,
-                    CurrentValue = i.CurrentValue,
-                    ChangePercent = i.ChangePercent,
-                    DayHigh = i.DayHigh,
-                    DayLow = i.DayLow,
-                    Trend = GetTrend(i.ChangePercent)
-                }).ToList(),
-                Sectors = context.Sectors.Select(s => new SectorPerformanceDto
-                {
-                    Name = s.SectorName,
-                    ChangePercent = s.ChangePercent,
-                    StocksAdvancing = s.StocksAdvancing,
-                    StocksDeclining = s.StocksDeclining,
-                    RelativeStrength = s.RelativeStrength,
-                    Performance = GetPerformanceCategory(s.ChangePercent)
-                }).ToList(),
-                KeyFactors = context.KeyFactors,
-                Summary = context.Summary
-            };
+            var dto = MapMarketContextToDto(context);
 
             return Ok(dto);
         }
@@ -91,45 +53,7 @@ public class MarketController : ControllerBase
         {
             var context = await _sentimentService.AnalyzeAndUpdateMarketSentimentAsync();
 
-            var dto = new MarketSentimentDto
-            {
-                Timestamp = context.Timestamp,
-                Sentiment = context.Sentiment.ToString(),
-                SentimentScore = context.SentimentScore,
-                SentimentDescription = GetSentimentDescription(context.Sentiment, context.SentimentScore),
-                Volatility = new MarketVolatilityDto
-                {
-                    Index = context.VolatilityIndex,
-                    Level = GetVolatilityLevel(context.VolatilityIndex),
-                    Impact = GetVolatilityImpact(context.VolatilityIndex)
-                },
-                Breadth = new MarketBreadthDto
-                {
-                    AdvanceDeclineRatio = context.MarketBreadth,
-                    Interpretation = GetBreadthInterpretation(context.MarketBreadth)
-                },
-                MajorIndices = context.MajorIndices.Select(i => new IndexPerformanceDto
-                {
-                    Name = i.IndexName,
-                    Symbol = i.Symbol,
-                    CurrentValue = i.CurrentValue,
-                    ChangePercent = i.ChangePercent,
-                    DayHigh = i.DayHigh,
-                    DayLow = i.DayLow,
-                    Trend = GetTrend(i.ChangePercent)
-                }).ToList(),
-                Sectors = context.Sectors.Select(s => new SectorPerformanceDto
-                {
-                    Name = s.SectorName,
-                    ChangePercent = s.ChangePercent,
-                    StocksAdvancing = s.StocksAdvancing,
-                    StocksDeclining = s.StocksDeclining,
-                    RelativeStrength = s.RelativeStrength,
-                    Performance = GetPerformanceCategory(s.ChangePercent)
-                }).ToList(),
-                KeyFactors = context.KeyFactors,
-                Summary = context.Summary
-            };
+            var dto = MapMarketContextToDto(context);
 
             return Ok(dto);
         }
@@ -171,8 +95,13 @@ public class MarketController : ControllerBase
                 Breadth = new MarketBreadthDto
                 {
                     AdvanceDeclineRatio = h.MarketBreadth,
+                    StocksAdvancing = EstimateBreadthCounts(h.MarketBreadth).Advancing,
+                    StocksDeclining = EstimateBreadthCounts(h.MarketBreadth).Declining,
+                    StocksUnchanged = EstimateBreadthCounts(h.MarketBreadth).Unchanged,
                     Interpretation = GetBreadthInterpretation(h.MarketBreadth)
                 },
+                GlobalMacro = new GlobalMacroSnapshotDto(),
+                InstitutionalFlows = new InstitutionalFlowsDto(),
                 KeyFactors = h.KeyFactors,
                 Summary = string.Empty
             }).ToList();
@@ -253,5 +182,107 @@ public class MarketController : ControllerBase
             > -0.5m => "INLINE",
             _ => "UNDERPERFORMING"
         };
+    }
+
+    private static MarketSentimentDto MapMarketContextToDto(MarketContext context)
+    {
+        return new MarketSentimentDto
+        {
+            Timestamp = context.Timestamp,
+            Sentiment = context.Sentiment.ToString(),
+            SentimentScore = context.SentimentScore,
+            SentimentDescription = GetSentimentDescription(context.Sentiment, context.SentimentScore),
+            Volatility = new MarketVolatilityDto
+            {
+                Index = context.VolatilityIndex,
+                Level = GetVolatilityLevel(context.VolatilityIndex),
+                Impact = GetVolatilityImpact(context.VolatilityIndex)
+            },
+            Breadth = new MarketBreadthDto
+            {
+                AdvanceDeclineRatio = context.MarketBreadth,
+                StocksAdvancing = context.StocksAdvancing,
+                StocksDeclining = context.StocksDeclining,
+                StocksUnchanged = context.StocksUnchanged,
+                Interpretation = GetBreadthInterpretation(context.MarketBreadth)
+            },
+            MajorIndices = context.MajorIndices.Select(i => new IndexPerformanceDto
+            {
+                Name = i.IndexName,
+                Symbol = i.Symbol,
+                CurrentValue = i.CurrentValue,
+                ChangePercent = i.ChangePercent,
+                DayHigh = i.DayHigh,
+                DayLow = i.DayLow,
+                Trend = GetTrend(i.ChangePercent)
+            }).ToList(),
+            Sectors = context.Sectors.Select(s => new SectorPerformanceDto
+            {
+                Name = s.SectorName,
+                ChangePercent = s.ChangePercent,
+                StocksAdvancing = s.StocksAdvancing,
+                StocksDeclining = s.StocksDeclining,
+                RelativeStrength = s.RelativeStrength,
+                Performance = GetPerformanceCategory(s.ChangePercent)
+            }).ToList(),
+            GlobalMacro = new GlobalMacroSnapshotDto
+            {
+                GiftNifty = MapMacroMetric(context.GlobalMacro, "giftNifty"),
+                BrentCrude = MapMacroMetric(context.GlobalMacro, "brentCrude"),
+                UsdInr = MapMacroMetric(context.GlobalMacro, "usdInr"),
+                Us10yYield = MapMacroMetric(context.GlobalMacro, "us10yYield")
+            },
+            InstitutionalFlows = new InstitutionalFlowsDto
+            {
+                Fii = new FlowMetricDto
+                {
+                    Buy = context.InstitutionalFlows.Fii.Buy,
+                    Sell = context.InstitutionalFlows.Fii.Sell,
+                    Net = context.InstitutionalFlows.Fii.Net
+                },
+                Dii = new FlowMetricDto
+                {
+                    Buy = context.InstitutionalFlows.Dii.Buy,
+                    Sell = context.InstitutionalFlows.Dii.Sell,
+                    Net = context.InstitutionalFlows.Dii.Net
+                }
+            },
+            KeyFactors = context.KeyFactors,
+            Summary = context.Summary
+        };
+    }
+
+    private static MacroMetricDto MapMacroMetric(List<GlobalMacroMetric> metrics, string key)
+    {
+        var item = metrics.FirstOrDefault(m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase));
+        if (item is null)
+        {
+            return new MacroMetricDto();
+        }
+
+        return new MacroMetricDto
+        {
+            Price = item.Price,
+            Change = item.Change,
+            ChangePct = item.ChangePercent
+        };
+    }
+
+    private static (int Advancing, int Declining, int Unchanged) EstimateBreadthCounts(decimal breadthRatio)
+    {
+        const int baseUniverse = 200;
+        var unchanged = 12;
+
+        if (breadthRatio <= 0)
+        {
+            return (94, 94, unchanged);
+        }
+
+        var effective = baseUniverse - unchanged;
+        var declines = (int)Math.Round(effective / (1m + breadthRatio), MidpointRounding.AwayFromZero);
+        declines = Math.Clamp(declines, 1, effective - 1);
+        var advances = effective - declines;
+
+        return (advances, declines, unchanged);
     }
 }
