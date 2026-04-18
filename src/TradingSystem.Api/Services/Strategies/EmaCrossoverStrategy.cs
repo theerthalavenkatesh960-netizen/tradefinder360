@@ -242,7 +242,8 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
 
         return slType switch
         {
-            "FIXED_PERCENT" => Math.Max(entryPrice * (slValue / 100.0), atr * 0.25),
+            // Fixed percent should be interpreted as an exact percentage distance from entry.
+            "FIXED_PERCENT" => Math.Max(entryPrice * (slValue / 100.0), 0.01),
             "BELOW_EMA" => Math.Max(Math.Abs(entryPrice - slowEma), atr * 0.25),
             "ATR_BASED" => Math.Max(atr * slValue, atr * 0.25),
             "ATR" => Math.Max(atr * 1.5, atr * 0.25),
