@@ -24,7 +24,35 @@ public record StrategyParams(
     int? SlowEMA,
     double? RsiOverbought,
     double? RsiOversold,
-    bool? IncludeOrderBlocks = false
+    bool? IncludeOrderBlocks = false,
+    // Enhanced EMA Crossover params (all optional - zero impact on existing strategies)
+    string? EmaFilterType = null,
+    bool? UseTripleEma = null,
+    int? MiddleEma = null,
+    int? EmaRsiPeriod = null,
+    int? EmaRsiMidline = null,
+    int? VolumeAvgPeriod = null,
+    double? VolumeMultiplier = null,
+    int? SRLookbackPeriod = null,
+    double? SRBuffer = null,
+    string[]? AllowedPatterns = null,
+    int? CandleLookback = null,
+    string? EmaSlType = null,
+    double? EmaSlValue = null,
+    int? EmaAtrPeriod = null,
+    double? TargetRRR = null,
+    int? MaxHoldingPeriods = null,
+    string? TradeDirection = null,
+    // Unified strategy mode selectors
+    string? EmaMode = null,              // CROSSOVER | PULLBACK | SPEED | PULLBACK_SPEED
+    string? OrbMode = null,              // CLASSIC | FVG_RETEST
+    string? SmcMode = null               // FVG_OB (reserved for future expansion)
+);
+
+// Result record returned by each IBacktestStrategy class
+public record BacktestStrategyResult(
+    List<BacktestTradeResult> Trades,
+    BacktestAnnotations? Annotations = null
 );
 
 public record BacktestResponse(
@@ -69,21 +97,21 @@ public record EquityPoint(
     double Equity
 );
 
-// ── Replay Annotation Models ──
+// Replay Annotation Models
 public record OrbZone(
-    int OrbStartIdx,  // candle index of first ORB candle
-    int OrbEndIdx,    // candle index of last candle of that trading day
+    int OrbStartIdx,
+    int OrbEndIdx,
     double OrbHigh,
     double OrbLow,
-    string? TradeNotTakenReason = null  // non-null when no trade was entered that day
+    string? TradeNotTakenReason = null
 );
 
 public record FvgZone(
-    int FvgStartIdx,  // candle index where FVG was detected
-    int FvgEndIdx,    // candle index of last candle of that trading day
+    int FvgStartIdx,
+    int FvgEndIdx,
     double FvgHigh,
     double FvgLow,
-    string? Direction = null  // "BULLISH" or "BEARISH"
+    string? Direction = null
 );
 
 public record OrderBlockZone(
@@ -120,21 +148,18 @@ public record OrderBlockAnnotation(
 
 public record SignalEventAnnotation(
     DateTime Timestamp,
-    string EventType, // "BREAKOUT", "FVG_FORMED", "CONFLUENCE", "VOLUME_CONFIRMED", "ENGULF_CONFIRMED", "RETEST"
+    string EventType,
     string Description
 );
 
 public record BacktestAnnotations(
-    // Multi-day ORB zones — one OrbZone per trading day
     List<OrbZone>? OrbZones = null,
     List<FvgZone>? FvgZones = null,
     List<OrderBlockZone>? ObZones = null,
     ReplayEventData? RetraceEvent = null,
     ReplayEventData? EngulfingEvent = null,
-    // Raw annotation data (timestamp + price, used to build index-based zones)
     List<OrbAnnotation>? Orbs = null,
     List<FvgAnnotation>? Fvgs = null,
     List<OrderBlockAnnotation>? OrderBlocks = null,
-    // All signal events including TRADE_NOT_TAKEN
     List<SignalEventAnnotation>? Events = null
 );

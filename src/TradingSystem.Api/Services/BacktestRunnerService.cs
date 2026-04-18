@@ -1,7 +1,9 @@
 ﻿using TradingSystem.Api.DTOs;
+using TradingSystem.Api.Services.Strategies;
 using TradingSystem.Core.Models;
 using TradingSystem.Data.Services.Interfaces;
 using TradingSystem.Indicators;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace TradingSystem.Api.Services;
 
@@ -28,15 +30,18 @@ public class BacktestRunnerService
 
     private readonly ICandleService _candleService;
     private readonly IInstrumentService _instrumentService;
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<BacktestRunnerService> _logger;
 
     public BacktestRunnerService(
         ICandleService candleService,
         IInstrumentService instrumentService,
+        IServiceProvider serviceProvider,
         ILogger<BacktestRunnerService> logger)
     {
         _candleService = candleService;
         _instrumentService = instrumentService;
+        _serviceProvider = serviceProvider;
         _logger = logger;
     }
 
@@ -76,30 +81,20 @@ public class BacktestRunnerService
             .Select(c => TimeZoneInfo.ConvertTime(c.Timestamp, Ist))
             .ToArray();
 
-        BacktestAnnotations? annotations = null;
-        List<BacktestTradeResult> tradeList;
+        var strategyRegistry = _serviceProvider.GetRequiredService<BacktestStrategyRegistry>();
+        var strategy = strategyRegistry.GetRequired(request.Strategy.Name);
+        var ctx = new BacktestRunContext(
+            Instrument: instrument,
+            Candles: orderedCandles,
+            Indicators: indicators,
+            IstTimes: istTimes,
+            Params: request.Strategy.Params,
+            InitialCapital: initialCapital,
+            CandleService: _candleService);
+        var strategyResult = strategy.Execute(ctx);
 
-        if (request.Strategy.Name.Equals("ORB_FVG_RETEST", StringComparison.OrdinalIgnoreCase))
-        {
-            var (trades, annot) = RunOrbFvgRetest(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital, instrument);
-            tradeList = trades;
-            annotations = annot;
-        }
-        else
-        {
-            var trades = request.Strategy.Name.ToUpperInvariant() switch
-            {
-                "ORB" => RunORB(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-                "RSI_REVERSAL" => RunRsiReversal(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-                "EMA_CROSSOVER" => RunEmaCrossover(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-                "EMA_PULLBACK" => RunEmaPullback(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-                "EMA_SPEED" => RunEmaSpeed(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-                "EMA_PULLBACK_SPEED" => RunEmaPullbackSpeed(orderedCandles, indicators, istTimes, request.Strategy.Params, initialCapital),
-                "SMC_FVG" => RunSmcFvg(instrument.Id, request.From, request.To, request.Strategy.Params, initialCapital),
-                _ => throw new ArgumentException($"Unknown strategy: {request.Strategy.Name}")
-            };
-            tradeList = trades.ToList();
-        }
+        var tradeList = strategyResult.Trades;
+        var annotations = strategyResult.Annotations;
 
         var metrics = CalculateMetrics(tradeList, initialCapital, orderedCandles);
         return new BacktestResponse(tradeList, metrics, annotations);
@@ -1046,158 +1041,6 @@ public class BacktestRunnerService
                 openTrade = null;
             }
             i += 2;
-        }
-
-        if (openTrade != null && candles.Count > 0)
-        {
-            var last = candles[^1];
-            var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(last.Timestamp), (double)last.Close, remainingQty);
-            runningCapital += closed.Pnl;
-            trades.Add(closed);
-        }
-
-        return trades;
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // STRATEGY C: EMA Crossover
-    // ─────────────────────────────────────────────────────────
-    private List<BacktestTradeResult> RunEmaCrossover(
-        List<Candle> candles, IndicatorValues[] indicators, DateTimeOffset[] istTimes,
-        StrategyParams p, double initialCapital)
-    {
-        var trades = new List<BacktestTradeResult>();
-        double runningCapital = initialCapital;
-        double peakCapital = initialCapital;
-
-        BacktestTradeResult? openTrade = null;
-        double trailStop = 0;
-        int remainingQty = 0;
-        bool movedToBE = false;
-        var risk = new DayRiskState { DayStartCapital = initialCapital };
-        DateTime lastDayDate = DateTime.MinValue;
-
-        for (int i = Math.Max(1, MinWarmupBars); i < candles.Count; i++)
-        {
-            var prevInd = indicators[i - 1];
-            var curInd = indicators[i];
-            var candle = candles[i];
-            var atr = (double)curInd.ATR;
-            var istTime = istTimes[i];
-
-            if (istTime.Date != lastDayDate)
-            {
-                if (openTrade != null)
-                {
-                    var prevCandle = candles[i - 1];
-                    var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(prevCandle.Timestamp), (double)prevCandle.Close, remainingQty);
-                    runningCapital += closed.Pnl;
-                    if (runningCapital > peakCapital) peakCapital = runningCapital;
-                    trades.Add(closed);
-                    openTrade = null;
-                }
-                risk = new DayRiskState { DayStartCapital = runningCapital };
-                lastDayDate = istTime.Date;
-            }
-
-            bool fastAboveSlow = curInd.EMAFast > curInd.EMASlow;
-            bool prevFastAboveSlow = prevInd.EMAFast > prevInd.EMASlow;
-            bool bullishCross = !prevFastAboveSlow && fastAboveSlow;
-            bool bearishCross = prevFastAboveSlow && !fastAboveSlow;
-
-            if (openTrade != null)
-            {
-                var partial = ManageOpenPosition(openTrade, candle, ref trailStop, ref remainingQty, ref movedToBE);
-                if (partial != null)
-                {
-                    runningCapital += partial.Pnl;
-                    if (runningCapital > peakCapital) peakCapital = runningCapital;
-                    trades.Add(partial);
-                }
-
-                bool oppositeSignal = (openTrade.TradeType == "LONG" && bearishCross)
-                                   || (openTrade.TradeType == "SHORT" && bullishCross);
-
-                if (oppositeSignal)
-                {
-                    var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(candle.Timestamp), (double)candle.Close, remainingQty);
-                    runningCapital += closed.Pnl;
-                    if (runningCapital > peakCapital) peakCapital = runningCapital;
-                    trades.Add(closed);
-                    risk.RecordTrade(closed.Pnl, closed.TradeType, i);
-                    openTrade = null;
-                }
-                else
-                {
-                    var exitResult = CheckExit(openTrade, candle, atr, p, ref trailStop);
-                    if (exitResult != null)
-                    {
-                        var closed = ApplyCostsWithQty(exitResult, remainingQty);
-                        runningCapital += closed.Pnl;
-                        if (runningCapital > peakCapital) peakCapital = runningCapital;
-                        trades.Add(closed);
-                        risk.RecordTrade(closed.Pnl, closed.TradeType, i);
-                        openTrade = null;
-                    }
-                    continue;
-                }
-            }
-
-            if (openTrade != null) continue;
-            if (atr <= 0) continue;
-            if ((double)curInd.ADX <= 20) continue;
-
-            bool isLong = bullishCross;
-            bool hasSignal = bullishCross || bearishCross;
-            if (!hasSignal) continue;
-
-            if (!PassesConfluence(curInd, isLong)) continue;
-            if (!HasVolumeConfirmation(candles, i)) continue;
-
-            string direction = isLong ? "LONG" : "SHORT";
-            if (!risk.CanTrade(i, direction)) continue;
-
-            if (i + 1 >= candles.Count) continue;
-
-            var nextCandle = candles[i + 1];
-            var rawEntry = (double)nextCandle.Open;
-            var entryPrice = ApplySlippage(rawEntry, isLong);
-            var slDistance = CalcStopLossDistance(p, entryPrice, atr, (double)candle.Low, (double)candle.High, isLong);
-            var sl = isLong ? entryPrice - slDistance : entryPrice + slDistance;
-            var target = CalcTarget(p, entryPrice, slDistance, atr, isLong);
-
-            var rrRatio = slDistance > 0 ? Math.Abs(target - entryPrice) / slDistance : 0;
-            if (rrRatio < MinRRForEntry) { i++; continue; }
-
-            var effectiveRisk = DrawdownAdjustedRisk(p.RiskPercent, runningCapital, peakCapital);
-            if (effectiveRisk <= 0) { i++; continue; }
-            var qty = CalcQuantity(runningCapital, effectiveRisk, slDistance);
-            if (qty <= 0) { i++; continue; }
-
-            var notional = entryPrice * qty;
-            if (notional > runningCapital * 0.20)
-                qty = (int)Math.Floor(runningCapital * 0.20 / entryPrice);
-            if (qty <= 0) { i++; continue; }
-
-            openTrade = new BacktestTradeResult(
-                Guid.NewGuid().ToString(),
-                ToIstDateTime(nextCandle.Timestamp), entryPrice,
-                default, 0, sl, target, qty, 0, 0, direction);
-            trailStop = sl;
-            remainingQty = qty;
-            movedToBE = false;
-
-            var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
-            if (entryBarExit != null)
-            {
-                var closed = ApplyCostsWithQty(entryBarExit, remainingQty);
-                runningCapital += closed.Pnl;
-                if (runningCapital > peakCapital) peakCapital = runningCapital;
-                trades.Add(closed);
-                risk.RecordTrade(closed.Pnl, closed.TradeType, i);
-                openTrade = null;
-            }
-            i++;
         }
 
         if (openTrade != null && candles.Count > 0)
@@ -2825,4 +2668,65 @@ public class BacktestRunnerService
     private static BacktestMetrics EmptyMetrics(double initialCapital, DateTime timestamp) =>
         new(0, 0, 0, 0, 0, 0, 0, 0, 0, [new EquityPoint(timestamp, initialCapital)],
             Math.Round(initialCapital, 2), Math.Round(initialCapital, 2), 0, 0);
+
+    // ─────────────────────────────────────────────────────────
+    // INTERNAL STRATEGY WRAPPERS (used by Strategy classes)
+    // ─────────────────────────────────────────────────────────
+
+    internal List<BacktestTradeResult> RunORBInternal(
+        List<Candle> candles,
+        IndicatorValues[] indicators,
+        DateTimeOffset[] istTimes,
+        StrategyParams p,
+        double initialCapital) =>
+        RunORB(candles, indicators, istTimes, p, initialCapital);
+
+    internal (List<BacktestTradeResult> trades, BacktestAnnotations annotations) RunOrbFvgRetestInternal(
+        List<Candle> candles,
+        IndicatorValues[] indicators,
+        DateTimeOffset[] istTimes,
+        StrategyParams p,
+        double initialCapital,
+        TradingInstrument instrument) =>
+        RunOrbFvgRetest(candles, indicators, istTimes, p, initialCapital, instrument);
+
+    internal List<BacktestTradeResult> RunRsiReversalInternal(
+        List<Candle> candles,
+        IndicatorValues[] indicators,
+        DateTimeOffset[] istTimes,
+        StrategyParams p,
+        double initialCapital) =>
+        RunRsiReversal(candles, indicators, istTimes, p, initialCapital);
+
+    internal List<BacktestTradeResult> RunEmaPullbackInternal(
+        List<Candle> candles,
+        IndicatorValues[] indicators,
+        DateTimeOffset[] istTimes,
+        StrategyParams p,
+        double initialCapital) =>
+        RunEmaPullback(candles, indicators, istTimes, p, initialCapital);
+
+    internal List<BacktestTradeResult> RunEmaSpeedInternal(
+        List<Candle> candles,
+        IndicatorValues[] indicators,
+        DateTimeOffset[] istTimes,
+        StrategyParams p,
+        double initialCapital) =>
+        RunEmaSpeed(candles, indicators, istTimes, p, initialCapital);
+
+    internal List<BacktestTradeResult> RunEmaPullbackSpeedInternal(
+        List<Candle> candles,
+        IndicatorValues[] indicators,
+        DateTimeOffset[] istTimes,
+        StrategyParams p,
+        double initialCapital) =>
+        RunEmaPullbackSpeed(candles, indicators, istTimes, p, initialCapital);
+
+    internal List<BacktestTradeResult> RunSmcFvgInternal(
+        int instrumentId,
+        DateTime from,
+        DateTime to,
+        StrategyParams p,
+        double initialCapital) =>
+        RunSmcFvg(instrumentId, from, to, p, initialCapital);
 }

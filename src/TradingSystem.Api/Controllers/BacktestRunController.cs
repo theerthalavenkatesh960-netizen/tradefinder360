@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Api.Services;
+using TradingSystem.Api.Services.Strategies;
 
 namespace TradingSystem.Api.Controllers;
 
@@ -10,16 +11,18 @@ namespace TradingSystem.Api.Controllers;
 public class BacktestRunController : ControllerBase
 {
     private static readonly HashSet<int> AllowedTimeframes = [1, 5, 15, 30];
-    private static readonly HashSet<string> AllowedStrategies = ["ORB", "RSI_REVERSAL", "EMA_CROSSOVER", "EMA_PULLBACK", "EMA_SPEED", "EMA_PULLBACK_SPEED", "SMC_FVG", "ORB_FVG_RETEST"];
 
     private readonly BacktestRunnerService _backtestService;
+    private readonly BacktestStrategyRegistry _strategyRegistry;
     private readonly ILogger<BacktestRunController> _logger;
 
     public BacktestRunController(
         BacktestRunnerService backtestService,
+        BacktestStrategyRegistry strategyRegistry,
         ILogger<BacktestRunController> logger)
     {
         _backtestService = backtestService;
+        _strategyRegistry = strategyRegistry;
         _logger = logger;
     }
 
@@ -44,8 +47,8 @@ public class BacktestRunController : ControllerBase
             return BadRequest("Timeframe must be one of: 1, 5, 15, 30");
 
         var strategyName = request.Strategy.Name?.ToUpperInvariant() ?? "";
-        if (!AllowedStrategies.Contains(strategyName))
-            return BadRequest("Strategy name must be one of: ORB, RSI_REVERSAL, EMA_CROSSOVER, EMA_PULLBACK, EMA_SPEED, EMA_PULLBACK_SPEED, SMC_FVG, ORB_FVG_RETEST");
+        if (!_strategyRegistry.TryGet(strategyName, out _))
+            return BadRequest($"Strategy name must be one of: {string.Join(", ", _strategyRegistry.StrategyNames.OrderBy(s => s))}");
 
         if (request.Strategy.Params.RiskPercent < 0.1 || request.Strategy.Params.RiskPercent > 10)
             return BadRequest("RiskPercent must be between 0.1 and 10");
