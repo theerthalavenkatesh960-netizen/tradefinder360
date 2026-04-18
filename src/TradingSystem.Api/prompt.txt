@@ -356,7 +356,7 @@ to PostgreSQL type 'timestamp with time zone'
 only offset 0 (UTC) is supported
 
 
--------------------------------------------------------
+------------------------------------------------------------######################################
 
 You are a senior software architect and quantitative trading engineer.
 
@@ -537,3 +537,189 @@ Start by:
 3. Then implementing step-by-step
 
 Output clean, production-quality .NET code.
+
+
+
+------------------------------------------------------------######################################
+I have an existing stock backtesting platform. Before making any changes,
+analyze the entire codebase thoroughly and understand:
+
+1. How the existing backend is structured (controllers, services, models)
+2. How the existing strategy/strategies are currently implemented
+3. What the backtest API currently returns (response shape, fields)
+4. How the frontend config page works — how it reads the selected strategy
+   from the dropdown and renders config fields dynamically
+5. What the frontend does with the backtest API response (charts, tables,
+   stats displayed)
+
+---
+
+TASK 1 — BACKEND REFACTORING (do this first):
+
+The current strategy logic is all in a single class. Refactor it into a
+clean, extensible strategy architecture:
+
+- Create an IStrategy interface with a method like:
+  BacktestResult Run(List<Candle> candles, StrategyConfig config)
+- Move the existing strategy into its own class implementing IStrategy
+- Create a StrategyRegistry or factory that maps strategy name (string)
+  to its IStrategy implementation
+- This pattern must make it trivial to add new strategies by just adding
+  a new class — no changes to the controller or engine
+
+---
+
+TASK 2 — ADD EMA CROSSOVER STRATEGY:
+
+Create a new class EmaCrossoverStrategy : IStrategy
+
+This strategy must support ALL of the following config parameters
+(expose each as a configurable field, not hardcoded):
+
+CORE EMA SETTINGS:
+- FastEma (int)
+- SlowEma (int)
+- MiddleEma (int) — only used when UseTripleEma = true
+
+TIMEFRAME (drives frontend defaults only, not backend logic):
+- Timeframe: enum { Intraday, Swing, Both }
+
+CONFIRMATION FILTER — user picks ONE of these four modes:
+- FilterType: enum { RSI, Volume, SupportResistance, PriceAction }
+
+RSI filter config (active when FilterType = RSI):
+- RsiPeriod (int, default 14)
+- RsiMidline (int, default 50)
+- RsiOverbought (int, default 70)
+- RsiOversold (int, default 30)
+
+Volume filter config (active when FilterType = Volume):
+- VolumeAvgPeriod (int, default 20)
+- VolumeMultiplier (decimal, default 1.5)
+
+Support & Resistance filter config (active when FilterType = SupportResistance):
+- SRLookbackPeriod (int, default 20)
+- SRBuffer (decimal, default 0.5)
+
+Price Action filter config (active when FilterType = PriceAction):
+- AllowedPatterns: multi-select from [ Engulfing, Hammer, Doji, MorningStar ]
+- CandleLookback (int, default 1)
+
+TRIPLE EMA MODE:
+- UseTripleEma (bool, default false)
+- When enabled: entry only when FastEma > MiddleEma > SlowEma (long)
+  or FastEma < MiddleEma < SlowEma (short)
+
+TRADE MANAGEMENT:
+- StopLossType: enum { FixedPercent, BelowEma, AtrBased }
+- StopLossValue (decimal)
+- AtrPeriod (int, default 14) — used when StopLossType = AtrBased
+- TargetRRR (decimal, default 2.0)
+- MaxHoldingPeriods (int)
+
+DIRECTION:
+- TradeDirection: enum { LongOnly, ShortOnly, Both }
+
+---
+
+STRATEGY LOGIC (implement exactly as described):
+
+LONG ENTRY:
+1. FastEma crosses above SlowEma on current candle
+2. If UseTripleEma: FastEma > MiddleEma > SlowEma must all be stacked
+3. Apply selected FilterType check:
+   - RSI: RSI > RsiMidline AND RSI < RsiOverbought
+   - Volume: current candle volume > (VolumeAvgPeriod average × VolumeMultiplier)
+   - SupportResistance: price is within SRBuffer% of a identified support
+     level from the last SRLookbackPeriod candles
+   - PriceAction: one of AllowedPatterns detected within CandleLookback
+     candles before entry
+4. All conditions pass → enter Long on next candle open
+
+SHORT ENTRY:
+1. FastEma crosses below SlowEma
+2. If UseTripleEma: FastEma < MiddleEma < SlowEma stacked bearishly
+3. Apply selected FilterType check (inverted):
+   - RSI: RSI < RsiMidline AND RSI > RsiOversold
+   - Volume: same volume condition (volume spike confirms move)
+   - SupportResistance: price is within SRBuffer% of identified resistance
+   - PriceAction: bearish pattern detected within CandleLookback candles
+4. All conditions pass → enter Short on next candle open
+
+EXIT:
+- SL hit → exit immediately on that candle
+- Target hit (entry ± StopLoss × TargetRRR) → exit
+- MaxHoldingPeriods exceeded → exit at close of that candle
+- Opposite crossover signal → exit current trade
+
+STOP LOSS CALCULATION:
+- FixedPercent: SL = entry price ± StopLossValue%
+- BelowEma: SL = SlowEma value at entry candle (long: below, short: above)
+- AtrBased: SL = entry price ± (ATR(AtrPeriod) × StopLossValue)
+
+---
+
+TASK 3 — FRONTEND CONFIG UI:
+
+Analyze how the existing frontend config page renders fields for other
+strategies. Follow the exact same pattern for EMA Crossover.
+
+When "EMA Crossover" is selected from the strategy dropdown, render
+the config fields in this order:
+
+STEP 1 — TIMEFRAME SELECTOR (render this first):
+- Show three options: Intraday | Swing | Both
+- When user selects Intraday → auto-fill:
+    FastEma = 9, SlowEma = 21, MiddleEma = 21
+- When user selects Swing → auto-fill:
+    FastEma = 20, SlowEma = 50, MiddleEma = 21
+- When user selects Both → no auto-fill, leave fields blank or at last
+  user-set value
+- All EMA fields remain fully editable after auto-fill — these are
+  smart defaults, not locked values
+- If the user manually changes an EMA value after auto-fill, do not
+  reset it when they switch timeframe unless they switch timeframe again
+
+STEP 2 — EMA FIELDS:
+- FastEma (number input)
+- SlowEma (number input)
+- UseTripleEma (toggle) — when enabled, show MiddleEma (number input)
+  immediately below
+
+STEP 3 — FILTER TYPE:
+- FilterType dropdown (RSI / Volume / Support & Resistance / Price Action)
+- Conditionally show ONLY the relevant filter config fields below based
+  on selection — hide all others completely (not just disabled)
+
+STEP 4 — TRADE MANAGEMENT:
+- StopLossType dropdown
+- StopLossValue input
+- AtrPeriod input — show only when StopLossType = AtrBased
+- TargetRRR input
+- MaxHoldingPeriods input
+- TradeDirection dropdown
+
+All fields must have sensible defaults pre-filled as specified above.
+The config object sent to the API must match exactly what the backend
+StrategyConfig model expects — analyze the existing API contract and
+follow the same request shape.
+
+---
+
+TASK 4 — API CONTRACT:
+
+Analyze the existing backtest API response shape. Make the EMA Crossover
+strategy return results in the exact same shape so the existing frontend
+charts, tables, and stats work without any changes.
+
+---
+
+IMPORTANT INSTRUCTIONS FOR COPILOT:
+- Analyze first, code second. Do not assume anything about the codebase.
+- Follow the existing code style, naming conventions, and folder structure
+  exactly.
+- Do not break or modify any existing strategy behavior.
+- The refactoring in Task 1 must be fully backward compatible — existing
+  API endpoints and frontend behavior must not change.
+- If anything is ambiguous after analyzing the codebase, ask before
+  generating code.
