@@ -6,6 +6,7 @@ namespace TradingSystem.Api.Services.Strategies;
 
 public sealed class EmaCrossoverStrategy : BacktestStrategyBase
 {
+    private static readonly TimeOnly IntradayCutoff = new(15, 10);
     private readonly BacktestRunnerService _runner;
 
     public EmaCrossoverStrategy(BacktestRunnerService runner)
@@ -48,7 +49,6 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
         double trailStop = 0;
         int remainingQty = 0;
         bool movedToBE = false;
-        int holdingBars = 0;
         var risk = new DayRiskState { DayStartCapital = initialCapital };
         DateTime lastDayDate = DateTime.MinValue;
 
@@ -62,7 +62,8 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
         double srBufferPct = p.SRBuffer ?? 0.5;
         int candleLookback = Math.Max(1, p.CandleLookback ?? 1);
         bool useTriple = p.UseTripleEma == true;
-        int maxHold = Math.Max(0, p.MaxHoldingPeriods ?? 0);
+        string timeframeMode = (p.EmaTimeframeMode ?? "INTRADAY").Trim().ToUpperInvariant();
+        bool isIntradayMode = timeframeMode == "INTRADAY";
 
         string tradeDirection = (p.TradeDirection ?? "BOTH").Trim().ToUpperInvariant();
         bool allowLong = tradeDirection is "BOTH" or "LONG_ONLY";
@@ -83,7 +84,7 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
 
             if (istTime.Date != lastDayDate)
             {
-                if (openTrade != null)
+                if (openTrade != null && isIntradayMode)
                 {
                     var prevCandle = candles[i - 1];
                     var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(prevCandle.Timestamp), (double)prevCandle.Close, remainingQty);
@@ -91,7 +92,6 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
                     if (runningCapital > peakCapital) peakCapital = runningCapital;
                     trades.Add(closed);
                     openTrade = null;
-                    holdingBars = 0;
                 }
                 risk = new DayRiskState { DayStartCapital = runningCapital };
                 lastDayDate = istTime.Date;
@@ -104,8 +104,6 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
 
             if (openTrade != null)
             {
-                holdingBars++;
-
                 var partial = ManageOpenPosition(openTrade, candle, ref trailStop, ref remainingQty, ref movedToBE);
                 if (partial != null)
                 {
@@ -114,37 +112,32 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
                     trades.Add(partial);
                 }
 
-                bool oppositeSignal = (openTrade.TradeType == "LONG" && bearishCross)
-                                   || (openTrade.TradeType == "SHORT" && bullishCross);
+                bool intradayCutoffReached = isIntradayMode
+                    && TimeOnly.FromDateTime(istTime.DateTime) >= IntradayCutoff;
 
-                bool maxHoldingExceeded = maxHold > 0 && holdingBars >= maxHold;
-
-                if (oppositeSignal || maxHoldingExceeded)
+                if (intradayCutoffReached)
                 {
-                    var exitPrice = maxHoldingExceeded ? (double)candle.Close : (double)candle.Close;
+                    var exitPrice = (double)candle.Close;
                     var closed = CloseRemainingWithCosts(openTrade, ToIstDateTime(candle.Timestamp), exitPrice, remainingQty);
                     runningCapital += closed.Pnl;
                     if (runningCapital > peakCapital) peakCapital = runningCapital;
                     trades.Add(closed);
                     risk.RecordTrade(closed.Pnl, closed.TradeType, i);
                     openTrade = null;
-                    holdingBars = 0;
-                }
-                else
-                {
-                    var exitResult = CheckExit(openTrade, candle, atr, p, ref trailStop);
-                    if (exitResult != null)
-                    {
-                        var closed = ApplyCostsWithQty(exitResult, remainingQty);
-                        runningCapital += closed.Pnl;
-                        if (runningCapital > peakCapital) peakCapital = runningCapital;
-                        trades.Add(closed);
-                        risk.RecordTrade(closed.Pnl, closed.TradeType, i);
-                        openTrade = null;
-                        holdingBars = 0;
-                    }
                     continue;
                 }
+
+                var exitResult = CheckExit(openTrade, candle, atr, p, ref trailStop);
+                if (exitResult != null)
+                {
+                    var closed = ApplyCostsWithQty(exitResult, remainingQty);
+                    runningCapital += closed.Pnl;
+                    if (runningCapital > peakCapital) peakCapital = runningCapital;
+                    trades.Add(closed);
+                    risk.RecordTrade(closed.Pnl, closed.TradeType, i);
+                    openTrade = null;
+                }
+                continue;
             }
 
             if (openTrade != null) continue;
@@ -208,7 +201,6 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
             trailStop = sl;
             remainingQty = qty;
             movedToBE = false;
-            holdingBars = 0;
 
             var entryBarExit = CheckExit(openTrade, nextCandle, atr, p, ref trailStop);
             if (entryBarExit != null)
@@ -219,7 +211,6 @@ public sealed class EmaCrossoverStrategy : BacktestStrategyBase
                 trades.Add(closed);
                 risk.RecordTrade(closed.Pnl, closed.TradeType, i);
                 openTrade = null;
-                holdingBars = 0;
             }
             i++;
         }

@@ -43,6 +43,7 @@ public record StrategyParams(
     double? TargetRRR = null,
     int? MaxHoldingPeriods = null,
     string? TradeDirection = null,
+    string? EmaTimeframeMode = null,     // INTRADAY | SWING | BOTH
     // Unified strategy mode selectors
     string? EmaMode = null,              // CROSSOVER | PULLBACK | SPEED | PULLBACK_SPEED
     string? OrbMode = null,              // CLASSIC | FVG_RETEST
@@ -58,7 +59,20 @@ public record BacktestStrategyResult(
 public record BacktestResponse(
     List<BacktestTradeResult> Trades,
     BacktestMetrics Metrics,
+    BacktestAnnotations? Annotations = null,
+    BacktestComparison? Comparison = null
+);
+
+public record BacktestComparisonProfile(
+    string Mode,
+    List<BacktestTradeResult> Trades,
+    BacktestMetrics Metrics,
     BacktestAnnotations? Annotations = null
+);
+
+public record BacktestComparison(
+    BacktestComparisonProfile Intraday,
+    BacktestComparisonProfile Swing
 );
 
 public record BacktestTradeResult(

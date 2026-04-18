@@ -56,7 +56,24 @@ public class BacktestRunnerService
     private static DateTime ToIstDateTime(DateTimeOffset utcTimestamp) =>
         TimeZoneInfo.ConvertTime(utcTimestamp, Ist).DateTime;
 
-    public async Task<BacktestResponse> RunAsync(BacktestRunRequest request, double initialCapital = 100000)
+    private static TradingSystem.Api.DTOs.StrategyConfig CloneStrategyWithEmaTimeframeMode(
+        TradingSystem.Api.DTOs.StrategyConfig strategy,
+        string emaTimeframeMode)
+    {
+        var p = strategy.Params;
+        var clonedParams = p with { EmaTimeframeMode = emaTimeframeMode };
+        return strategy with { Params = clonedParams };
+    }
+
+    private static BacktestComparisonProfile ToComparisonProfile(string mode, BacktestResponse response) =>
+        new(
+            Mode: mode,
+            Trades: response.Trades,
+            Metrics: response.Metrics,
+            Annotations: response.Annotations
+        );
+
+    private async Task<BacktestResponse> RunSingleAsync(BacktestRunRequest request, double initialCapital)
     {
         var instrument = await _instrumentService.GetBySymbolAsync(request.Symbol);
         if (instrument == null)
@@ -74,9 +91,6 @@ public class BacktestRunnerService
         var orderedCandles = candles.OrderBy(c => c.Timestamp).ToList();
         var indicators = ComputeIndicators(orderedCandles, request.Strategy.Params);
 
-        // Candle timestamps are UTC DateTimeOffset after EF fetch.
-        // Convert to IST DateTimeOffset for time-of-day checks (market hours, NoCutoff)
-        // and for day-grouping (ORB groups by IST trading date).
         var istTimes = orderedCandles
             .Select(c => TimeZoneInfo.ConvertTime(c.Timestamp, Ist))
             .ToArray();
@@ -98,6 +112,35 @@ public class BacktestRunnerService
 
         var metrics = CalculateMetrics(tradeList, initialCapital, orderedCandles);
         return new BacktestResponse(tradeList, metrics, annotations);
+    }
+
+    public async Task<BacktestResponse> RunAsync(BacktestRunRequest request, double initialCapital = 100000)
+    {
+        var strategyName = request.Strategy.Name?.Trim().ToUpperInvariant() ?? "";
+        var emaTimeframeMode = request.Strategy.Params.EmaTimeframeMode?.Trim().ToUpperInvariant();
+
+        if (strategyName == "EMA" && emaTimeframeMode == "BOTH")
+        {
+            var intradayReq = request with
+            {
+                Strategy = CloneStrategyWithEmaTimeframeMode(request.Strategy, "INTRADAY")
+            };
+            var swingReq = request with
+            {
+                Strategy = CloneStrategyWithEmaTimeframeMode(request.Strategy, "SWING")
+            };
+
+            var intradayResult = await RunSingleAsync(intradayReq, initialCapital);
+            var swingResult = await RunSingleAsync(swingReq, initialCapital);
+
+            var comparison = new BacktestComparison(
+                Intraday: ToComparisonProfile("INTRADAY", intradayResult),
+                Swing: ToComparisonProfile("SWING", swingResult));
+
+            return intradayResult with { Comparison = comparison };
+        }
+
+        return await RunSingleAsync(request, initialCapital);
     }
 
     // ─────────────────────────────────────────────────────────
