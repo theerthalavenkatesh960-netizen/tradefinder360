@@ -23,6 +23,8 @@ public class InstrumentDto
 
     // derived/analysis
     public string? Trend { get; set; }
+    public int? SetupScore { get; set; }
+    public string? MarketState { get; set; }
 
     // recommendation information
     public decimal? EntryPrice { get; set; }
@@ -84,7 +86,7 @@ public class InstrumentDetailDto
 
 /// <summary>
 /// Lightweight instrument summary for stock cards and hover previews.
-/// No analysis/scanner data — just metadata and latest price.
+/// No analysis/scanner data ï¿½ just metadata and latest price.
 /// </summary>
 public class InstrumentSummaryDto
 {
@@ -144,6 +146,9 @@ public class InstrumentSearchRequest
 
     /// <summary>Minimum setup score (0-100)</summary>
     public int? MinSetupScore { get; set; }
+
+    /// <summary>Maximum setup score (0-100)</summary>
+    public int? MaxSetupScore { get; set; }
 
     /// <summary>Minimum ADX value</summary>
     public decimal? MinAdx { get; set; }

@@ -121,7 +121,11 @@ public class InstrumentController : ControllerBase
             {
                 scanResult = await _scanner.ScanInstrumentAsync(inst, request.ScanTimeframe);
                 if (scanResult != null)
-                    dto.Trend = scanResult.Bias.ToString().ToLower();
+                {
+                    dto.Trend = scanResult.Bias.ToString().ToUpperInvariant();
+                    dto.SetupScore = scanResult.SetupScore;
+                    dto.MarketState = scanResult.MarketState.ToString();
+                }
 
                 recommendation = await _recommender.GetLatestForInstrumentAsync(inst.Id);
                 if (recommendation != null)
@@ -136,13 +140,20 @@ public class InstrumentController : ControllerBase
         // Step 5 — analysis-based filters
         var finalList = results.AsEnumerable();
 
-        if (request.Trend is not null)
+        if (!string.IsNullOrWhiteSpace(request.Trend))
+        {
+            var trendTargets = NormalizeTrendFilter(request.Trend);
             finalList = finalList.Where(r =>
-                string.Equals(r.dto.Trend, request.Trend, StringComparison.OrdinalIgnoreCase));
+                r.dto.Trend != null && trendTargets.Contains(r.dto.Trend, StringComparer.OrdinalIgnoreCase));
+        }
 
         if (request.MinSetupScore.HasValue)
             finalList = finalList.Where(r =>
                 r.scanResult != null && r.scanResult.SetupScore >= request.MinSetupScore.Value);
+
+        if (request.MaxSetupScore.HasValue)
+            finalList = finalList.Where(r =>
+                r.scanResult != null && r.scanResult.SetupScore <= request.MaxSetupScore.Value);
 
         if (request.HasRecommendation == true)
             finalList = finalList.Where(r =>
@@ -465,10 +476,27 @@ public class InstrumentController : ControllerBase
     private static bool NeedsAnalysisData(InstrumentSearchRequest r) =>
         r.Trend is not null
         || r.MinSetupScore.HasValue
+        || r.MaxSetupScore.HasValue
         || r.HasRecommendation == true
         || r.MinAdx.HasValue
         || r.RsiBelow.HasValue
-        || r.RsiAbove.HasValue;
+        || r.RsiAbove.HasValue
+        || string.Equals(r.SortBy, "setupscore", StringComparison.OrdinalIgnoreCase);
+
+    private static string[] NormalizeTrendFilter(string trend)
+    {
+        var normalized = trend.Trim().ToUpperInvariant();
+        return normalized switch
+        {
+            "TRENDING_BULLISH" or "PULLBACK_READY" => ["BULLISH"],
+            "TRENDING_BEARISH" => ["BEARISH"],
+            "SIDEWAYS" => ["NONE"],
+            "BULLISH" => ["BULLISH"],
+            "BEARISH" => ["BEARISH"],
+            "NONE" => ["NONE"],
+            _ => [normalized]
+        };
+    }
 
     private static List<TradingInstrument> ApplyMetadataFilters(
         List<TradingInstrument> instruments, InstrumentSearchRequest filter)
@@ -524,7 +552,7 @@ public class InstrumentController : ControllerBase
                                 : dtos.OrderBy(d => d.Symbol).ToList(),
             "price" => desc ? dtos.OrderByDescending(d => d.Price ?? 0).ToList()
                                 : dtos.OrderBy(d => d.Price ?? 0).ToList(),
-            "change" => desc ? dtos.OrderByDescending(d => d.ChangePercent ?? 0).ToList()
+            "change" or "changepercent" => desc ? dtos.OrderByDescending(d => d.ChangePercent ?? 0).ToList()
                                 : dtos.OrderBy(d => d.ChangePercent ?? 0).ToList(),
             "marketcap" => desc ? dtos.OrderByDescending(d => d.MarketCap ?? 0).ToList()
                                 : dtos.OrderBy(d => d.MarketCap ?? 0).ToList(),
@@ -532,6 +560,8 @@ public class InstrumentController : ControllerBase
                                 : dtos.OrderBy(d => d.Confidence ?? 0).ToList(),
             "volume" => desc ? dtos.OrderByDescending(d => d.Volume ?? 0).ToList()
                                 : dtos.OrderBy(d => d.Volume ?? 0).ToList(),
+            "setupscore" => desc ? dtos.OrderByDescending(d => d.SetupScore ?? 0).ToList()
+                                : dtos.OrderBy(d => d.SetupScore ?? 0).ToList(),
             _ => dtos.OrderBy(d => d.Symbol).ToList()
         };
     }
