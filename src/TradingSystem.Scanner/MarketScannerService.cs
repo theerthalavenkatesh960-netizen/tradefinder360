@@ -38,16 +38,27 @@ public class MarketScannerService
         if (_config.ScanInstruments.Count > 0)
             instruments = instruments.Where(i => _config.ScanInstruments.Contains(i.InstrumentKey)).ToList();
 
-        var results = new List<ScanResult>();
-
-        foreach (var instrument in instruments)
+        // Bounded parallel scan — avoids sequential bottleneck while preventing DB/API saturation.
+        const int maxConcurrency = 10;
+        using var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        var tasks = instruments.Select(async instrument =>
         {
-            var result = await ScanInstrumentAsync(instrument, timeframeMinutes);
-            if (result != null)
-                results.Add(result);
-        }
+            await semaphore.WaitAsync();
+            try
+            {
+                return await ScanInstrumentAsync(instrument, timeframeMinutes);
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
 
-        return results
+        var allResults = await Task.WhenAll(tasks);
+
+        return allResults
+            .Where(r => r != null)
+            .Cast<ScanResult>()
             .OrderByDescending(r => r.SetupScore)
             .ToList();
     }
@@ -203,6 +214,235 @@ public class MarketScannerService
                 }
             };
         }).ToList();
+    }
+
+    /// <summary>
+    /// Returns top movers (gainers or losers) ranked by intraday change percent derived from
+    /// today's first candle open vs latest close. Operates from already-computed snapshots for speed.
+    /// </summary>
+    public async Task<List<(ScanResult Result, decimal ChangePercent)>> GetMoversAsync(
+        int timeframeMinutes = 15,
+        int limit = 10,
+        bool gainers = true)
+    {
+        var results = await ScanAllAsync(timeframeMinutes);
+
+        // Compute change% from first-candle-of-day open vs last close for each result.
+        var withChangeTasks = results.Select(async r =>
+        {
+            var candles = await _candleService.GetRecentCandlesAsync(r.InstrumentId, timeframeMinutes, 1);
+            if (candles.Count < 2)
+                return (r, 0m);
+
+            var todayOpen = candles.First().Open;
+            var changePct = todayOpen == 0 ? 0m : (r.LastClose - todayOpen) / todayOpen * 100m;
+            return (r, changePct);
+        });
+
+        var withChange = await Task.WhenAll(withChangeTasks);
+
+        return gainers
+            ? withChange.OrderByDescending(x => x.Item2).Take(limit).ToList()
+            : withChange.OrderBy(x => x.Item2).Take(limit).ToList();
+    }
+
+    /// <summary>
+    /// Returns the top-scoring instruments per exchange/sector group, one per group.
+    /// Uses already-computed scan snapshots for fast ranking.
+    /// </summary>
+    public async Task<List<ScanResult>> GetSectorLeadersAsync(int timeframeMinutes = 15, int perSector = 3)
+    {
+        var results = await ScanAllAsync(timeframeMinutes);
+
+        return results
+            .GroupBy(r => r.Exchange)
+            .SelectMany(g => g.OrderByDescending(r => r.SetupScore).Take(perSector))
+            .OrderByDescending(r => r.SetupScore)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Returns instruments that have broken out of their opening 30-min range (first two 15-min candles).
+    /// </summary>
+    public async Task<List<(ScanResult Result, decimal OrHigh, decimal OrLow, decimal BreakoutPct, string Direction)>>
+        GetBreakoutsAsync(int limit = 20)
+    {
+        var results = await ScanAllAsync(15);
+        var breakouts = new List<(ScanResult, decimal, decimal, decimal, string)>();
+
+        using var semaphore = new SemaphoreSlim(10, 10);
+        var tasks = results.Select(async r =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                var candles = await _candleService.GetRecentCandlesAsync(r.InstrumentId, 15, 1);
+                if (candles.Count < 3) return;
+
+                // Opening range = first 2 candles of the session
+                var orHigh = candles.Take(2).Max(c => c.High);
+                var orLow = candles.Take(2).Min(c => c.Low);
+                var lastClose = r.LastClose;
+
+                if (lastClose > orHigh && orHigh > 0)
+                {
+                    var pct = (lastClose - orHigh) / orHigh * 100m;
+                    lock (breakouts) breakouts.Add((r, orHigh, orLow, pct, "LONG"));
+                }
+                else if (lastClose < orLow && orLow > 0)
+                {
+                    var pct = (orLow - lastClose) / orLow * 100m;
+                    lock (breakouts) breakouts.Add((r, orHigh, orLow, pct, "SHORT"));
+                }
+            }
+            finally { semaphore.Release(); }
+        });
+
+        await Task.WhenAll(tasks);
+
+        return breakouts
+            .OrderByDescending(b => b.Item4)
+            .Take(limit)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Returns instruments near key support or resistance levels (within threshold%).
+    /// Approximates S/R using Bollinger bands and recent swing highs/lows from snapshot data.
+    /// </summary>
+    public async Task<List<(ScanResult Result, decimal Level, decimal DistancePct, string LevelType)>>
+        GetNearSRAsync(int timeframeMinutes = 15, decimal thresholdPct = 1.5m, int limit = 20)
+    {
+        var results = await ScanAllAsync(timeframeMinutes);
+        var near = new List<(ScanResult, decimal, decimal, string)>();
+
+        using var semaphore = new SemaphoreSlim(10, 10);
+        var tasks = results.Select(async r =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                var indicator = await _indicatorService.GetLatestAsync(r.InstrumentId, timeframeMinutes);
+                if (indicator == null) return;
+
+                var price = r.LastClose;
+
+                // Use Bollinger bands as S/R approximation
+                var support = indicator.BollingerLower;
+                var resistance = indicator.BollingerUpper;
+
+                if (support > 0)
+                {
+                    var distPct = Math.Abs(price - support) / support * 100m;
+                    if (distPct <= thresholdPct)
+                        lock (near) near.Add((r, support, distPct, "SUPPORT"));
+                }
+
+                if (resistance > 0)
+                {
+                    var distPct = Math.Abs(price - resistance) / resistance * 100m;
+                    if (distPct <= thresholdPct)
+                        lock (near) near.Add((r, resistance, distPct, "RESISTANCE"));
+                }
+            }
+            finally { semaphore.Release(); }
+        });
+
+        await Task.WhenAll(tasks);
+
+        return near
+            .OrderBy(x => x.Item3)
+            .Take(limit)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Returns instruments showing recognizable candlestick patterns on the latest candle.
+    /// Detects: Hammer, InvertedHammer, Engulfing (Bull/Bear), Doji, MorningStar, EveningStar.
+    /// </summary>
+    public async Task<List<(ScanResult Result, string PatternName, string Direction, int Confidence)>>
+        GetPatternsAsync(int timeframeMinutes = 15, int limit = 20)
+    {
+        var results = await ScanAllAsync(timeframeMinutes);
+        var patterns = new List<(ScanResult, string, string, int)>();
+
+        using var semaphore = new SemaphoreSlim(10, 10);
+        var tasks = results.Select(async r =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                var candles = await _candleService.GetRecentCandlesAsync(r.InstrumentId, timeframeMinutes, 3);
+                if (candles.Count < 3) return;
+
+                var detected = DetectCandlePatterns(candles);
+                foreach (var (name, dir, conf) in detected)
+                    lock (patterns) patterns.Add((r, name, dir, conf));
+            }
+            finally { semaphore.Release(); }
+        });
+
+        await Task.WhenAll(tasks);
+
+        return patterns
+            .OrderByDescending(p => p.Item4)
+            .ThenByDescending(p => p.Item1.SetupScore)
+            .Take(limit)
+            .ToList();
+    }
+
+    // ---- Pattern detection helpers ----
+
+    private static List<(string Name, string Direction, int Confidence)> DetectCandlePatterns(List<Candle> candles)
+    {
+        var results = new List<(string, string, int)>();
+        if (candles.Count < 2) return results;
+
+        var c0 = candles[^1]; // latest
+        var c1 = candles[^2]; // previous
+
+        var range0 = c0.Range;
+        if (range0 == 0) return results;
+
+        var body0 = c0.BodySize;
+        var lowerWick0 = c0.LowerWick;
+        var upperWick0 = c0.UpperWick;
+
+        // Hammer: small body at top, lower wick >= 2x body, upper wick small
+        if (lowerWick0 >= body0 * 2 && upperWick0 <= body0 * 0.5m && body0 >= range0 * 0.1m)
+            results.Add(("Hammer", "BULLISH", 65));
+
+        // Inverted Hammer: small body at bottom, upper wick >= 2x body
+        if (upperWick0 >= body0 * 2 && lowerWick0 <= body0 * 0.5m && body0 >= range0 * 0.1m)
+            results.Add(("InvertedHammer", c0.IsBullish ? "BULLISH" : "BEARISH", 55));
+
+        // Doji: body is very small relative to range
+        if (body0 <= range0 * 0.1m)
+            results.Add(("Doji", "NEUTRAL", 50));
+
+        // Bullish Engulfing: previous bearish candle, current bullish and engulfs previous body
+        if (c1.IsBearish && c0.IsBullish && c0.Open <= c1.Close && c0.Close >= c1.Open)
+            results.Add(("BullishEngulfing", "BULLISH", 75));
+
+        // Bearish Engulfing: previous bullish candle, current bearish and engulfs previous body
+        if (c1.IsBullish && c0.IsBearish && c0.Open >= c1.Close && c0.Close <= c1.Open)
+            results.Add(("BearishEngulfing", "BEARISH", 75));
+
+        if (candles.Count >= 3)
+        {
+            var c2 = candles[^3];
+            // Morning Star: bearish, small body, bullish close above midpoint of c2
+            if (c2.IsBearish && c1.BodySize <= c1.Range * 0.3m && c0.IsBullish
+                && c0.Close > (c2.Open + c2.Close) / 2)
+                results.Add(("MorningStar", "BULLISH", 80));
+
+            // Evening Star: bullish, small body, bearish close below midpoint of c2
+            if (c2.IsBullish && c1.BodySize <= c1.Range * 0.3m && c0.IsBearish
+                && c0.Close < (c2.Open + c2.Close) / 2)
+                results.Add(("EveningStar", "BEARISH", 80));
+        }
+
+        return results;
     }
 
     private async Task PersistScanResultAsync(ScanResult result)
