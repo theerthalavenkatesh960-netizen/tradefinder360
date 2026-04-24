@@ -35,6 +35,12 @@ public class MoverItemDto
     public string Bias { get; set; } = string.Empty;
     public int SetupScore { get; set; }
     public DateTime ScannedAt { get; set; }
+    
+    // ---- Trend context (for mini-candlestick charts) ----
+    public List<CandleDto> TrendCandles { get; set; } = new(); // Last 5 days of daily candles for UI trend chart
+    
+    // ---- AI Analysis placeholder (for future AI insights) ----
+    public string AIAnalysis { get; set; } = "Analyzing.../Ready"; // e.g., "This stock shows strong breakout potential"
 }
 
 public class SectorLeaderItemDto

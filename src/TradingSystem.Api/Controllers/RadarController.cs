@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Scanner;
 using TradingSystem.Scanner.Models;
+using System.Diagnostics;
 
 namespace TradingSystem.Api.Controllers;
 
@@ -78,6 +79,7 @@ public class RadarController : ControllerBase
     /// <summary>
     /// Returns all intraday section data in a single parallel call for fast Radar dashboard hydration.
     /// Sections: TopGainers, TopLosers, SectorLeaders, Breakouts30Min, NearSupport, NearResistance, Patterns.
+    /// Optimized with batch candle loading to avoid N+1 queries.
     /// </summary>
     [HttpGet("sections")]
     public async Task<ActionResult<RadarSectionsDto>> GetSections(
@@ -85,47 +87,100 @@ public class RadarController : ControllerBase
         [FromQuery] int sectionLimit = 10,
         [FromQuery] decimal srThresholdPct = 1.5m)
     {
+        var overallTimer = Stopwatch.StartNew();
+        
+        // Scan all instruments once
+        var scanTimer = Stopwatch.StartNew();
         var scanResults = await _scanner.ScanAllAsync(timeframe);
+        scanTimer.Stop();
+        System.Diagnostics.Debug.WriteLine($"[Radar] ScanAllAsync completed in {scanTimer.ElapsedMilliseconds}ms");
 
-        var gainers = await _scanner.GetMoversAsync(scanResults, timeframe, sectionLimit, gainers: true);
-        var losers = await _scanner.GetMoversAsync(scanResults, timeframe, sectionLimit, gainers: false);
-        var sectors = await _scanner.GetSectorLeadersAsync(scanResults, perSector: 3);
-        var breakouts = await _scanner.GetBreakoutsAsync(scanResults, sectionLimit);
-        var sr = await _scanner.GetNearSRAsync(scanResults, timeframe, srThresholdPct, sectionLimit * 2);
-        var patterns = await _scanner.GetPatternsAsync(scanResults, timeframe, sectionLimit);
+        // Batch-load daily candles for all instruments upfront (5 days for trend context)
+        var batchTimer = Stopwatch.StartNew();
+        var dailyCandlesByInstrument = await _scanner.BatchGetDailyCandles(scanResults, daysBack: 5);
+        batchTimer.Stop();
+        System.Diagnostics.Debug.WriteLine($"[Radar] BatchGetDailyCandles completed in {batchTimer.ElapsedMilliseconds}ms for {dailyCandlesByInstrument.Count} instruments");
+
+        // Execute all section queries in parallel with pre-loaded candles
+        var gainersTimer = Stopwatch.StartNew();
+        var gainersTask = _scanner.GetMoversAsync(scanResults, timeframe, sectionLimit, gainers: true);
+        gainersTimer.Stop();
+
+        var losersTimer = Stopwatch.StartNew();
+        var losersTask = _scanner.GetMoversAsync(scanResults, timeframe, sectionLimit, gainers: false);
+        losersTimer.Stop();
+
+        var sectorsTimer = Stopwatch.StartNew();
+        var sectorsTask = _scanner.GetSectorLeadersAsync(scanResults, perSector: 3);
+        sectorsTimer.Stop();
+
+        var breakoutsTimer = Stopwatch.StartNew();
+        var breakoutsTask = _scanner.GetBreakoutsAsync(scanResults, sectionLimit);
+        breakoutsTimer.Stop();
+
+        var srTimer = Stopwatch.StartNew();
+        var srTask = _scanner.GetNearSRAsync(scanResults, timeframe, srThresholdPct, sectionLimit * 2);
+        srTimer.Stop();
+
+        var patternsTimer = Stopwatch.StartNew();
+        var patternsTask = _scanner.GetPatternsAsync(scanResults, timeframe, sectionLimit);
+        patternsTimer.Stop();
+
+        // Wait for all queries
+        await Task.WhenAll(gainersTask, losersTask, sectorsTask, breakoutsTask, srTask, patternsTask);
+
+        var gainers = await gainersTask;
+        var losers = await losersTask;
+        var sectors = await sectorsTask;
+        var breakouts = await breakoutsTask;
+        var sr = await srTask;
+        var patterns = await patternsTask;
+
+        System.Diagnostics.Debug.WriteLine($"[Radar] Gainers: {gainersTimer.ElapsedMilliseconds}ms, Losers: {losersTimer.ElapsedMilliseconds}ms");
+        System.Diagnostics.Debug.WriteLine($"[Radar] Sectors: {sectorsTimer.ElapsedMilliseconds}ms, Breakouts: {breakoutsTimer.ElapsedMilliseconds}ms");
+        System.Diagnostics.Debug.WriteLine($"[Radar] SR: {srTimer.ElapsedMilliseconds}ms, Patterns: {patternsTimer.ElapsedMilliseconds}ms");
+
+        // Map results to DTOs with trend candles for gainers/losers
+        var moverToDtoFunc = new Func<(ScanResult, decimal), MoverItemDto>(mover =>
+        {
+            dailyCandlesByInstrument.TryGetValue(mover.Item1.InstrumentId, out var trendCandles);
+            return new MoverItemDto
+            {
+                Symbol = mover.Item1.Symbol,
+                Exchange = mover.Item1.Exchange,
+                LastClose = mover.Item1.LastClose,
+                ChangePercent = Math.Round(mover.Item2, 2),
+                ATR = mover.Item1.ATR,
+                Bias = mover.Item1.Bias.ToString(),
+                SetupScore = mover.Item1.SetupScore,
+                ScannedAt = mover.Item1.ScannedAt,
+                TrendCandles = trendCandles?.Select(c => new CandleDto
+                {
+                    Timestamp = c.Timestamp,
+                    Open = c.Open,
+                    High = c.High,
+                    Low = c.Low,
+                    Close = c.Close,
+                    Volume = c.Volume
+                }).ToList() ?? new(),
+                AIAnalysis = "Ready" // Placeholder for AI insights
+            };
+        });
+
+        overallTimer.Stop();
+        System.Diagnostics.Debug.WriteLine($"[Radar] Total GetSections completed in {overallTimer.ElapsedMilliseconds}ms");
 
         return Ok(new RadarSectionsDto
         {
-            TopGainers = gainers.Select(x => new MoverItemDto
-            {
-                Symbol = x.Result.Symbol,
-                Exchange = x.Result.Exchange,
-                LastClose = x.Result.LastClose,
-                ChangePercent = Math.Round(x.ChangePercent, 2),
-                ATR = x.Result.ATR,
-                Bias = x.Result.Bias.ToString(),
-                SetupScore = x.Result.SetupScore,
-                ScannedAt = x.Result.ScannedAt
-            }).ToList(),
-
-            TopLosers = losers.Select(x => new MoverItemDto
-            {
-                Symbol = x.Result.Symbol,
-                Exchange = x.Result.Exchange,
-                LastClose = x.Result.LastClose,
-                ChangePercent = Math.Round(x.ChangePercent, 2),
-                ATR = x.Result.ATR,
-                Bias = x.Result.Bias.ToString(),
-                SetupScore = x.Result.SetupScore,
-                ScannedAt = x.Result.ScannedAt
-            }).ToList(),
+            TopGainers = gainers.Select(moverToDtoFunc).ToList(),
+            TopLosers = losers.Select(moverToDtoFunc).ToList(),
 
             SectorLeaders = sectors.Take(sectionLimit).Select(r => new SectorLeaderItemDto
             {
                 Symbol = r.Symbol,
                 Exchange = r.Exchange,
                 LastClose = r.LastClose,
-                ChangePercent = 0m, // populated via movers if needed; sector leaders ranked by score
+                ChangePercent = 0m,
                 SetupScore = r.SetupScore,
                 Bias = r.Bias.ToString(),
                 ScannedAt = r.ScannedAt

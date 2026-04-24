@@ -430,6 +430,42 @@ public class MarketScannerService
             .ToList();
     }
 
+    /// <summary>
+    /// Batch-loads daily candles for multiple instruments and returns as a dictionary.
+    /// This allows section methods to reuse candles without repeated queries.
+    /// Key = InstrumentId, Value = list of Candle entities sorted by timestamp (oldest first)
+    /// </summary>
+    public async Task<Dictionary<int, List<Candle>>> BatchGetDailyCandles(
+        List<ScanResult> results,
+        int daysBack = 5)
+    {
+        if (results.Count == 0)
+            return new Dictionary<int, List<Candle>>();
+
+        var toDate = DateTime.Today.AddDays(1);
+        var fromDate = DateTime.Today.AddDays(-daysBack);
+        var candlesByInstrument = new Dictionary<int, List<Candle>>();
+
+        // Query daily (1440-min) candles for all instruments concurrently
+        using var semaphore = new SemaphoreSlim(3, 3);
+        var tasks = results.Select(async r =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                var candles = await _candleService.GetCandlesFromDbAsync(r.InstrumentId, 1440, fromDate, toDate);
+                lock (candlesByInstrument)
+                {
+                    candlesByInstrument[r.InstrumentId] = candles.OrderBy(c => c.Timestamp).ToList();
+                }
+            }
+            finally { semaphore.Release(); }
+        });
+
+        await Task.WhenAll(tasks);
+        return candlesByInstrument;
+    }
+
     // ---- Pattern detection helpers ----
 
     private static List<(string Name, string Direction, int Confidence)> DetectCandlePatterns(List<Candle> candles)
