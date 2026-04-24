@@ -13,16 +13,16 @@ public class IndicatorService : IIndicatorService
     private static readonly TimeZoneInfo Ist =
         TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
 
-    private readonly TradingDbContext _db;
+    private readonly IDbContextFactory<TradingDbContext> _contextFactory;
     private readonly ICandleService _candleService;
     private readonly ILogger<IndicatorService> _logger;
  
     public IndicatorService(
-        TradingDbContext db,
+        IDbContextFactory<TradingDbContext> contextFactory,
         ICandleService candleService,
         ILogger<IndicatorService> logger)
     {
-        _db = db;
+        _contextFactory = contextFactory;
         _candleService = candleService;
         _logger = logger;
     }
@@ -38,12 +38,14 @@ public class IndicatorService : IIndicatorService
         if (snapshots.Count == 0)
             return;
 
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
         // Fetch existing snapshots that match any of the incoming instrument+timeframe+timestamp combos
         var instrumentIds = snapshots.Select(s => s.InstrumentId).Distinct().ToList();
         var timeframes    = snapshots.Select(s => s.TimeframeMinutes).Distinct().ToList();
         var timestamps    = snapshots.Select(s => s.Timestamp).Distinct().ToList();
 
-        var existing = await _db.IndicatorSnapshots
+        var existing = await context.IndicatorSnapshots
             .Where(s => instrumentIds.Contains(s.InstrumentId)
                     && timeframes.Contains(s.TimeframeMinutes)
                     && timestamps.Contains(s.Timestamp))
@@ -88,11 +90,11 @@ public class IndicatorService : IIndicatorService
         }
 
         if (toAdd.Count > 0)
-            await _db.IndicatorSnapshots.AddRangeAsync(toAdd, cancellationToken);
+            await context.IndicatorSnapshots.AddRangeAsync(toAdd, cancellationToken);
 
         // SaveChangesAsync handles both inserts (toAdd) and updates (tracked entities)
         // in a single round trip
-        await _db.SaveChangesAsync(cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
     }
  
     /// <summary>
@@ -101,7 +103,8 @@ public class IndicatorService : IIndicatorService
     /// </summary>
     public async Task SaveAsync(int instrumentId, int timeframeMinutes, IndicatorValues indicators)
     {
-        await _db.IndicatorSnapshots.AddAsync(new IndicatorSnapshot
+        await using var context = await _contextFactory.CreateDbContextAsync();
+        await context.IndicatorSnapshots.AddAsync(new IndicatorSnapshot
         {
             InstrumentId     = instrumentId,
             TimeframeMinutes = timeframeMinutes,
@@ -124,21 +127,26 @@ public class IndicatorService : IIndicatorService
             // DateTime.UtcNow has no offset info; DateTimeOffset.UtcNow = +00:00
             CreatedAt        = DateTimeOffset.UtcNow
         });
- 
-        await _db.SaveChangesAsync();
+
+        await context.SaveChangesAsync();
     }
- 
+
     public async Task<IndicatorSnapshot?> GetLatestAsync(int instrumentId, int timeframeMinutes)
-        => await _db.IndicatorSnapshots
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync();
+        return await context.IndicatorSnapshots
             .Where(s => s.InstrumentId    == instrumentId
                      && s.TimeframeMinutes == timeframeMinutes)
             .OrderByDescending(s => s.Timestamp)
             .AsNoTracking()
             .FirstOrDefaultAsync();
- 
+    }
+
     public async Task<List<IndicatorSnapshot>> GetRecentAsync(
         int instrumentId, int timeframeMinutes, int count)
-        => await _db.IndicatorSnapshots
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync();
+        return await context.IndicatorSnapshots
             .Where(s => s.InstrumentId    == instrumentId
                      && s.TimeframeMinutes == timeframeMinutes)
             .OrderByDescending(s => s.Timestamp)
@@ -146,12 +154,15 @@ public class IndicatorService : IIndicatorService
             .OrderBy(s => s.Timestamp)
             .AsNoTracking()
             .ToListAsync();
+    }
 
     public async Task<List<IndicatorSnapshot>> GetByDateRangeAsync(
         int instrumentId, int timeframeMinutes,
         DateTimeOffset fromDate, DateTimeOffset toDate,
         CancellationToken cancellationToken = default)
-        => await _db.IndicatorSnapshots
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.IndicatorSnapshots
             .Where(s => s.InstrumentId == instrumentId
                      && s.TimeframeMinutes == timeframeMinutes
                      && s.Timestamp >= fromDate
@@ -159,7 +170,7 @@ public class IndicatorService : IIndicatorService
             .OrderBy(s => s.Timestamp)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
-
+    }
     public async Task<List<IndicatorSnapshot>> EnsureIndicatorsCalculatedAsync(
         int instrumentId, int timeframeMinutes,
         DateTime fromDate, DateTime toDate,

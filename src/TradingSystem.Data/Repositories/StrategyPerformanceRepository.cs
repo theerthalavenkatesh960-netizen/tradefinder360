@@ -6,7 +6,7 @@ namespace TradingSystem.Data.Repositories;
 
 public class StrategyPerformanceRepository : CommonRepository<StrategyPerformance>, IStrategyPerformanceRepository
 {
-    public StrategyPerformanceRepository(TradingDbContext context) : base(context)
+    public StrategyPerformanceRepository(IDbContextFactory<TradingDbContext> contextFactory) : base(contextFactory)
     {
     }
 
@@ -14,7 +14,8 @@ public class StrategyPerformanceRepository : CommonRepository<StrategyPerformanc
         StrategyType strategyType,
         CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<StrategyPerformance>()
             .Where(p => p.StrategyType == strategyType)
             .OrderByDescending(p => p.PeriodEnd)
             .AsNoTracking()
@@ -27,7 +28,8 @@ public class StrategyPerformanceRepository : CommonRepository<StrategyPerformanc
         DateTime toDate,
         CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<StrategyPerformance>()
             .Where(p => p.StrategyType == strategyType
                      && p.PeriodStart >= fromDate
                      && p.PeriodEnd <= toDate)
@@ -41,7 +43,8 @@ public class StrategyPerformanceRepository : CommonRepository<StrategyPerformanc
         DateTime toDate,
         CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<StrategyPerformance>()
             .Where(p => p.PeriodStart >= fromDate && p.PeriodEnd <= toDate)
             .OrderByDescending(p => p.WinRate)
             .ThenByDescending(p => p.TotalPnL)

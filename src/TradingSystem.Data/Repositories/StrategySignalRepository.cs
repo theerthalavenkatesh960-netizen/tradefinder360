@@ -6,7 +6,7 @@ namespace TradingSystem.Data.Repositories;
 
 public class StrategySignalRepository : CommonRepository<StrategySignalRecord>, IStrategySignalRepository
 {
-    public StrategySignalRepository(TradingDbContext context) : base(context)
+    public StrategySignalRepository(IDbContextFactory<TradingDbContext> contextFactory) : base(contextFactory)
     {
     }
 
@@ -16,7 +16,8 @@ public class StrategySignalRepository : CommonRepository<StrategySignalRecord>, 
         DateTime toDate,
         CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<StrategySignalRecord>()
             .Where(s => s.StrategyType == strategyType
                      && s.Timestamp >= fromDate
                      && s.Timestamp <= toDate)
@@ -32,7 +33,8 @@ public class StrategySignalRepository : CommonRepository<StrategySignalRecord>, 
         int limit = 100,
         CancellationToken cancellationToken = default)
     {
-        var query = _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var query = context.Set<StrategySignalRecord>()
             .Where(s => s.InstrumentId == instrumentId);
 
         if (strategyType.HasValue)
@@ -52,7 +54,8 @@ public class StrategySignalRepository : CommonRepository<StrategySignalRecord>, 
         int minConfidence = 60,
         CancellationToken cancellationToken = default)
     {
-        var query = _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var query = context.Set<StrategySignalRecord>()
             .Where(s => s.IsValid && s.Confidence >= minConfidence);
 
         if (strategyType.HasValue)
@@ -73,7 +76,8 @@ public class StrategySignalRepository : CommonRepository<StrategySignalRecord>, 
         StrategyType strategyType,
         CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<StrategySignalRecord>()
             .Where(s => s.InstrumentId == instrumentId && s.StrategyType == strategyType)
             .OrderByDescending(s => s.Timestamp)
             .AsNoTracking()
@@ -84,9 +88,10 @@ public class StrategySignalRepository : CommonRepository<StrategySignalRecord>, 
         DateTimeOffset? expiresAfter = null,
         CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         var cutoffTime = expiresAfter ?? DateTimeOffset.UtcNow;
 
-        return await _dbSet
+        return await context.Set<StrategySignalRecord>()
             .Where(s => !s.WasActedUpon 
                      && s.IsValid 
                      && (!s.ExpiresAt.HasValue || s.ExpiresAt > cutoffTime))
@@ -101,12 +106,13 @@ public class StrategySignalRepository : CommonRepository<StrategySignalRecord>, 
         int tradeId,
         CancellationToken cancellationToken = default)
     {
-        var signal = await _dbSet.FindAsync(new object[] { signalId }, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var signal = await context.Set<StrategySignalRecord>().FindAsync(new object[] { signalId }, cancellationToken);
         if (signal != null)
         {
             signal.WasActedUpon = true;
             signal.RelatedTradeId = tradeId;
-            await _context.SaveChangesAsync(cancellationToken);
+            await context.SaveChangesAsync(cancellationToken);
         }
     }
 }

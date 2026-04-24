@@ -6,31 +6,55 @@ namespace TradingSystem.Data.Services;
 
 public class ScanService : IScanService
 {
-    private readonly TradingDbContext _db;
+    private readonly IDbContextFactory<TradingDbContext> _contextFactory;
 
-    public ScanService(TradingDbContext db)
+    public ScanService(IDbContextFactory<TradingDbContext> contextFactory)
     {
-        _db = db;
+        _contextFactory = contextFactory;
     }
 
     public async Task SaveAsync(ScanSnapshot snapshot)
     {
-        await _db.ScanSnapshots.AddAsync(snapshot);
-        await _db.SaveChangesAsync();
+        await using var context = await _contextFactory.CreateDbContextAsync();
+        await context.ScanSnapshots.AddAsync(snapshot);
+        await context.SaveChangesAsync();
     }
 
     public async Task<List<ScanSnapshot>> GetTopAsync(int minScore, int limit)
-        => await _db.ScanSnapshots
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync();
+        return await context.ScanSnapshots
+            .Include(s => s.Instrument)
             .Where(s => s.SetupScore >= minScore)
             .GroupBy(s => s.InstrumentId)
             .Select(g => g.OrderByDescending(s => s.Timestamp).First())
             .OrderByDescending(s => s.SetupScore)
             .Take(limit)
             .ToListAsync();
+    }
 
     public async Task<ScanSnapshot?> GetLatestSnapshotAsync(int instrumentId)
-        => await _db.ScanSnapshots
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync();
+        return await context.ScanSnapshots
+            .Include(s => s.Instrument)
             .Where(s => s.InstrumentId == instrumentId)
             .OrderByDescending(s => s.Timestamp)
             .FirstOrDefaultAsync();
+    }
+
+    public async Task<List<ScanSnapshot>> GetLatestSnapshotsAsync(IEnumerable<int> instrumentIds)
+    {
+        var ids = instrumentIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return new List<ScanSnapshot>();
+
+        await using var context = await _contextFactory.CreateDbContextAsync();
+        return await context.ScanSnapshots
+            .Include(s => s.Instrument)
+            .Where(s => ids.Contains(s.InstrumentId))
+            .GroupBy(s => s.InstrumentId)
+            .Select(g => g.OrderByDescending(s => s.Timestamp).First())
+            .ToListAsync();
+    }
 }

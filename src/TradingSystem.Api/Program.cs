@@ -35,17 +35,42 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
 });
 
-builder.Services.AddDbContext<TradingDbContext>(options => 
-    options.UseNpgsql(builder.Configuration.GetConnectionString("Supabase")));
+var connectionString = builder.Configuration.GetConnectionString("Supabase");
+
+builder.Services.AddDbContextPool<TradingDbContext>(options =>
+{
+    options.UseNpgsql(
+        connectionString,
+        npgsql =>
+        {
+            npgsql.EnableRetryOnFailure(
+                maxRetryCount: 3,
+                maxRetryDelay: TimeSpan.FromSeconds(5),
+                errorCodesToAdd: null);
+            npgsql.CommandTimeout(120);
+        })
+        .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
+}, poolSize: 64);
 
 builder.Services.AddDbContextFactory<TradingDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("Supabase")),
-    ServiceLifetime.Scoped);
+{
+    options.UseNpgsql(
+        connectionString,
+        npgsql =>
+        {
+            npgsql.EnableRetryOnFailure(
+                maxRetryCount: 3,
+                maxRetryDelay: TimeSpan.FromSeconds(5),
+                errorCodesToAdd: null);
+            npgsql.CommandTimeout(120);
+        })
+        .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
+}, ServiceLifetime.Scoped);
     
 // Core Repositories
 builder.Services.AddScoped(typeof(ICommonRepository<>), typeof(CommonRepository<>));
 builder.Services.AddScoped<IInstrumentRepository, InstrumentRepository>();
-builder.Services.AddScoped<IInstrumentPriceRepository, InstrumentPriceRepository>();
+builder.Services.AddTransient<IInstrumentPriceRepository, InstrumentPriceRepository>();
 builder.Services.AddScoped<ISectorRepository, SectorRepository>();
 builder.Services.AddScoped<IMarketCandleRepository, MarketCandleRepository>();
 builder.Services.AddScoped<IStrategySignalRepository, StrategySignalRepository>();
@@ -58,9 +83,9 @@ builder.Services.AddScoped<ITradeOutcomeRepository, TradeOutcomeRepository>();
 builder.Services.AddScoped<IAIModelVersionRepository, AIModelVersionRepository>();
 
 // Core Services
-builder.Services.AddScoped<IInstrumentService, InstrumentService>();
-builder.Services.AddScoped<ICandleService, CandleService>();
-builder.Services.AddScoped<IIndicatorService, IndicatorService>();
+builder.Services.AddTransient<IInstrumentService, InstrumentService>();
+builder.Services.AddTransient<ICandleService, CandleService>();
+builder.Services.AddTransient<IIndicatorService, IndicatorService>();
 builder.Services.AddScoped<ITradeService, TradeService>();
 builder.Services.AddScoped<IScanService, ScanService>();
 builder.Services.AddScoped<IRecommendationService, RecommendationService>();
@@ -86,8 +111,8 @@ builder.Services.AddScoped<ReinforcementLearningService>();
 
 // Scanner Services
 builder.Services.AddScoped<SetupScoringService>();
-builder.Services.AddScoped<MarketScannerService>();
-builder.Services.AddScoped<TradeRecommendationService>();
+builder.Services.AddTransient<MarketScannerService>();
+builder.Services.AddTransient<TradeRecommendationService>();
 builder.Services.AddScoped<StrategyService>();
 builder.Services.AddScoped<BacktestingService>();
 builder.Services.AddScoped<PortfolioOptimizationService>();

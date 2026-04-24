@@ -6,7 +6,7 @@ namespace TradingSystem.Data.Repositories;
 
 public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IInstrumentPriceRepository
 {
-    public InstrumentPriceRepository(TradingDbContext context) : base(context)
+    public InstrumentPriceRepository(IDbContextFactory<TradingDbContext> contextFactory) : base(contextFactory)
     {
     }
 
@@ -17,7 +17,8 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
         DateTime? to = null,
         CancellationToken cancellationToken = default)
     {
-        var query = _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var query = context.Set<InstrumentPrice>()
             .Where(p => p.InstrumentId == instrumentId && p.Timeframe == timeframe);
 
         if (from.HasValue)
@@ -37,7 +38,8 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
 
     public async Task<InstrumentPrice?> GetLatestPriceAsync(int instrumentId, string timeframe, CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<InstrumentPrice>()
             .Where(p => p.InstrumentId == instrumentId && p.Timeframe == timeframe)
             .OrderByDescending(p => p.Timestamp)
             .FirstOrDefaultAsync(cancellationToken);
@@ -45,6 +47,7 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
 
     public async Task<int> BulkUpsertAsync(IEnumerable<InstrumentPrice> prices, CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         var priceList = prices.ToList();
         if (!priceList.Any())
         {
@@ -55,7 +58,7 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
         var timeframes = priceList.Select(p => p.Timeframe).Distinct().ToList();
         // var timestamps = priceList.Select(p => p.Timestamp).Distinct().ToList();
 
-        var existingPrices = await _dbSet
+        var existingPrices = await context.Set<InstrumentPrice>()
             .Where(p => instrumentIds.Contains(p.InstrumentId)
                      && timeframes.Contains(p.Timeframe))
                      //&& timestamps.Contains(p.Timestamp))
@@ -91,25 +94,26 @@ public class InstrumentPriceRepository : CommonRepository<InstrumentPrice>, IIns
 
         if (toAdd.Any())
         {
-            await _dbSet.AddRangeAsync(toAdd, cancellationToken);
+            await context.Set<InstrumentPrice>().AddRangeAsync(toAdd, cancellationToken);
         }
 
         if (toUpdate.Any())
         {
-            _dbSet.UpdateRange(toUpdate);
+            context.Set<InstrumentPrice>().UpdateRange(toUpdate);
         }
 
-        return await _context.SaveChangesAsync(cancellationToken);
+        return await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<Dictionary<int, InstrumentPrice>> GetLatestPricesForInstrumentsAsync(IEnumerable<int> instrumentIds, string timeframe,
     CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         var ids = instrumentIds.ToList();
 
         try
         {
-            var latestPrices = await _dbSet
+            var latestPrices = await context.Set<InstrumentPrice>()
                 .Where(p => ids.Contains(p.InstrumentId) && p.Timeframe == timeframe)
                 .OrderByDescending(p => p.Timestamp)
                 .GroupBy(p => p.InstrumentId)

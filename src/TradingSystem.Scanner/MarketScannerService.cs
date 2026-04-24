@@ -38,15 +38,20 @@ public class MarketScannerService
         if (_config.ScanInstruments.Count > 0)
             instruments = instruments.Where(i => _config.ScanInstruments.Contains(i.InstrumentKey)).ToList();
 
+        var instrumentIds = instruments.Select(i => i.Id).ToList();
+        var latestSnapshots = await _scanService.GetLatestSnapshotsAsync(instrumentIds);
+        var latestSnapshotByInstrument = latestSnapshots.ToDictionary(s => s.InstrumentId);
+
         // Bounded parallel scan — avoids sequential bottleneck while preventing DB/API saturation.
-        const int maxConcurrency = 10;
+        const int maxConcurrency = 5;
         using var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         var tasks = instruments.Select(async instrument =>
         {
             await semaphore.WaitAsync();
             try
             {
-                return await ScanInstrumentAsync(instrument, timeframeMinutes);
+                latestSnapshotByInstrument.TryGetValue(instrument.Id, out var lastScan);
+                return await ScanInstrumentAsync(instrument, timeframeMinutes, lastScan);
             }
             finally
             {
@@ -63,11 +68,8 @@ public class MarketScannerService
             .ToList();
     }
 
-    public async Task<ScanResult?> ScanInstrumentAsync(TradingInstrument instrument, int timeframeMinutes = 15)
+    public async Task<ScanResult?> ScanInstrumentAsync(TradingInstrument instrument, int timeframeMinutes = 15, ScanSnapshot? lastScan = null)
     {
-        // Check if a recent scan already exists for this instrument
-        var lastScan = await _scanService.GetLatestSnapshotAsync(instrument.Id);
-        
         // If a scan exists and it's from the same trading day, return the cached result
         if (lastScan != null && IsSameTradeDay(lastScan.Timestamp))
         {
@@ -75,7 +77,9 @@ public class MarketScannerService
         }
 
         var daysBack = CandleDataLimits.GetDefaultDaysBack(instrument.InstrumentType, timeframeMinutes);
-        var candles = await _candleService.GetRecentCandlesAsync(instrument.Id, timeframeMinutes, daysBack);
+        var toDate = DateTime.Today.AddDays(1);
+        var fromDate = DateTime.Today.AddDays(-daysBack);
+        var candles = await _candleService.GetCandlesFromDbAsync(instrument.Id, timeframeMinutes, fromDate, toDate);
 
         if (candles.Count < 50)
             return null;
@@ -158,8 +162,8 @@ public class MarketScannerService
         return new ScanResult
         {
             InstrumentId = snapshot.InstrumentId,
-            Symbol = string.Empty, // Will be populated by caller if needed
-            Exchange = string.Empty,
+            Symbol = snapshot.Instrument?.Symbol ?? string.Empty, // Will be populated by caller if needed
+            Exchange = snapshot.Instrument?.Exchange ?? string.Empty,
             MarketState = Enum.TryParse<ScanMarketState>(snapshot.MarketState, out var ms) ? ms : ScanMarketState.SIDEWAYS,
             SetupScore = snapshot.SetupScore,
             Bias = Enum.TryParse<ScanBias>(snapshot.Bias, out var bias) ? bias : ScanBias.NONE,
@@ -226,11 +230,20 @@ public class MarketScannerService
         bool gainers = true)
     {
         var results = await ScanAllAsync(timeframeMinutes);
+        return await GetMoversAsync(results, timeframeMinutes, limit, gainers);
+    }
 
-        // Compute change% from first-candle-of-day open vs last close for each result.
+    public async Task<List<(ScanResult Result, decimal ChangePercent)>> GetMoversAsync(
+        List<ScanResult> results,
+        int timeframeMinutes,
+        int limit,
+        bool gainers = true)
+    {
         var withChangeTasks = results.Select(async r =>
         {
-            var candles = await _candleService.GetRecentCandlesAsync(r.InstrumentId, timeframeMinutes, 1);
+            var toDate = DateTime.Today.AddDays(1);
+            var fromDate = DateTime.Today;
+            var candles = await _candleService.GetCandlesFromDbAsync(r.InstrumentId, timeframeMinutes, fromDate, toDate);
             if (candles.Count < 2)
                 return (r, 0m);
 
@@ -253,12 +266,16 @@ public class MarketScannerService
     public async Task<List<ScanResult>> GetSectorLeadersAsync(int timeframeMinutes = 15, int perSector = 3)
     {
         var results = await ScanAllAsync(timeframeMinutes);
+        return await GetSectorLeadersAsync(results, perSector);
+    }
 
-        return results
+    public Task<List<ScanResult>> GetSectorLeadersAsync(List<ScanResult> results, int perSector = 3)
+    {
+        return Task.FromResult(results
             .GroupBy(r => r.Exchange)
             .SelectMany(g => g.OrderByDescending(r => r.SetupScore).Take(perSector))
             .OrderByDescending(r => r.SetupScore)
-            .ToList();
+            .ToList());
     }
 
     /// <summary>
@@ -268,15 +285,23 @@ public class MarketScannerService
         GetBreakoutsAsync(int limit = 20)
     {
         var results = await ScanAllAsync(15);
+        return await GetBreakoutsAsync(results, limit);
+    }
+
+    public async Task<List<(ScanResult Result, decimal OrHigh, decimal OrLow, decimal BreakoutPct, string Direction)>>
+        GetBreakoutsAsync(List<ScanResult> results, int limit = 20)
+    {
         var breakouts = new List<(ScanResult, decimal, decimal, decimal, string)>();
 
-        using var semaphore = new SemaphoreSlim(10, 10);
+        using var semaphore = new SemaphoreSlim(5, 5);
         var tasks = results.Select(async r =>
         {
             await semaphore.WaitAsync();
             try
             {
-                var candles = await _candleService.GetRecentCandlesAsync(r.InstrumentId, 15, 1);
+                var toDate = DateTime.Today.AddDays(1);
+                var fromDate = DateTime.Today;
+                var candles = await _candleService.GetCandlesFromDbAsync(r.InstrumentId, 15, fromDate, toDate);
                 if (candles.Count < 3) return;
 
                 // Opening range = first 2 candles of the session
@@ -314,9 +339,15 @@ public class MarketScannerService
         GetNearSRAsync(int timeframeMinutes = 15, decimal thresholdPct = 1.5m, int limit = 20)
     {
         var results = await ScanAllAsync(timeframeMinutes);
+        return await GetNearSRAsync(results, timeframeMinutes, thresholdPct, limit);
+    }
+
+    public async Task<List<(ScanResult Result, decimal Level, decimal DistancePct, string LevelType)>>
+        GetNearSRAsync(List<ScanResult> results, int timeframeMinutes, decimal thresholdPct = 1.5m, int limit = 20)
+    {
         var near = new List<(ScanResult, decimal, decimal, string)>();
 
-        using var semaphore = new SemaphoreSlim(10, 10);
+        using var semaphore = new SemaphoreSlim(5, 5);
         var tasks = results.Select(async r =>
         {
             await semaphore.WaitAsync();
@@ -364,15 +395,23 @@ public class MarketScannerService
         GetPatternsAsync(int timeframeMinutes = 15, int limit = 20)
     {
         var results = await ScanAllAsync(timeframeMinutes);
+        return await GetPatternsAsync(results, timeframeMinutes, limit);
+    }
+
+    public async Task<List<(ScanResult Result, string PatternName, string Direction, int Confidence)>>
+        GetPatternsAsync(List<ScanResult> results, int timeframeMinutes, int limit = 20)
+    {
         var patterns = new List<(ScanResult, string, string, int)>();
 
-        using var semaphore = new SemaphoreSlim(10, 10);
+        using var semaphore = new SemaphoreSlim(5, 5);
         var tasks = results.Select(async r =>
         {
             await semaphore.WaitAsync();
             try
             {
-                var candles = await _candleService.GetRecentCandlesAsync(r.InstrumentId, timeframeMinutes, 3);
+                var toDate = DateTime.Today.AddDays(1);
+                var fromDate = DateTime.Today.AddDays(-3);
+                var candles = await _candleService.GetCandlesFromDbAsync(r.InstrumentId, timeframeMinutes, fromDate, toDate);
                 if (candles.Count < 3) return;
 
                 var detected = DetectCandlePatterns(candles);

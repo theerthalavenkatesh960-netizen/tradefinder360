@@ -27,7 +27,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
     private static readonly HashSet<int> AllSupportedTimeframes =
         [..BaseTimeframes, ..DerivedTimeframes];
 
-    public MarketCandleRepository(TradingDbContext context) : base(context)
+    public MarketCandleRepository(IDbContextFactory<TradingDbContext> contextFactory) : base(contextFactory)
     {
     }
 
@@ -60,12 +60,13 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         DateTime toDate,
         CancellationToken cancellationToken)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         // FIX: fromDate and toDate are IST dates, but c.Timestamp is UTC DateTimeOffset.
         // Convert IST dates to UTC DateTimeOffset for proper comparison.
         var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
         var toUtc = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
 
-        return await _dbSet
+        return await context.Set<MarketCandle>()
             .Where(c => c.InstrumentId == instrumentId
                      && c.TimeframeMinutes == timeframeMinutes
                      && c.Timestamp >= fromUtc
@@ -82,11 +83,12 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         DateTime toDate,
         CancellationToken cancellationToken)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         // FIX: Convert IST date boundaries to UTC DateTimeOffset
         var fromUtc = new DateTimeOffset(fromDate, TimeSpan.FromHours(5.5)).ToUniversalTime();
         var toUtc = new DateTimeOffset(toDate.AddDays(1).AddTicks(-1), TimeSpan.FromHours(5.5)).ToUniversalTime();
 
-        var oneMinuteCandles = await _dbSet
+        var oneMinuteCandles = await context.Set<MarketCandle>()
             .Where(c => c.InstrumentId == instrumentId
                      && c.TimeframeMinutes  == 1
                      && c.Timestamp >= fromUtc
@@ -183,6 +185,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         int timeframeMinutes = 1,
         CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         // Derived timeframes are aggregated from 1m — check 1m base for gaps
         var checkTimeframe = DerivedTimeframes.Contains(timeframeMinutes) ? 1 : timeframeMinutes;
 
@@ -200,7 +203,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         // Fix: project to the UTC ticks in the SELECT, then convert in-memory.
         // We can't call TimeZoneInfo.ConvertTime inside an EF query (not translatable),
         // so we fetch the raw DateTimeOffset values and convert after materialization.
-        var rawTimestamps = await _dbSet
+        var rawTimestamps = await context.Set<MarketCandle>()
             .Where(c => c.InstrumentId == instrumentId
                      && c.TimeframeMinutes == checkTimeframe
                      && c.Timestamp >= fromUtc
@@ -274,6 +277,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         int timeframeMinutes,
         CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         if (!AllSupportedTimeframes.Contains(timeframeMinutes))
             throw new ArgumentException(
                 $"Unsupported timeframe: {timeframeMinutes}.",
@@ -281,7 +285,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
 
         if (BaseTimeframes.Contains(timeframeMinutes))
         {
-            return await _dbSet
+            return await context.Set<MarketCandle>()
                 .Where(c => c.InstrumentId    == instrumentId
                          && c.TimeframeMinutes == timeframeMinutes)
                 .OrderByDescending(c => c.Timestamp)
@@ -311,7 +315,8 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         int timeframeMinutes,
         CancellationToken cancellationToken = default)
     {
-        var latest = await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var latest = await context.Set<MarketCandle>()
             .AsNoTracking()
             .Where(c => c.InstrumentId    == instrumentId
                      && c.TimeframeMinutes == timeframeMinutes)
@@ -331,7 +336,8 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         int timeframeMinutes,
         CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<MarketCandle>()
             .AsNoTracking()
             .AnyAsync(
                 c => c.InstrumentId    == instrumentId
@@ -347,6 +353,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         IEnumerable<MarketCandle> candles,
         CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         var candleList = candles.ToList();
         if (candleList.Count == 0)
             return 0;
@@ -363,7 +370,7 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         var timestamps    = candleList.Select(c => c.Timestamp).Distinct().ToList();
         var timeframes    = candleList.Select(c => c.TimeframeMinutes).Distinct().ToList();
 
-        var existingCandles = await _dbSet
+        var existingCandles = await context.Set<MarketCandle>()
             .AsNoTracking()
             .Where(c => instrumentIds.Contains(c.InstrumentId)
                      && timeframes.Contains(c.TimeframeMinutes)
@@ -382,14 +389,14 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
 
             if (existingCandles.TryGetValue(key, out var existing))
             {
-                var tracked = _dbSet.Local.FirstOrDefault(e =>
+                var tracked = context.Set<MarketCandle>().Local.FirstOrDefault(e =>
                     e.InstrumentId     == existing.InstrumentId  &&
                     e.TimeframeMinutes == existing.TimeframeMinutes &&
                     e.Timestamp        == existing.Timestamp);
 
                 if (tracked is null)
                 {
-                    _context.Attach(existing);
+                    context.Attach(existing);
                     tracked = existing;
                 }
 
@@ -408,12 +415,12 @@ public class MarketCandleRepository : CommonRepository<MarketCandle>, IMarketCan
         }
 
         if (toAdd.Count > 0)
-            await _dbSet.AddRangeAsync(toAdd, cancellationToken);
+            await context.Set<MarketCandle>().AddRangeAsync(toAdd, cancellationToken);
 
         if (toUpdate.Count > 0)
-            _dbSet.UpdateRange(toUpdate);
+            context.Set<MarketCandle>().UpdateRange(toUpdate);
 
-        return await _context.SaveChangesAsync(cancellationToken);
+        return await context.SaveChangesAsync(cancellationToken);
     }
     
 }

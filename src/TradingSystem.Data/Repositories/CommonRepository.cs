@@ -6,110 +6,126 @@ namespace TradingSystem.Data.Repositories;
 
 public class CommonRepository<T> : ICommonRepository<T> where T : class
 {
-    protected readonly TradingDbContext _context;
-    protected readonly DbSet<T> _dbSet;
+    protected readonly IDbContextFactory<TradingDbContext> _contextFactory;
 
-    public CommonRepository(TradingDbContext context)
+    public CommonRepository(IDbContextFactory<TradingDbContext> contextFactory)
     {
-        _context = context ?? throw new ArgumentNullException(nameof(context));
-        _dbSet = _context.Set<T>();
+        _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
     }
 
     public virtual async Task<T?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.FindAsync(new object[] { id }, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<T>().FindAsync(new object[] { id }, cancellationToken);
     }
 
     public virtual async Task<T?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.FindAsync(new object[] { id }, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<T>().FindAsync(new object[] { id }, cancellationToken);
     }
 
     public virtual async Task<T?> FirstOrDefaultAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.FirstOrDefaultAsync(predicate, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<T>().FirstOrDefaultAsync(predicate, cancellationToken);
     }
 
     public virtual async Task<IReadOnlyList<T>> GetAllAsync(CancellationToken cancellationToken = default)
     {
-        return await _dbSet.ToListAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<T>().ToListAsync(cancellationToken);
     }
 
     public virtual async Task<IReadOnlyList<T>> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.Where(predicate).ToListAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<T>().Where(predicate).ToListAsync(cancellationToken);
     }
 
     public virtual async Task<T> AddAsync(T entity, CancellationToken cancellationToken = default)
     {
-        await _dbSet.AddAsync(entity, cancellationToken);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.Set<T>().AddAsync(entity, cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
         return entity;
     }
 
     public virtual async Task<IEnumerable<T>> AddRangeAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         var entityList = entities.ToList();
-        await _dbSet.AddRangeAsync(entityList, cancellationToken);
-        await _context.SaveChangesAsync(cancellationToken);
+        await context.Set<T>().AddRangeAsync(entityList, cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
         return entityList;
     }
 
     public virtual async Task UpdateAsync(T entity, CancellationToken cancellationToken = default)
     {
-        _dbSet.Update(entity);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.Set<T>().Update(entity);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public virtual async Task UpdateRangeAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
     {
-        _dbSet.UpdateRange(entities);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.Set<T>().UpdateRange(entities);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public virtual async Task DeleteAsync(T entity, CancellationToken cancellationToken = default)
     {
-        _dbSet.Remove(entity);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.Set<T>().Remove(entity);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public virtual async Task DeleteRangeAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
     {
-        _dbSet.RemoveRange(entities);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.Set<T>().RemoveRange(entities);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public virtual async Task<int> CountAsync(Expression<Func<T, bool>>? predicate = null, CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         return predicate == null
-            ? await _dbSet.CountAsync(cancellationToken)
-            : await _dbSet.CountAsync(predicate, cancellationToken);
+            ? await context.Set<T>().CountAsync(cancellationToken)
+            : await context.Set<T>().CountAsync(predicate, cancellationToken);
     }
 
     public virtual async Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.AnyAsync(predicate, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<T>().AnyAsync(predicate, cancellationToken);
     }
 
     public virtual async Task<IReadOnlyList<T>> GetListAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.Where(predicate).ToListAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<T>().Where(predicate).ToListAsync(cancellationToken);
     }
 
     public virtual async Task InsertBulkAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
     {
-        await _dbSet.AddRangeAsync(entities, cancellationToken);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.Set<T>().AddRangeAsync(entities, cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public virtual async Task UpdateBulkAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
     {
-        _dbSet.UpdateRange(entities);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.Set<T>().UpdateRange(entities);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public virtual IQueryable<T> Query()
     {
-        return _dbSet.AsQueryable();
+        // For query, we can't use factory easily, so return a queryable from a new context
+        // But this is tricky; perhaps avoid or change to async methods.
+        throw new NotImplementedException("Query method not supported with factory.");
     }
 }

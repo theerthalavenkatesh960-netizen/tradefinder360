@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Api.Helpers;
 using TradingSystem.Core.Models;
@@ -26,6 +27,7 @@ public class InstrumentController : ControllerBase
     private readonly MarketScannerService _scanner;
     private readonly TradeRecommendationService _recommender;
     private readonly IInstrumentPriceRepository _priceRepository;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public InstrumentController(
         IInstrumentService instrumentService,
@@ -33,7 +35,8 @@ public class InstrumentController : ControllerBase
         ICandleService candleService,
         MarketScannerService scanner,
         TradeRecommendationService recommender,
-        IInstrumentPriceRepository priceRepository)
+        IInstrumentPriceRepository priceRepository,
+        IServiceScopeFactory scopeFactory)
     {
         _instrumentService = instrumentService;
         _indicatorService = indicatorService;
@@ -41,6 +44,7 @@ public class InstrumentController : ControllerBase
         _scanner = scanner;
         _recommender = recommender;
         _priceRepository = priceRepository;
+        _scopeFactory = scopeFactory;
     }
 
     // =========================================================================
@@ -105,39 +109,51 @@ public class InstrumentController : ControllerBase
             }).ToList();
         }
 
-        // Step 4 — build DTOs with scan + recommendation
+        // Step 4 — build DTOs with scan + recommendation in bounded parallel batches
+        const int scanConcurrency = 10;
+        var scanSemaphore = new System.Threading.SemaphoreSlim(scanConcurrency, scanConcurrency);
+
         var dtoTasks = filtered.Select(async inst =>
         {
-            var dto = MapToInstrumentDto(inst);
-
-            if (priceMap.TryGetValue(inst.Id, out var price))
-                ApplyPriceData(dto, price);
-
-            ScanResult? scanResult = null;
-            Recommendation? recommendation = null;
-
-            // Only scan if analysis filters are requested
-            if (NeedsAnalysisData(request))
+            await scanSemaphore.WaitAsync();
+            try
             {
-                scanResult = await _scanner.ScanInstrumentAsync(inst, request.ScanTimeframe);
-                if (scanResult != null)
+                var dto = MapToInstrumentDto(inst);
+
+                if (priceMap.TryGetValue(inst.Id, out var price))
+                    ApplyPriceData(dto, price);
+
+                ScanResult? scanResult = null;
+                Recommendation? recommendation = null;
+
+                if (NeedsAnalysisData(request))
                 {
-                    dto.Trend = scanResult.Bias.ToString().ToUpperInvariant();
-                    dto.SetupScore = scanResult.SetupScore;
-                    dto.MarketState = scanResult.MarketState.ToString();
+                    using var scope = _scopeFactory.CreateScope();
+                    var scanner = scope.ServiceProvider.GetRequiredService<MarketScannerService>();
+                    var recommender = scope.ServiceProvider.GetRequiredService<TradeRecommendationService>();
+
+                    scanResult = await scanner.ScanInstrumentAsync(inst, request.ScanTimeframe);
+                    if (scanResult != null)
+                    {
+                        dto.Trend = scanResult.Bias.ToString().ToUpperInvariant();
+                        dto.SetupScore = scanResult.SetupScore;
+                        dto.MarketState = scanResult.MarketState.ToString();
+                    }
+
+                    recommendation = await recommender.GetLatestForInstrumentAsync(inst.Id);
+                    if (recommendation != null)
+                        ApplyRecommendationData(dto, recommendation);
                 }
 
-                recommendation = await _recommender.GetLatestForInstrumentAsync(inst.Id);
-                if (recommendation != null)
-                    ApplyRecommendationData(dto, recommendation);
+                return (dto, scanResult, recommendation);
             }
-
-            return (dto, scanResult, recommendation);
-        });
+            finally
+            {
+                scanSemaphore.Release();
+            }
+        }).ToList();
 
         var results = await Task.WhenAll(dtoTasks);
-
-        // Step 5 — analysis-based filters
         var finalList = results.AsEnumerable();
 
         if (!string.IsNullOrWhiteSpace(request.Trend))
@@ -159,14 +175,27 @@ public class InstrumentController : ControllerBase
             finalList = finalList.Where(r =>
                 r.recommendation is { IsActive: true });
 
-        // Step 6 — indicator-based filters (only fetched when needed)
+        // Step 6 — indicator-based filters (fetched in bounded parallel batches)
         if (request.MinAdx.HasValue || request.RsiBelow.HasValue || request.RsiAbove.HasValue)
         {
+            const int indicatorConcurrency = 10;
+            var indicatorSemaphore = new System.Threading.SemaphoreSlim(indicatorConcurrency, indicatorConcurrency);
+
             var indicatorTasks = finalList.Select(async r =>
             {
-                var ind = await _indicatorService.GetLatestAsync(r.dto.Id, request.ScanTimeframe);
-                return (r.dto, r.scanResult, r.recommendation, ind);
-            });
+                await indicatorSemaphore.WaitAsync();
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var indicatorService = scope.ServiceProvider.GetRequiredService<IIndicatorService>();
+                    var ind = await indicatorService.GetLatestAsync(r.dto.Id, request.ScanTimeframe);
+                    return (r.dto, r.scanResult, r.recommendation, ind);
+                }
+                finally
+                {
+                    indicatorSemaphore.Release();
+                }
+            }).ToList();
 
             var withIndicators = await Task.WhenAll(indicatorTasks);
 

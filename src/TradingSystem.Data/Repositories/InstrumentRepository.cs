@@ -6,23 +6,26 @@ namespace TradingSystem.Data.Repositories;
 
 public class InstrumentRepository : CommonRepository<TradingInstrument>, IInstrumentRepository
 {
-    public InstrumentRepository(TradingDbContext context) : base(context)
+    public InstrumentRepository(IDbContextFactory<TradingDbContext> contextFactory) : base(contextFactory)
     {
     }
 
     public async Task<TradingInstrument?> GetBySymbolAsync(string symbol, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.FirstOrDefaultAsync(i => i.IsActive && i.Symbol == symbol , cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<TradingInstrument>().FirstOrDefaultAsync(i => i.IsActive && i.Symbol == symbol , cancellationToken);
     }
 
     public async Task<TradingInstrument?> GetByInstrumentKeyAsync(string instrumentKey, CancellationToken cancellationToken = default)
     {
-        return await _dbSet.FirstOrDefaultAsync(i => i.InstrumentKey == instrumentKey, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<TradingInstrument>().FirstOrDefaultAsync(i => i.InstrumentKey == instrumentKey, cancellationToken);
     }
 
     public async Task<IReadOnlyList<TradingInstrument>> GetActiveInstrumentsAsync(CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<TradingInstrument>()
             .Where(i => i.IsActive)
             .OrderBy(i => i.Symbol)
             .ToListAsync(cancellationToken);
@@ -30,7 +33,8 @@ public class InstrumentRepository : CommonRepository<TradingInstrument>, IInstru
 
     public async Task<IReadOnlyList<TradingInstrument>> GetByExchangeAsync(string exchange, CancellationToken cancellationToken = default)
     {
-        return await _dbSet
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Set<TradingInstrument>()
             .Where(i => i.Exchange == exchange && i.IsActive)
             .OrderBy(i => i.Symbol)
             .ToListAsync(cancellationToken);
@@ -38,10 +42,11 @@ public class InstrumentRepository : CommonRepository<TradingInstrument>, IInstru
 
     public async Task<int> BulkUpsertAsync(IEnumerable<TradingInstrument> instruments, CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         var instrumentList = instruments.ToList();
         var instrumentKeys = instrumentList.Select(i => i.InstrumentKey).ToList();
 
-        var existingInstruments = await _dbSet
+        var existingInstruments = await context.Set<TradingInstrument>()
             .Where(i => instrumentKeys.Contains(i.InstrumentKey))
             .ToDictionaryAsync(i => i.InstrumentKey, cancellationToken);
 
@@ -74,14 +79,14 @@ public class InstrumentRepository : CommonRepository<TradingInstrument>, IInstru
 
         if (toAdd.Any())
         {
-            await _dbSet.AddRangeAsync(toAdd, cancellationToken);
+            await context.Set<TradingInstrument>().AddRangeAsync(toAdd, cancellationToken);
         }
 
         if (toUpdate.Any())
         {
-            _dbSet.UpdateRange(toUpdate);
+            context.Set<TradingInstrument>().UpdateRange(toUpdate);
         }
 
-        return await _context.SaveChangesAsync(cancellationToken);
+        return await context.SaveChangesAsync(cancellationToken);
     }
 }

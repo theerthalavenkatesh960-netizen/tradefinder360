@@ -85,22 +85,14 @@ public class RadarController : ControllerBase
         [FromQuery] int sectionLimit = 10,
         [FromQuery] decimal srThresholdPct = 1.5m)
     {
-        // Run all sections in parallel — each uses the bounded parallel scanner internally.
-        var gainersTask = _scanner.GetMoversAsync(timeframe, sectionLimit, gainers: true);
-        var losersTask = _scanner.GetMoversAsync(timeframe, sectionLimit, gainers: false);
-        var sectorsTask = _scanner.GetSectorLeadersAsync(timeframe, perSector: 3);
-        var breakoutsTask = _scanner.GetBreakoutsAsync(sectionLimit);
-        var srTask = _scanner.GetNearSRAsync(timeframe, srThresholdPct, sectionLimit * 2);
-        var patternsTask = _scanner.GetPatternsAsync(timeframe, sectionLimit);
+        var scanResults = await _scanner.ScanAllAsync(timeframe);
 
-        await Task.WhenAll(gainersTask, losersTask, sectorsTask, breakoutsTask, srTask, patternsTask);
-
-        var gainers = await gainersTask;
-        var losers = await losersTask;
-        var sectors = await sectorsTask;
-        var breakouts = await breakoutsTask;
-        var sr = await srTask;
-        var patterns = await patternsTask;
+        var gainers = await _scanner.GetMoversAsync(scanResults, timeframe, sectionLimit, gainers: true);
+        var losers = await _scanner.GetMoversAsync(scanResults, timeframe, sectionLimit, gainers: false);
+        var sectors = await _scanner.GetSectorLeadersAsync(scanResults, perSector: 3);
+        var breakouts = await _scanner.GetBreakoutsAsync(scanResults, sectionLimit);
+        var sr = await _scanner.GetNearSRAsync(scanResults, timeframe, srThresholdPct, sectionLimit * 2);
+        var patterns = await _scanner.GetPatternsAsync(scanResults, timeframe, sectionLimit);
 
         return Ok(new RadarSectionsDto
         {
