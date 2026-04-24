@@ -64,7 +64,7 @@ public class AnthropicProxyController : ControllerBase
                 "qwen2.5:32b-instruct",
                 "llama3.1:70b-instruct",
                 "qwen2.5:14b-instruct",
-                "llama3.1:8b-instruct"
+                "llama3.1:8b"
             };
 
         try
