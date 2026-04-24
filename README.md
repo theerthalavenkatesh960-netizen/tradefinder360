@@ -274,6 +274,51 @@ dotnet run
 
 Navigate to: `http://localhost:5000`
 
+### 8. Claude MCP Integration (Optional)
+
+1. Start the API project so MCP tools are available at `http://localhost:61577/mcp`.
+2. Copy `claude_desktop_config.json` from this folder into your Claude Desktop config location.
+
+Windows: `%APPDATA%\\Claude\\claude_desktop_config.json`
+
+macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+Linux: `~/.config/Claude/claude_desktop_config.json`
+
+3. Restart Claude Desktop.
+4. Confirm these tools are listed from the TradeFinder MCP server:
+  - `GetOhlcData`
+  - `GetIndicatorSnapshot`
+  - `GetSupportResistanceLevels`
+  - `GetStockSummary`
+5. For the web app panel, configure Anthropic on the API server (not in the browser):
+  - Set `Anthropic:ApiKey` in `src/TradingSystem.Api/appsettings.json` for local-only testing, or
+  - Set environment variable `Anthropic__ApiKey`
+  - Set `AiProvider:Active = Anthropic`
+  - Set `AiProvider:AnthropicModel = claude-opus-4-5`
+
+### 9. Free Local AI Testing with Ollama (No Anthropic Key)
+
+You can run AI analysis locally before paying for Anthropic:
+
+1. Install Ollama and run:
+  - `ollama pull llama3.1:8b-instruct`
+  - `ollama serve`
+2. In `src/TradingSystem.Api/appsettings.json`, set:
+  - `AiProvider:Active` = `Ollama`
+  - `AiProvider:OllamaUseBestAvailable` = `true`
+  - `AiProvider:OllamaModel` = fallback model if no preferred model is installed
+  - `AiProvider:OllamaBaseUrl` = `http://localhost:11434`
+  - Optional: tune `AiProvider:OllamaBestModelPriority` for your machine
+3. Start the API and SPA normally.
+4. Use the Stock Analysis panel; the same endpoint now calls local Ollama through the backend proxy.
+
+To switch back to Anthropic later:
+
+1. Set `AiProvider:Active` = `Anthropic`
+2. Configure `Anthropic__ApiKey` (recommended) or `Anthropic:ApiKey` in appsettings
+3. Set `AiProvider:AnthropicModel` to your preferred Claude model
+
 ## Configuration Guide
 
 ### Switching Timeframes

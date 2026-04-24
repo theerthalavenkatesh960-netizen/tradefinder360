@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using ModelContextProtocol.Server;
 using TradingSystem.AI.Services;
+using TradingSystem.Api.McpTools;
 using TradingSystem.Api.Services;
 using TradingSystem.Api.Services.Strategies;
 using TradingSystem.Core.Events;
@@ -166,6 +168,11 @@ builder.Services.AddScoped<UpstoxClient>(sp =>
     return client;
 });
 
+// Add MCP Server for Claude AI integration
+builder.Services.AddMcpServer()
+    .WithHttpTransport(options => options.Stateless = true)
+    .WithTools<StockAnalysisTools>();
+
 var app = builder.Build();
 
 app.UseExceptionHandler("/error");
@@ -178,6 +185,7 @@ app.UseSwaggerUI(c =>
 
 app.UseCors();
 app.MapControllers();
+app.MapMcp("/mcp");
 app.Map("/error", (HttpContext ctx) => Results.Problem());
 
 app.Run();

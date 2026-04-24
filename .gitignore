@@ -39,3 +39,4 @@ dist-ssr
 /.vs/TradingSystem
 /.vs/VSWorkspaceState.json
 /.vs/*
+claude_desktop_config.json
