@@ -723,3 +723,58 @@ IMPORTANT INSTRUCTIONS FOR COPILOT:
   API endpoints and frontend behavior must not change.
 - If anything is ambiguous after analyzing the codebase, ask before
   generating code.
+
+
+
+###################################################################################
+
+API prompt
+Build the radar backend and response shaping for the /api/radar/sections endpoint.
+
+Requirements:
+
+Optimize RadarController.GetSections to avoid N+1 candle queries.
+Batch-load candles for all instruments once per request, then reuse for:
+GetMoversAsync
+GetBreakoutsAsync
+GetPatternsAsync
+Keep GetNearSRAsync using indicator snapshots.
+Add performance timing/logging for each section.
+Extend radar DTOs so top gainers and losers include:
+TrendCandles (last 5 days of candles or last 20 intervals)
+AIAnalysis placeholder text
+Ensure existing ScanResult/snapshot data still supports symbol, exchange, score, bias, and last close.
+Files to update:
+
+RadarController.cs
+src/TradingSystem.Api/DTOs/RadarDTOs.cs
+MarketScannerService.cs
+TradingSystem.MarketData service layer for batched candle queries
+UI prompt
+Build the radar UI view for top gainers and losers with mini-trend candles.
+
+Requirements:
+
+Show a Top Gainers and Top Losers section.
+For each stock, display:
+symbol, exchange
+current price / last close
+change %
+and setup score/bias
+a small 5-day trend sparkline or mini-candlestick row
+Use the new TrendCandles data from the API.
+Reserve space for future AI explanations like:
+“Why this stock is rising”
+“Why this stock is falling”
+Make the trend widget compact and easy to scan.
+Suggested UI approach:
+
+TrendCandles → render 5 small candlesticks row
+add hover tooltip with daily open/high/low/close
+label each row with score, bias, and direction
+Combined task prompt
+Build the radar endpoint and UI together, focusing on speed and rich trend context.
+
+API: optimize GetSections, batch candle retrieval, enrich top gainers/losers with trend candle data and AI analysis placeholders.
+UI: render top gainers/losers with compact 5-day mini-candles, score, bias, change %, and future AI reason section.
+Use this as the prompt in your other tab.
