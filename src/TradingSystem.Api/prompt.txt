@@ -778,3 +778,223 @@ Build the radar endpoint and UI together, focusing on speed and rich trend conte
 API: optimize GetSections, batch candle retrieval, enrich top gainers/losers with trend candle data and AI analysis placeholders.
 UI: render top gainers/losers with compact 5-day mini-candles, score, bias, change %, and future AI reason section.
 Use this as the prompt in your other tab.
+
+
+#########################################################
+
+Before writing any code, read and understand the entire solution structure:
+- Identify all project names and their roles (API, Domain, Infrastructure or equivalent)
+- Find all existing services that deal with: OHLC/candle data, technical 
+  indicators, backtesting, stock metadata, and any market data fetching
+- Note the exact interface names, implementation class names, method signatures, 
+  and return types of these services
+- Find how DI is registered (look at Program.cs and any extension methods like 
+  AddInfrastructure(), AddApplication() etc.)
+- Find the EF Core DbContext and IDbContextFactory usage pattern
+- Find the Quartz.NET job registrations so you don't touch them
+- Find the existing CORS configuration if any
+- On the React side: find the component that renders the stock chart, how it 
+  receives symbol and timeframe (props vs route params), the existing API 
+  service layer structure, env variable naming convention, and Tailwind theme
+
+Only after fully reading the codebase, proceed with the following tasks:
+
+---
+
+TASK 1 — Add MCP Server to the .NET API
+
+The goal is to expose stock data from the existing database as MCP tools 
+so Claude AI can call them on demand to analyze stocks. MCP (Model Context 
+Protocol) is a standard protocol — install the official SDK:
+
+  In the API project (.csproj that contains Program.cs):
+  dotnet add package ModelContextProtocol.AspNetCore
+
+Create a new folder called McpTools inside the API project.
+Create a file McpTools/StockAnalysisTools.cs inside the API project.
+
+Rules for this file:
+- Mark the class with [McpServerToolType] attribute
+- Inject ONLY the service interfaces that already exist in the codebase 
+  (the ones you found above) — do not create any new services or repos
+- If a service for a specific tool doesn't exist, skip that tool and add 
+  a comment saying which service is missing
+- Every tool method must be: public async Task<string> with [McpServerTool] 
+  and [Description("...")] attributes
+- Every parameter must have a [Description("...")] attribute
+- Return type is always JSON string (use System.Text.Json.JsonSerializer)
+- Respect the IDbContextFactory pattern if the services use it
+
+Define the following MCP tools — but only if the underlying data exists:
+
+Tool 1: GetOhlcData
+  Parameters: symbol (NSE/BSE ticker), timeframe (daily/weekly/15min etc.), 
+  candleCount (int, how many recent candles)
+  Description: "Fetch recent OHLC candle data for a stock from the database"
+  Action: call the relevant existing service method, return candles as JSON
+
+Tool 2: GetIndicatorSnapshot  
+  Parameters: symbol, timeframe
+  Description: "Get latest indicator values for a stock: EMA, RSI, MACD, 
+  ADX, ATR, Bollinger Bands — whatever indicators are stored in the DB"
+  Action: call the relevant existing service, return all indicator values as JSON
+
+Tool 3: GetSupportResistanceLevels
+  Parameters: symbol, timeframe
+  Description: "Get key support and resistance price levels for a stock"
+  Action: if a dedicated service exists use it; otherwise derive from 
+  recent swing highs/lows in OHLC data using the candle service
+
+Tool 4: GetBacktestSummary
+  Parameters: symbol, strategyName
+  Description: "Get backtest result summary for a stock — win rate, avg 
+  profit/loss, max drawdown, total trades"
+  Action: call the backtest service if it exists; skip if not found
+
+Tool 5: GetStockSummary
+  Parameters: symbol
+  Description: "Get a high-level summary of a stock: latest price, day 
+  range, 52-week high/low, and any metadata available"
+  Action: aggregate from whatever services have this data
+
+Register MCP in Program.cs:
+- Add this in the service registration section (before app.Build()), 
+  after all existing service registrations:
+    builder.Services.AddMcpServer()
+        .WithHttpTransport()
+        .WithTools<StockAnalysisTools>();
+- Add this in the middleware pipeline (before app.Run()):
+    app.MapMcp("/mcp");
+- Do NOT modify or remove any existing registrations, CORS policies, 
+  Quartz jobs, or controller mappings
+- If AddInfrastructure() or similar extension methods register services, 
+  place AddMcpServer() after them
+
+If a CORS policy already exists, extend it to also allow the /mcp path 
+and localhost:3000 and localhost:5173 origins. Do not create a duplicate 
+CORS policy.
+
+Create a file at the solution root: claude_desktop_config.json
+Content:
+{
+  "mcpServers": {
+    "stock-analyzer": {
+      "url": "http://localhost:<YOUR_API_PORT>/mcp"
+    }
+  }
+}
+Replace <YOUR_API_PORT> with the actual port from launchSettings.json.
+Add claude_desktop_config.json to .gitignore.
+Add this section to README.md:
+
+## Claude Desktop MCP Setup
+To connect Claude Desktop to the local stock analysis MCP server:
+1. Run the API locally
+2. Copy claude_desktop_config.json to:
+   - Windows: %APPDATA%\Claude\claude_desktop_config.json
+   - macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
+3. Restart Claude Desktop
+4. Ask Claude: "Analyze RELIANCE on the daily timeframe"
+
+---
+
+TASK 2 — Add Stock Analysis Panel to the React UI
+
+The goal is a panel on the existing stock chart page where the user clicks 
+"Analyze with AI", the app calls Claude API with the stock's data as context, 
+and Claude returns a structured analysis rendered in the UI.
+
+Read the React codebase first:
+- Find the chart page component and how symbol + timeframe are available in it
+- Find the existing API service layer (how fetch calls are structured, 
+  base URL, headers pattern)
+- Find the env variable naming convention (VITE_ prefix assumed, confirm)
+- Find the Tailwind color scheme and dark/light mode pattern
+
+Create src/services/claudeService.ts:
+- Export: async function analyzeStock(symbol: string, timeframe: string): Promise<string>
+- Inside:
+  a. Use the EXISTING API service functions to fetch:
+       - Indicator snapshot for the symbol + timeframe
+       - Last 10 OHLC candles for the symbol + timeframe  
+       - Stock summary/metadata for the symbol
+     Do not call the .NET API directly with raw fetch here — use whatever 
+     service abstraction already exists in the codebase
+  b. Build a prompt string using this exact template:
+     """
+     You are an expert stock analyst for Indian equity markets (NSE/BSE).
+     Analyze the following data and give a structured analysis.
+
+     Stock: {symbol}
+     Timeframe: {timeframe}
+
+     --- Technical Indicators ---
+     {indicatorSnapshot as formatted JSON}
+
+     --- Recent OHLC Candles (last 10) ---
+     {ohlcData as formatted JSON}
+
+     --- Stock Summary ---
+     {stockSummary as formatted JSON}
+
+     Provide the following sections:
+     1. Trend Analysis (short-term and medium-term)
+     2. Momentum Assessment (RSI, MACD, ADX interpretation)
+     3. Key Support and Resistance levels
+     4. Volume Observations
+     5. Risk Factors to watch
+     6. Overall Bias: Bullish / Bearish / Neutral — with clear reasoning
+     """
+  c. POST to https://api.anthropic.com/v1/messages with:
+       headers:
+         "Content-Type": "application/json"
+         "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY
+         "anthropic-version": "2023-06-01"
+       body:
+         model: "claude-opus-4-5"
+         max_tokens: 2000
+         messages: [{ role: "user", content: <the prompt> }]
+  d. Return data.content[0].text
+  e. On any error, throw a descriptive Error with the status code
+
+Create src/components/StockAnalysisPanel.tsx:
+- Props: { symbol: string; timeframe: string }
+- Internal state: loading (boolean), result (string | null), error (string | null)
+- Render:
+  - A button "Analyze with AI" — onClick calls analyzeStock and sets state
+  - While loading: show a spinner or "Analyzing..." text
+  - On result: render the analysis text in a styled div. The text will 
+    contain numbered sections — render it as preformatted or with 
+    whitespace-pre-wrap so line breaks are preserved
+  - On error: show the error message in red
+- Styling: use Tailwind, match the existing dark card style of the UI
+- Do NOT use any <form> tags — only onClick handlers
+- Do NOT install any new packages
+
+Integrate StockAnalysisPanel into the existing chart page:
+- Find the chart page component
+- Import StockAnalysisPanel
+- Place <StockAnalysisPanel symbol={symbol} timeframe={timeframe} /> 
+  directly below the chart — pass the same symbol and timeframe the 
+  chart is already using
+- Make zero other changes to the chart page
+
+Add to .env.local (create if it doesn't exist):
+  VITE_ANTHROPIC_API_KEY=your_key_here
+Add .env.local to .gitignore if not already there.
+
+---
+
+FINAL CHECKLIST before finishing:
+- StockAnalysisTools.cs only uses service interfaces that already exist 
+  in the codebase — no new repos or DB calls directly
+- Program.cs has no duplicate registrations and Quartz jobs are untouched
+- MapMcp("/mcp") is present and does not conflict with existing routes
+- claudeService.ts uses existing API service abstractions, not raw fetch 
+  to the .NET API
+- StockAnalysisPanel.tsx has no <form> tags
+- .env.local and claude_desktop_config.json are both in .gitignore
+- README.md has the Claude Desktop setup instructions
+
+List every file you created or modified, and for modified files, 
+show exactly which lines were added.
