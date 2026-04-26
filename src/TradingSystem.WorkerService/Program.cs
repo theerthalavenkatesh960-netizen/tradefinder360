@@ -16,6 +16,7 @@ using TradingSystem.WorkerService.Scheduling;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Configuration
+    .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false)
     .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true)
     .AddEnvironmentVariables();
@@ -65,6 +66,7 @@ builder.Services.AddScoped<IMarketSentimentService, MarketSentimentService>();
 builder.Services.AddScoped<ICandleService, CandleService>();
 
 builder.Services.AddScoped<CsvSeedService>();
+builder.Services.AddHttpClient();
 
 var upstoxConfig = new UpstoxConfig();
 builder.Configuration.GetSection("Upstox").Bind(upstoxConfig);

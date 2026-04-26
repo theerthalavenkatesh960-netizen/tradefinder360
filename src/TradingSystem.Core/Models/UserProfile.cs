@@ -7,6 +7,11 @@ public class UserProfile
     public string? UpstoxAccessToken { get; set; }
     public string? UpstoxRefreshToken { get; set; }
     public DateTime? TokenIssuedAt { get; set; }
+    public decimal? PreferredBudget { get; set; }
+    public string? PreferredRiskProfile { get; set; }
+    public List<string> PreferredSectors { get; set; } = new();
+    public List<string> PreferredThemes { get; set; } = new();
+    public bool AutoRebalanceEnabled { get; set; }
     public DateTime CreatedOn { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedOn { get; set; } = DateTime.UtcNow;
 }

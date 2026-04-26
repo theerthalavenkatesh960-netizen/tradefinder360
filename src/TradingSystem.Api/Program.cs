@@ -84,6 +84,10 @@ builder.Services.AddScoped<IFeatureStoreRepository, FeatureStoreRepository>();
 builder.Services.AddScoped<ITradeOutcomeRepository, TradeOutcomeRepository>();
 builder.Services.AddScoped<IAIModelVersionRepository, AIModelVersionRepository>();
 
+// Portfolio Learning Repositories
+builder.Services.AddScoped<IFusionLearningConfigRepository, FusionLearningConfigRepository>();
+builder.Services.AddScoped<IPortfolioPerformanceHistoryRepository, PortfolioPerformanceHistoryRepository>();
+
 // Core Services
 builder.Services.AddTransient<IInstrumentService, InstrumentService>();
 builder.Services.AddTransient<ICandleService, CandleService>();
@@ -111,6 +115,13 @@ builder.Services.AddScoped<ModelTrainingPipeline>();
 builder.Services.AddScoped<ModelPerformanceMonitor>();
 builder.Services.AddScoped<ReinforcementLearningService>();
 
+// AI Services - Portfolio Fusion Learning
+builder.Services.AddScoped<PortfolioPerformanceAnalyzer>();
+builder.Services.AddScoped<PortfolioLearningService>();
+builder.Services.AddScoped<SignalCorrelationAnalyzer>();
+builder.Services.AddScoped<SectorIntelligenceService>();
+builder.Services.AddScoped<PortfolioLearningOrchestrator>();
+
 // Scanner Services
 builder.Services.AddScoped<SetupScoringService>();
 builder.Services.AddTransient<MarketScannerService>();
@@ -118,6 +129,8 @@ builder.Services.AddTransient<TradeRecommendationService>();
 builder.Services.AddScoped<StrategyService>();
 builder.Services.AddScoped<BacktestingService>();
 builder.Services.AddScoped<PortfolioOptimizationService>();
+builder.Services.AddScoped<IPortfolioManagerService, PortfolioManagerService>();
+builder.Services.AddScoped<INewsIngestionService, NewsIngestionService>();
 
 // Backtest Runner
 builder.Services.AddScoped<BacktestRunnerService>();

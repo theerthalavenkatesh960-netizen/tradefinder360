@@ -998,3 +998,40 @@ FINAL CHECKLIST before finishing:
 
 List every file you created or modified, and for modified files, 
 show exactly which lines were added.
+
+
+#########################################################################################
+Plan: Preference-Driven Portfolio Manager + Intelligence Pipeline
+Phased approach is now aligned with your decisions: first ship preference-based fully auto portfolio construction with intraday pricing and per-user isolation, then add news intelligence ingestion and sector/news/technical fusion for stronger decision quality.
+
+Steps
+Phase 0: Lock contracts and boundaries for Phase 1.
+Phase 1: Build user preference capture (budget, risk, sectors, themes), auto portfolio construction, intraday valuation, and portfolio session lifecycle APIs.
+Phase 1.5: Add hourly evaluation loop during market hours with event-first execution policy.
+Phase 2: Add news intelligence ingestion pipeline (morning baseline + hourly refresh), keyword extraction, and inferred impact storage.
+Phase 3: Add sector intelligence and final decision fusion context for LLM (news + sector + technical + portfolio state), then apply deterministic risk guardrails.
+Phase 4: Build Portfolio Manager UI flow (preferences, constructed portfolio, metrics, equity curve, closed trades reasoning, CSV export, news table with impact + keywords).
+Phase 5: Verification and hardening (auth isolation, scheduler correctness, idempotency, malformed LLM output handling, UI resilience).
+Finalized Decisions
+MVP-first delivery, then intelligence enhancements.
+Fully automatic portfolio construction after user preference input.
+LLM makes final decision; system risk rules can veto unsafe actions.
+Intraday pricing required.
+Hourly evaluation window: 09:00 to 15:30 IST on market days.
+Major-event trigger: composite of news impact + sector shift + technical breach.
+Sector context sourced from instrument-linked sector data in DB.
+Phase 2 ingestion priority: RSS/API adapter first, optional targeted scraping later.
+Key Files To Touch
+UserProfile.cs
+TradingDbContext.cs
+PortfolioOptimizationService.cs
+MarketSentimentService.cs
+QuartzJobRegistry.cs
+QuartzSetupExtensions.cs
+migrations
+Layout.tsx
+App.tsx
+api.ts
+I have updated the persistent session plan at /memories/session/plan.md with this exact structure and decisions. If you approve, the implementation agent can start from Phase 1 immediately.
+
+GPT-5.3-Codex • 0.9x

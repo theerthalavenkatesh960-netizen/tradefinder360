@@ -15,11 +15,18 @@ public class TradingDbContext : DbContext
     public DbSet<ScanSnapshot> ScanSnapshots { get; set; } = null!;
     public DbSet<Recommendation> Recommendations { get; set; } = null!;
     public DbSet<UserProfile> UserProfiles { get; set; } = null!;
+    public DbSet<PortfolioManagerSession> PortfolioManagerSessions { get; set; } = null!;
+    public DbSet<PortfolioManagerTrade> PortfolioManagerTrades { get; set; } = null!;
+    public DbSet<NewsArticle> NewsArticles { get; set; } = null!;
+    public DbSet<NewsKeyword> NewsKeywords { get; set; } = null!;
+    public DbSet<NewsImpact> NewsImpacts { get; set; } = null!;
     public DbSet<MarketSentiment> MarketSentiments { get; set; } = null!;
     public DbSet<FeatureStore> FeatureStore { get; set; } = null!;
     public DbSet<TradeOutcome> TradeOutcomes { get; set; } = null!;
     public DbSet<AIModelVersion> AIModelVersions { get; set; } = null!;
     public DbSet<FactorPerformanceTracking> FactorPerformanceTracking { get; set; } = null!;
+    public DbSet<PortfolioPerformanceHistory> PortfolioPerformanceHistories { get; set; } = null!;
+    public DbSet<FusionLearningConfig> FusionLearningConfigs { get; set; } = null!;
 
     public TradingDbContext(DbContextOptions<TradingDbContext> options) 
         : base(options)
@@ -312,11 +319,215 @@ public class TradingDbContext : DbContext
             entity.Property(e => e.UpstoxAccessToken).HasColumnName("upstox_access_token");
             entity.Property(e => e.UpstoxRefreshToken).HasColumnName("upstox_refresh_token");
             entity.Property(e => e.TokenIssuedAt).HasColumnName("token_issued_at");
+            entity.Property(e => e.PreferredBudget).HasColumnName("preferred_budget").HasPrecision(18, 2);
+            entity.Property(e => e.PreferredRiskProfile).HasColumnName("preferred_risk_profile").HasMaxLength(32);
+            entity.Property(e => e.PreferredSectors).HasColumnName("preferred_sectors")
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+                );
+            entity.Property(e => e.PreferredThemes).HasColumnName("preferred_themes")
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+                );
+            entity.Property(e => e.AutoRebalanceEnabled).HasColumnName("auto_rebalance_enabled");
             entity.Property(e => e.CreatedOn).HasColumnName("created_on").IsRequired();
             entity.Property(e => e.UpdatedOn).HasColumnName("updated_on").IsRequired();
 
             entity.HasIndex(e => e.UserId).IsUnique().HasDatabaseName("idx_user_profiles_user_id");
             entity.HasIndex(e => e.UpdatedOn).HasDatabaseName("idx_user_profiles_updated_on");
+        });
+
+        // Portfolio Manager Sessions
+        modelBuilder.Entity<PortfolioManagerSession>(entity =>
+        {
+            entity.ToTable("portfolio_manager_sessions");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.UserId).HasColumnName("user_id").IsRequired().HasMaxLength(100);
+            entity.Property(e => e.SessionName).HasColumnName("session_name").IsRequired().HasMaxLength(150);
+            entity.Property(e => e.InitialCapital).HasColumnName("initial_capital").IsRequired().HasPrecision(18, 2);
+            entity.Property(e => e.RiskProfile).HasColumnName("risk_profile").IsRequired().HasMaxLength(32);
+            entity.Property(e => e.PreferredSectors).HasColumnName("preferred_sectors")
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+                );
+            entity.Property(e => e.PreferredThemes).HasColumnName("preferred_themes")
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+                );
+            entity.Property(e => e.AutoRebalanceEnabled).HasColumnName("auto_rebalance_enabled");
+            entity.Property(e => e.MaxPositions).HasColumnName("max_positions").IsRequired();
+            entity.Property(e => e.TimeframeMinutes).HasColumnName("timeframe_minutes").IsRequired();
+            entity.Property(e => e.MinConfidence).HasColumnName("min_confidence").IsRequired();
+            entity.Property(e => e.Mode).HasColumnName("mode").HasConversion<string>().IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Status).HasColumnName("status").HasConversion<string>().IsRequired().HasMaxLength(20);
+            entity.Property(e => e.LastProvider).HasColumnName("last_provider").HasMaxLength(50);
+            entity.Property(e => e.LastModel).HasColumnName("last_model").HasMaxLength(100);
+            entity.Property(e => e.LastRunAt).HasColumnName("last_run_at");
+            entity.Property(e => e.NextRunAt).HasColumnName("next_run_at");
+            entity.Property(e => e.TotalRuns).HasColumnName("total_runs");
+            entity.Property(e => e.AllocatedCapital).HasColumnName("allocated_capital").HasPrecision(18, 2);
+            entity.Property(e => e.RealizedPnl).HasColumnName("realized_pnl").HasPrecision(18, 2);
+            entity.Property(e => e.UnrealizedPnl).HasColumnName("unrealized_pnl").HasPrecision(18, 2);
+            entity.Property(e => e.WinRatePercent).HasColumnName("win_rate_percent").HasPrecision(8, 4);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+
+            entity.HasIndex(e => e.UserId).HasDatabaseName("idx_portfolio_manager_sessions_user_id");
+            entity.HasIndex(e => new { e.UserId, e.Status }).HasDatabaseName("idx_portfolio_manager_sessions_user_status");
+            entity.HasIndex(e => e.UpdatedAt).HasDatabaseName("idx_portfolio_manager_sessions_updated_at");
+
+            entity.HasMany(e => e.Trades)
+                .WithOne(t => t.Session)
+                .HasForeignKey(t => t.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Portfolio Manager Trades
+        modelBuilder.Entity<PortfolioManagerTrade>(entity =>
+        {
+            entity.ToTable("portfolio_manager_trades");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.SessionId).HasColumnName("session_id").IsRequired();
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id").IsRequired();
+            entity.Property(e => e.Symbol).HasColumnName("symbol").IsRequired().HasMaxLength(50);
+            entity.Property(e => e.InstrumentName).HasColumnName("instrument_name").IsRequired();
+            entity.Property(e => e.Sector).HasColumnName("sector").HasMaxLength(100);
+            entity.Property(e => e.Strategy).HasColumnName("strategy").HasMaxLength(50);
+            entity.Property(e => e.Direction).HasColumnName("direction").IsRequired().HasMaxLength(10);
+            entity.Property(e => e.EntryPrice).HasColumnName("entry_price").IsRequired().HasPrecision(18, 4);
+            entity.Property(e => e.ExitPrice).HasColumnName("exit_price").HasPrecision(18, 4);
+            entity.Property(e => e.CurrentPrice).HasColumnName("current_price").HasPrecision(18, 4);
+            entity.Property(e => e.Quantity).HasColumnName("quantity").IsRequired();
+            entity.Property(e => e.AllocatedCapital).HasColumnName("allocated_capital").HasPrecision(18, 2);
+            entity.Property(e => e.AllocationPercent).HasColumnName("allocation_percent").HasPrecision(8, 4);
+            entity.Property(e => e.Confidence).HasColumnName("confidence").HasPrecision(8, 4);
+            entity.Property(e => e.StopLoss).HasColumnName("stop_loss").HasPrecision(18, 4);
+            entity.Property(e => e.Target).HasColumnName("target").HasPrecision(18, 4);
+            entity.Property(e => e.FusionScore).HasColumnName("fusion_score").HasPrecision(8, 4);
+            entity.Property(e => e.FusionNewsSignal).HasColumnName("fusion_news_signal").HasPrecision(8, 4);
+            entity.Property(e => e.FusionTechnicalSignal).HasColumnName("fusion_technical_signal").HasPrecision(8, 4);
+            entity.Property(e => e.FusionSectorSignal).HasColumnName("fusion_sector_signal").HasPrecision(8, 4);
+            entity.Property(e => e.FusionDirectionVeto).HasColumnName("fusion_direction_veto");
+            entity.Property(e => e.FusionIncluded).HasColumnName("fusion_included");
+            entity.Property(e => e.FusionEvidence).HasColumnName("fusion_evidence");
+            entity.Property(e => e.Pnl).HasColumnName("pnl").HasPrecision(18, 2);
+            entity.Property(e => e.PnlPercent).HasColumnName("pnl_percent").HasPrecision(8, 4);
+            entity.Property(e => e.EntryReasoning).HasColumnName("entry_reasoning").IsRequired();
+            entity.Property(e => e.ExitReasoning).HasColumnName("exit_reasoning");
+            entity.Property(e => e.Signals).HasColumnName("signals")
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()
+                );
+            entity.Property(e => e.ModelProvider).HasColumnName("model_provider").HasMaxLength(50);
+            entity.Property(e => e.ModelName).HasColumnName("model_name").HasMaxLength(100);
+            entity.Property(e => e.Status).HasColumnName("status").HasConversion<string>().IsRequired().HasMaxLength(20);
+            entity.Property(e => e.OpenedAt).HasColumnName("opened_at").IsRequired();
+            entity.Property(e => e.ClosedAt).HasColumnName("closed_at");
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").IsRequired();
+
+            entity.HasIndex(e => new { e.SessionId, e.Status }).HasDatabaseName("idx_portfolio_manager_trades_session_status");
+            entity.HasIndex(e => e.InstrumentId).HasDatabaseName("idx_portfolio_manager_trades_instrument");
+            entity.HasIndex(e => e.CreatedAt).HasDatabaseName("idx_portfolio_manager_trades_created_at");
+
+            entity.HasOne(e => e.Session)
+                .WithMany(s => s.Trades)
+                .HasForeignKey(e => e.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Instrument)
+                .WithMany()
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // News Articles
+        modelBuilder.Entity<NewsArticle>(entity =>
+        {
+            entity.ToTable("news_articles");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.ExternalId).HasColumnName("external_id").IsRequired().HasMaxLength(256);
+            entity.Property(e => e.Source).HasColumnName("source").IsRequired().HasMaxLength(128);
+            entity.Property(e => e.Url).HasColumnName("url").IsRequired();
+            entity.Property(e => e.Headline).HasColumnName("headline").IsRequired();
+            entity.Property(e => e.Summary).HasColumnName("summary").IsRequired();
+            entity.Property(e => e.PublishedAt).HasColumnName("published_at").IsRequired();
+            entity.Property(e => e.IngestedAt).HasColumnName("ingested_at").IsRequired();
+            entity.Property(e => e.Sentiment).HasColumnName("sentiment").HasConversion<string>().IsRequired().HasMaxLength(16);
+            entity.Property(e => e.SentimentScore).HasColumnName("sentiment_score").HasPrecision(8, 4);
+
+            entity.HasIndex(e => e.ExternalId).IsUnique().HasDatabaseName("idx_news_articles_external_id");
+            entity.HasIndex(e => e.PublishedAt).HasDatabaseName("idx_news_articles_published_at");
+            entity.HasIndex(e => e.Source).HasDatabaseName("idx_news_articles_source");
+
+            entity.HasMany(e => e.Keywords)
+                .WithOne(k => k.Article)
+                .HasForeignKey(k => k.ArticleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(e => e.Impacts)
+                .WithOne(i => i.Article)
+                .HasForeignKey(i => i.ArticleId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // News Keywords
+        modelBuilder.Entity<NewsKeyword>(entity =>
+        {
+            entity.ToTable("news_keywords");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.ArticleId).HasColumnName("article_id").IsRequired();
+            entity.Property(e => e.Keyword).HasColumnName("keyword").IsRequired().HasMaxLength(128);
+            entity.Property(e => e.RelevanceScore).HasColumnName("relevance_score").HasPrecision(8, 4);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+
+            entity.HasIndex(e => e.ArticleId).HasDatabaseName("idx_news_keywords_article_id");
+            entity.HasIndex(e => e.Keyword).HasDatabaseName("idx_news_keywords_keyword");
+        });
+
+        // News Impacts
+        modelBuilder.Entity<NewsImpact>(entity =>
+        {
+            entity.ToTable("news_impacts");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.ArticleId).HasColumnName("article_id").IsRequired();
+            entity.Property(e => e.InstrumentId).HasColumnName("instrument_id");
+            entity.Property(e => e.SectorId).HasColumnName("sector_id");
+            entity.Property(e => e.Direction).HasColumnName("direction").HasConversion<string>().IsRequired().HasMaxLength(16);
+            entity.Property(e => e.ImpactScore).HasColumnName("impact_score").HasPrecision(8, 4);
+            entity.Property(e => e.Confidence).HasColumnName("confidence").HasPrecision(8, 4);
+            entity.Property(e => e.Rationale).HasColumnName("rationale").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+
+            entity.HasIndex(e => e.ArticleId).HasDatabaseName("idx_news_impacts_article_id");
+            entity.HasIndex(e => e.InstrumentId).HasDatabaseName("idx_news_impacts_instrument_id");
+            entity.HasIndex(e => e.SectorId).HasDatabaseName("idx_news_impacts_sector_id");
+            entity.HasIndex(e => e.CreatedAt).HasDatabaseName("idx_news_impacts_created_at");
+
+            entity.HasOne(e => e.Instrument)
+                .WithMany()
+                .HasForeignKey(e => e.InstrumentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Sector)
+                .WithMany()
+                .HasForeignKey(e => e.SectorId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // MarketSentiments
@@ -592,6 +803,68 @@ public class TradingDbContext : DbContext
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
 
             entity.HasIndex(e => new { e.PeriodStart, e.PeriodEnd }).HasDatabaseName("idx_factor_performance_period");
+        });
+
+        // Portfolio Performance History
+        modelBuilder.Entity<PortfolioPerformanceHistory>(entity =>
+        {
+            entity.ToTable("portfolio_performance_histories");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.SessionId).HasColumnName("session_id").IsRequired();
+            entity.Property(e => e.WinRate).HasColumnName("win_rate").HasPrecision(8, 4);
+            entity.Property(e => e.SharpeRatio).HasColumnName("sharpe_ratio").HasPrecision(10, 4);
+            entity.Property(e => e.MaxDrawdown).HasColumnName("max_drawdown").HasPrecision(8, 4);
+            entity.Property(e => e.ProfitFactor).HasColumnName("profit_factor").HasPrecision(10, 4);
+            entity.Property(e => e.AverageHoldDays).HasColumnName("average_hold_days").HasPrecision(8, 2);
+            entity.Property(e => e.AverageHoldEfficiency).HasColumnName("average_hold_efficiency").HasPrecision(12, 4);
+            entity.Property(e => e.AverageFusionScore).HasColumnName("average_fusion_score").HasPrecision(8, 4);
+            entity.Property(e => e.VetoRejectionRate).HasColumnName("veto_rejection_rate").HasPrecision(8, 4);
+            entity.Property(e => e.TotalTrades).HasColumnName("total_trades").IsRequired();
+            entity.Property(e => e.WinningTrades).HasColumnName("winning_trades").IsRequired();
+            entity.Property(e => e.LosingTrades).HasColumnName("losing_trades").IsRequired();
+            entity.Property(e => e.TotalPnL).HasColumnName("total_pnl").HasPrecision(18, 2);
+            entity.Property(e => e.ActiveFusionLearningConfigIteration).HasColumnName("active_fusion_learning_config_iteration");
+            entity.Property(e => e.RecordedAt).HasColumnName("recorded_at").IsRequired();
+
+            entity.HasIndex(e => e.SessionId).HasDatabaseName("idx_portfolio_perf_history_session_id");
+            entity.HasIndex(e => e.RecordedAt).HasDatabaseName("idx_portfolio_perf_history_recorded_at");
+
+            entity.HasOne(e => e.Session)
+                .WithMany()
+                .HasForeignKey(e => e.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Fusion Learning Config
+        modelBuilder.Entity<FusionLearningConfig>(entity =>
+        {
+            entity.ToTable("fusion_learning_configs");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(e => e.Iteration).HasColumnName("iteration").IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+            entity.Property(e => e.AppliedAt).HasColumnName("applied_at");
+            entity.Property(e => e.TechnicalWeight).HasColumnName("technical_weight").HasPrecision(5, 4).IsRequired();
+            entity.Property(e => e.NewsWeight).HasColumnName("news_weight").HasPrecision(5, 4).IsRequired();
+            entity.Property(e => e.SectorWeight).HasColumnName("sector_weight").HasPrecision(5, 4).IsRequired();
+            entity.Property(e => e.MinimumFusionScore).HasColumnName("minimum_fusion_score").HasPrecision(8, 4).IsRequired();
+            entity.Property(e => e.NewsNegativeBoundary).HasColumnName("news_negative_boundary").HasPrecision(5, 4).IsRequired();
+            entity.Property(e => e.NewsPositiveBoundary).HasColumnName("news_positive_boundary").HasPrecision(5, 4).IsRequired();
+            entity.Property(e => e.PriorPerformanceMetricsJson).HasColumnName("prior_performance_metrics_json").HasColumnType("jsonb");
+            entity.Property(e => e.PriorConfigJson).HasColumnName("prior_config_json").HasColumnType("jsonb");
+            entity.Property(e => e.ReasoningText).HasColumnName("reasoning_text");
+            entity.Property(e => e.SessionsAnalyzed).HasColumnName("sessions_analyzed").IsRequired();
+            entity.Property(e => e.RiskAssessment).HasColumnName("risk_assessment").HasMaxLength(20).IsRequired();
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(20).IsRequired();
+            entity.Property(e => e.RolledBackAt).HasColumnName("rolled_back_at");
+            entity.Property(e => e.SessionsCompletedUnderThisConfig).HasColumnName("sessions_completed_under_this_config").IsRequired();
+            entity.Property(e => e.PerformanceUnderThisConfigJson).HasColumnName("performance_under_this_config_json").HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.Iteration).IsUnique().HasDatabaseName("idx_fusion_learning_config_iteration");
+            entity.HasIndex(e => e.Status).HasDatabaseName("idx_fusion_learning_config_status");
+            entity.HasIndex(e => e.AppliedAt).HasDatabaseName("idx_fusion_learning_config_applied_at");
+            entity.HasIndex(e => e.CreatedAt).HasDatabaseName("idx_fusion_learning_config_created_at");
         });
     }
 }

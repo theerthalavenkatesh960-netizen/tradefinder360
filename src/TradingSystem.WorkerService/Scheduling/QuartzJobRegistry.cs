@@ -67,6 +67,24 @@ namespace TradingSystem.WorkerService.Scheduling
                     typeof(AIModelRetrainingJob),
                     "0 0 15 ? * SUN",
                     TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                new JobSchedule(
+                    typeof(PortfolioManagerEvaluationJob),
+                    "0 0 9-15 ? * MON-FRI", // Hourly during market window
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                new JobSchedule(
+                    typeof(PortfolioEventTriggerJob),
+                    "0 */5 9-15 ? * MON-FRI", // Event-first checks every 5 minutes
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
+                ),
+
+                new JobSchedule(
+                    typeof(NewsIngestionJob),
+                    "0 */15 8-15 ? * MON-FRI", // Runs at 08:45 and hourly slots handled inside job
+                    TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")
                 )
             };
         }
