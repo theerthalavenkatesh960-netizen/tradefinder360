@@ -71,6 +71,54 @@ Where:
 
 ---
 
+### 20260425_AddPortfolioLearning
+**Date**: 2026-04-25  
+**Description**: Creates portfolio learning tables for fusion tuning and historical performance tracking.
+
+**Files**:
+- `20260425_AddPortfolioLearning_Up.sql`
+- `20260425_AddPortfolioLearning_Down.sql`
+
+**Features**:
+- `portfolio_performance_histories` for learning metrics snapshots per portfolio session
+- `fusion_learning_configs` for fusion weight iteration audit trail
+- Time-based and lookup indexes for efficient learning history retrieval
+
+**Constraints**:
+- Foreign key from `portfolio_performance_histories.session_id` to `portfolio_manager_sessions.id`
+
+---
+
+### 20260425_AddPortfolioManagerPhase1
+**Date**: 2026-04-25  
+**Description**: Adds user preference columns and Portfolio Manager Phase 1 tables.
+
+**Files**:
+- `20260425_AddPortfolioManagerPhase1_Up.sql`
+- `20260425_AddPortfolioManagerPhase1_Down.sql`
+
+---
+
+### 20260425_AddNewsIngestionPhase2
+**Date**: 2026-04-25  
+**Description**: Adds news ingestion tables for articles, keywords, and impacts.
+
+**Files**:
+- `20260425_AddNewsIngestionPhase2_Up.sql`
+- `20260425_AddNewsIngestionPhase2_Down.sql`
+
+---
+
+### 20260425_AddPortfolioFusionDiagnosticsPhase3
+**Date**: 2026-04-25  
+**Description**: Adds fusion diagnostics columns to `portfolio_manager_trades`.
+
+**Files**:
+- `20260425_AddPortfolioFusionDiagnosticsPhase3_Up.sql`
+- `20260425_AddPortfolioFusionDiagnosticsPhase3_Down.sql`
+
+---
+
 ## How to Apply Migrations
 
 ### Using psql (PostgreSQL)

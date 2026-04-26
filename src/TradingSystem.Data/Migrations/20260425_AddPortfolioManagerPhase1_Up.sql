@@ -1,16 +1,7 @@
-/*
-  # Add portfolio manager phase 1 tables and user preference columns
-
-  1. Changes
-    - Add preference columns to user_profiles
-    - Create portfolio_manager_sessions table
-    - Create portfolio_manager_trades table
-    - Add indexes for user/session/status/time lookup
-
-  2. Notes
-    - Idempotent statements are used where practical
-    - JSON arrays are stored as jsonb
-*/
+-- =============================================
+-- Migration: Add portfolio manager phase 1 schema
+-- Date: 2026-04-25
+-- =============================================
 
 DO $$
 BEGIN
