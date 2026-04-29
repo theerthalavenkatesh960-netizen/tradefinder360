@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Api.Services;
@@ -9,6 +11,7 @@ namespace TradingSystem.Api.Controllers;
 /// Exposes learning trigger, approval, rejection, and rollback endpoints
 /// </summary>
 [ApiController]
+[Authorize]
 [Route("api/portfolio/learning")]
 public class LearningController : ControllerBase
 {
@@ -22,6 +25,12 @@ public class LearningController : ControllerBase
         _learningOrchestrator = learningOrchestrator;
         _logger = logger;
     }
+
+    private string GetUserId() =>
+        User.FindFirstValue(ClaimTypes.NameIdentifier)
+        ?? User.FindFirstValue("sub")
+        ?? User.FindFirstValue("user_id")
+        ?? "default_user";
 
     /// <summary>
     /// Trigger learning analysis
@@ -42,7 +51,7 @@ public class LearningController : ControllerBase
                 request.SessionsToAnalyze ?? 5);
 
             var result = await _learningOrchestrator.TriggerLearningAsync(
-                request.UserId ?? "default_user",
+                GetUserId(),
                 request.TriggerSource ?? "USER_MANUAL",
                 request.SessionsToAnalyze ?? 5,
                 cancellationToken);

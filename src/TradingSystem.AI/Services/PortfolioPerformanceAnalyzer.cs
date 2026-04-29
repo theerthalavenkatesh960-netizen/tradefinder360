@@ -218,7 +218,7 @@ public class PortfolioPerformanceAnalyzer
         // 7. Average fusion score (of included positions)
         var includedWithScore = trades
             .Where(t => t.FusionScore.HasValue && t.FusionIncluded == true)
-            .Select(t => t.FusionScore.Value)
+            .Select(t => t.FusionScore!.Value)
             .ToList();
         metrics.AverageFusionScore = includedWithScore.Count > 0 ? includedWithScore.Average() : 0;
 

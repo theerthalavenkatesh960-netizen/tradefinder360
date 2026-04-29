@@ -1,4 +1,11 @@
+using System.Collections.Concurrent;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
 using TradingSystem.Api.DTOs;
 
 namespace TradingSystem.Api.Controllers;
@@ -7,6 +14,16 @@ namespace TradingSystem.Api.Controllers;
 [Route("api/auth")]
 public class AuthController : ControllerBase
 {
+    private static readonly ConcurrentDictionary<string, AuthUserRecord> UsersByEmail = new();
+    private static int _idSequence = 1;
+
+    private readonly IConfiguration _configuration;
+
+    public AuthController(IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
     // -------------------------------------------------------------------------
     // POST /auth/login
     // Body: { "email": "user@example.com", "password": "password" }
@@ -14,23 +31,34 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public IActionResult Login([FromBody] LoginRequest request)
     {
-        // TODO: Replace with real user lookup + password verification
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
             return BadRequest(new { error = "Email and password are required" });
 
+        var email = request.Email.Trim().ToLowerInvariant();
+        if (!UsersByEmail.TryGetValue(email, out var user) || !VerifyPassword(request.Password, user.PasswordHash))
+        {
+            return Unauthorized(new { error = "Invalid credentials" });
+        }
+
+        var token = GenerateJwtToken(user);
+        var refreshToken = GenerateRefreshToken();
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(8);
+        user.RefreshToken = refreshToken;
+        user.RefreshTokenExpiresAt = expiresAt.AddDays(7);
+
         return Ok(new AuthResponse
         {
-            Token        = "dummy-jwt-token-replace-with-real",
-            RefreshToken = "dummy-refresh-token-replace-with-real",
-            ExpiresAt    = DateTimeOffset.UtcNow.AddHours(8),
+            Token = token,
+            RefreshToken = refreshToken,
+            ExpiresAt = expiresAt,
             User         = new UserDto
             {
-                Id        = 1,
-                Email     = request.Email,
-                FirstName = "Demo",
-                LastName  = "User",
-                Role      = "TRADER",
-                CreatedAt = DateTimeOffset.UtcNow
+                Id = user.Id,
+                Email = user.Email,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                Role = user.Role,
+                CreatedAt = user.CreatedAt
             }
         });
     }
@@ -42,26 +70,62 @@ public class AuthController : ControllerBase
     [HttpPost("register")]
     public IActionResult Register([FromBody] RegisterRequest request)
     {
-        // TODO: Replace with real user creation + password hashing
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
             return BadRequest(new { error = "Email and password are required" });
 
         if (request.Password.Length < 8)
             return BadRequest(new { error = "Password must be at least 8 characters" });
 
+        var email = request.Email.Trim().ToLowerInvariant();
+        if (UsersByEmail.ContainsKey(email))
+        {
+            return Conflict(new { error = "User already exists" });
+        }
+
+        var firstName = request.FirstName?.Trim();
+        var lastName = request.LastName?.Trim();
+        if (string.IsNullOrWhiteSpace(firstName) && !string.IsNullOrWhiteSpace(request.Name))
+        {
+            var parts = request.Name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            firstName = parts.Length > 0 ? parts[0] : "User";
+            lastName = parts.Length > 1 ? string.Join(' ', parts.Skip(1)) : string.Empty;
+        }
+
+        var user = new AuthUserRecord
+        {
+            Id = Interlocked.Increment(ref _idSequence),
+            Email = email,
+            FirstName = string.IsNullOrWhiteSpace(firstName) ? "User" : firstName,
+            LastName = lastName ?? string.Empty,
+            Role = "TRADER",
+            CreatedAt = DateTimeOffset.UtcNow,
+            PasswordHash = HashPassword(request.Password)
+        };
+
+        if (!UsersByEmail.TryAdd(email, user))
+        {
+            return Conflict(new { error = "User already exists" });
+        }
+
+        var token = GenerateJwtToken(user);
+        var refreshToken = GenerateRefreshToken();
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(8);
+        user.RefreshToken = refreshToken;
+        user.RefreshTokenExpiresAt = expiresAt.AddDays(7);
+
         return Ok(new AuthResponse
         {
-            Token        = "dummy-jwt-token-replace-with-real",
-            RefreshToken = "dummy-refresh-token-replace-with-real",
-            ExpiresAt    = DateTimeOffset.UtcNow.AddHours(8),
+            Token = token,
+            RefreshToken = refreshToken,
+            ExpiresAt = expiresAt,
             User         = new UserDto
             {
-                Id        = 1,
-                Email     = request.Email,
-                FirstName = request.FirstName ?? "User",
-                LastName  = request.LastName  ?? "",
-                Role      = "TRADER",
-                CreatedAt = DateTimeOffset.UtcNow
+                Id = user.Id,
+                Email = user.Email,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                Role = user.Role,
+                CreatedAt = user.CreatedAt
             }
         });
     }
@@ -73,15 +137,28 @@ public class AuthController : ControllerBase
     [HttpPost("refresh")]
     public IActionResult Refresh([FromBody] RefreshRequest request)
     {
-        // TODO: Validate refresh token from DB, issue new JWT
         if (string.IsNullOrWhiteSpace(request.RefreshToken))
             return BadRequest(new { error = "Refresh token is required" });
 
+        var user = UsersByEmail.Values.FirstOrDefault(u =>
+            string.Equals(u.RefreshToken, request.RefreshToken, StringComparison.Ordinal));
+
+        if (user == null || user.RefreshTokenExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            return Unauthorized(new { error = "Invalid refresh token" });
+        }
+
+        var token = GenerateJwtToken(user);
+        var newRefreshToken = GenerateRefreshToken();
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(8);
+        user.RefreshToken = newRefreshToken;
+        user.RefreshTokenExpiresAt = expiresAt.AddDays(7);
+
         return Ok(new TokenResponse
         {
-            Token        = "dummy-jwt-token-refreshed-replace-with-real",
-            RefreshToken = "dummy-refresh-token-new-replace-with-real",
-            ExpiresAt    = DateTimeOffset.UtcNow.AddHours(8)
+            Token = token,
+            RefreshToken = newRefreshToken,
+            ExpiresAt = expiresAt
         });
     }
 
@@ -125,9 +202,19 @@ public class AuthController : ControllerBase
     // Header: Authorization: Bearer {token}
     // -------------------------------------------------------------------------
     [HttpPost("logout")]
+    [Authorize]
     public IActionResult Logout()
     {
-        // TODO: Invalidate refresh token in DB / token blacklist
+        var email = User.FindFirstValue(ClaimTypes.Email)
+            ?? User.FindFirstValue("email")
+            ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(email) && UsersByEmail.TryGetValue(email, out var user))
+        {
+            user.RefreshToken = null;
+            user.RefreshTokenExpiresAt = null;
+        }
+
         return Ok(new { message = "Logged out successfully" });
     }
 
@@ -136,17 +223,107 @@ public class AuthController : ControllerBase
     // Header: Authorization: Bearer {token}
     // -------------------------------------------------------------------------
     [HttpGet("me")]
+    [Authorize]
     public IActionResult Me()
     {
-        // TODO: Validate JWT, look up user from claims
+        var userIdRaw = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub")
+            ?? User.FindFirstValue("user_id");
+
+        var email = User.FindFirstValue(ClaimTypes.Email)
+            ?? User.FindFirstValue("email")
+            ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(userIdRaw) || string.IsNullOrWhiteSpace(email))
+        {
+            return Unauthorized(new { error = "Invalid token context" });
+        }
+
+        if (!UsersByEmail.TryGetValue(email, out var user))
+        {
+            return NotFound(new { error = "User not found" });
+        }
+
         return Ok(new UserDto
         {
-            Id        = 1,
-            Email     = "demo@trading.com",
-            FirstName = "Demo",
-            LastName  = "User",
-            Role      = "TRADER",
-            CreatedAt = DateTimeOffset.UtcNow.AddDays(-30)
+            Id = user.Id,
+            Email = user.Email,
+            FirstName = user.FirstName,
+            LastName = user.LastName,
+            Role = user.Role,
+            CreatedAt = user.CreatedAt
         });
+    }
+
+    private string GenerateJwtToken(AuthUserRecord user)
+    {
+        var jwtKey = _configuration["Jwt:Key"]
+            ?? throw new InvalidOperationException("Jwt:Key is required.");
+        var issuer = _configuration["Jwt:Issuer"] ?? "TradingSystem.Api";
+        var audience = _configuration["Jwt:Audience"] ?? "TradingSystem.Client";
+
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new("sub", user.Id.ToString()),
+            new("user_id", user.Id.ToString()),
+            new(ClaimTypes.Email, user.Email),
+            new("email", user.Email),
+            new(ClaimTypes.Role, user.Role)
+        };
+
+        var credentials = new SigningCredentials(
+            new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+            SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: issuer,
+            audience: audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(8),
+            signingCredentials: credentials);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private static string GenerateRefreshToken()
+    {
+        Span<byte> bytes = stackalloc byte[32];
+        RandomNumberGenerator.Fill(bytes);
+        return Convert.ToBase64String(bytes);
+    }
+
+    private static string HashPassword(string password)
+    {
+        var salt = RandomNumberGenerator.GetBytes(16);
+        var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, 100_000, HashAlgorithmName.SHA256, 32);
+        return $"100000.{Convert.ToBase64String(salt)}.{Convert.ToBase64String(hash)}";
+    }
+
+    private static bool VerifyPassword(string password, string storedHash)
+    {
+        var parts = storedHash.Split('.', 3);
+        if (parts.Length != 3 || !int.TryParse(parts[0], out var iterations))
+        {
+            return false;
+        }
+
+        var salt = Convert.FromBase64String(parts[1]);
+        var expectedHash = Convert.FromBase64String(parts[2]);
+        var actualHash = Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, expectedHash.Length);
+        return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
+    }
+
+    private sealed class AuthUserRecord
+    {
+        public int Id { get; init; }
+        public string Email { get; init; } = string.Empty;
+        public string FirstName { get; init; } = string.Empty;
+        public string LastName { get; init; } = string.Empty;
+        public string Role { get; init; } = "TRADER";
+        public DateTimeOffset CreatedAt { get; init; }
+        public string PasswordHash { get; init; } = string.Empty;
+        public string? RefreshToken { get; set; }
+        public DateTimeOffset? RefreshTokenExpiresAt { get; set; }
     }
 }

@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TradingSystem.Api.DTOs;
 using TradingSystem.Api.Services;
@@ -6,6 +7,7 @@ using TradingSystem.Api.Services;
 namespace TradingSystem.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/portfolio-manager")]
 public class PortfolioManagerController : ControllerBase
 {
@@ -13,17 +15,20 @@ public class PortfolioManagerController : ControllerBase
     private readonly INewsIngestionService _newsIngestionService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<PortfolioManagerController> _logger;
+    private readonly IWebHostEnvironment _environment;
 
     public PortfolioManagerController(
         IPortfolioManagerService portfolioManagerService,
         INewsIngestionService newsIngestionService,
         IConfiguration configuration,
-        ILogger<PortfolioManagerController> logger)
+        ILogger<PortfolioManagerController> logger,
+        IWebHostEnvironment environment)
     {
         _portfolioManagerService = portfolioManagerService;
         _newsIngestionService = newsIngestionService;
         _configuration = configuration;
         _logger = logger;
+        _environment = environment;
     }
 
     [HttpPost("sessions")]
@@ -337,7 +342,7 @@ public class PortfolioManagerController : ControllerBase
             ? parsedAllowDemo
             : false;
 
-        if (allowDemoFallback)
+        if (allowDemoFallback && !_environment.IsProduction())
         {
             userId = "demo-user";
             return true;
